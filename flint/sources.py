@@ -306,7 +306,8 @@ class BinanceSource(Source):
                         break
                     for k in data:
                         vol = float(k[5]); buyv = float(k[9])
-                        ticks.append(Tick(sym, k[0] / 1000.0 + self.cfg.bar_seconds, float(k[4]), vol, (buyv > vol / 2) if vol else None))
+                        ticks.append(Tick(sym, k[0] / 1000.0 + self.cfg.bar_seconds, float(k[4]), vol, (buyv > vol / 2) if vol else None,
+                                          o=float(k[1]), h=float(k[2]), l=float(k[3])))
                     cur = data[-1][0] + step_ms
                     if cur >= time.time() * 1000 or len(data) < 1000:
                         break
@@ -400,6 +401,7 @@ class YahooSource(Source):
         ts = chart.get("timestamp") or []
         quote = (chart.get("indicators", {}).get("quote") or [{}])[0]
         closes, vols = quote.get("close") or [], quote.get("volume") or []
+        opens, highs, lows = quote.get("open") or [], quote.get("high") or [], quote.get("low") or []
         n = 0
         for i, t in enumerate(ts):
             if t <= self._seen.get(sym, cutoff):
@@ -408,7 +410,11 @@ class YahooSource(Source):
             if not self._sane(c, ref):
                 continue
             v = float(vols[i]) if i < len(vols) and vols[i] else 0.0
-            self._emit(emit, Tick(sym, float(t), float(c), v, None))
+            c = float(c)
+            o = float(opens[i]) if i < len(opens) and opens[i] is not None else c
+            hi = float(highs[i]) if i < len(highs) and highs[i] is not None else c
+            lo = float(lows[i]) if i < len(lows) and lows[i] is not None else c
+            self._emit(emit, Tick(sym, float(t), c, v, None, o=o, h=hi, l=lo))
             self._seen[sym] = t
             n += 1
         price = meta.get("regularMarketPrice")
@@ -423,12 +429,17 @@ class YahooSource(Source):
         ts = resp.get("timestamp") or []
         quote = (resp.get("indicators", {}).get("quote") or [{}])[0]
         closes, vols = quote.get("close") or [], quote.get("volume") or []
+        opens, highs, lows = quote.get("open") or [], quote.get("high") or [], quote.get("low") or []
         rows = []
         for i, t in enumerate(ts):
             if t < lo or i >= len(closes) or not self._sane(closes[i], ref):
                 continue
             v = float(vols[i]) if i < len(vols) and vols[i] else 0.0
-            rows.append(Tick(sym, float(t), float(closes[i]), v, None))
+            c0 = float(closes[i])
+            o = float(opens[i]) if i < len(opens) and opens[i] is not None else c0
+            hi = float(highs[i]) if i < len(highs) and highs[i] is not None else c0
+            lw = float(lows[i]) if i < len(lows) and lows[i] is not None else c0
+            rows.append(Tick(sym, float(t), c0, v, None, o=o, h=hi, l=lw))
         rows = rows[-cap:]
         if rows:
             self._seen[sym] = rows[-1].ts
@@ -513,7 +524,8 @@ class KrakenSource(Source):
                     for row in await self._ohlc(client, sym, since=cutoff):
                         t = float(row[0])
                         if t >= cutoff:
-                            ticks.append(Tick(sym, t + 60.0, float(row[4]), float(row[6]), None))
+                            ticks.append(Tick(sym, t + 60.0, float(row[4]), float(row[6]), None,
+                                              o=float(row[1]), h=float(row[2]), l=float(row[3])))
                             self._seen[sym] = t
                     await asyncio.sleep(0.3)
                 except Exception as e:  # noqa: BLE001
@@ -663,7 +675,9 @@ class FMPSource(Source):
                         except (ValueError, KeyError):
                             continue
                         if row.get("close"):
-                            ticks.append(Tick(sym, ts, float(row["close"]), float(row.get("volume") or 0.0), None))
+                            c0 = float(row["close"])
+                            ticks.append(Tick(sym, ts, c0, float(row.get("volume") or 0.0), None,
+                                              o=float(row.get("open") or c0), h=float(row.get("high") or c0), l=float(row.get("low") or c0)))
                     await asyncio.sleep(0.1)
                 except Exception as e:  # noqa: BLE001
                     self.note = f"backfill: {type(e).__name__}"
@@ -743,7 +757,9 @@ class SchwabSource(Source):
                     for k in r.json().get("candles", []):
                         c0 = k.get("close")
                         if c0:
-                            ticks.append(Tick(sym, k["datetime"] / 1000.0, float(c0), float(k.get("volume") or 0.0), None))
+                            c0 = float(c0)
+                            ticks.append(Tick(sym, k["datetime"] / 1000.0, c0, float(k.get("volume") or 0.0), None,
+                                              o=float(k.get("open") or c0), h=float(k.get("high") or c0), l=float(k.get("low") or c0)))
                     await asyncio.sleep(0.2)
                 except Exception as e:  # noqa: BLE001
                     self.note = f"{sym}: {type(e).__name__}"

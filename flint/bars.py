@@ -40,7 +40,15 @@ class BarBuilder:
         bars = self.open_bars.setdefault(idx, {})
         b = bars.get(tick.symbol)
         p = tick.price
-        if b is None:
+        if tick.o is not None:                       # pre-aggregated OHLC bar from a history feed
+            if b is None:
+                b = Bar(ts=(idx + 1) * self.dt, open=tick.o, high=tick.h, low=tick.l, close=p)
+                bars[tick.symbol] = b
+            else:
+                b.high = max(b.high, tick.h)
+                b.low = min(b.low, tick.l)
+                b.close = p
+        elif b is None:
             b = Bar(ts=(idx + 1) * self.dt, open=p, high=p, low=p, close=p)
             bars[tick.symbol] = b
         else:

@@ -102,6 +102,8 @@ function ctx2d(canvas) {
   return { ctx, w, h };
 }
 
+function ema(a, p) { const k = 2 / (p + 1); let e; return a.map((v, i) => (e = i ? v * k + e * (1 - k) : v)); }
+
 function drawChart(card) {
   const sym = card.sym;
   const bars = (state.bars[sym] || []).slice(-(state.config && state.config.chart_bars || 160));
@@ -109,30 +111,39 @@ function drawChart(card) {
   ctx.font = "10px system-ui, sans-serif";
   if (bars.length < 2) { ctx.fillStyle = C.muted; ctx.fillText("waiting for bars", 10, 20); return; }
   const cfg = state.config, H = cfg.horizon, L = state.latest[sym];
-  const padL = 8, padR = 8, padT = 12, padB = 18;
+  const padL = 8, padR = 8, padT = 10, padB = 16;
   const n = bars.length;
   const plotW = w - padL - padR;
   const fanW = Math.max(0.2 * plotW, 64);
   const dx = (plotW - fanW) / (n - 1);
   const xs = i => Math.min(padL + i * dx, padL + plotW);
   const closes = bars.map(b => b.c);
+  const upC = "#26a269", downC = "#e0574b";
+
+  // panes: price on top, MACD below, shared x axis
+  const macdH = 46, gap = 8, axisY = h - padB;
+  const mB = axisY, mT = mB - macdH, pT = padT, pB = mT - gap;
+
   const live = state.prices[sym] && state.prices[sym].price;
-  let lo = Math.min(...closes), hi = Math.max(...closes);
+  let lo = Math.min(...bars.map(b => b.l)), hi = Math.max(...bars.map(b => b.h));
   if (live) { lo = Math.min(lo, live); hi = Math.max(hi, live); }
   let fan = null;
   if (L && L.q) { fan = L.q.map(q => L.price * Math.exp(q / 1e4)); lo = Math.min(lo, fan[0]); hi = Math.max(hi, fan[4]); }
   const span = (hi - lo) || closes[n - 1] * 1e-4;
-  lo -= span * 0.08; hi += span * 0.08;
-  const ys = v => padT + (hi - v) / (hi - lo) * (h - padT - padB);
+  lo -= span * 0.06; hi += span * 0.06;
+  const ys = v => pT + (hi - v) / (hi - lo) * (pB - pT);
 
-  ctx.strokeStyle = C.grid; ctx.lineWidth = 1; ctx.fillStyle = C.muted; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+  // price grid + labels
+  ctx.strokeStyle = C.grid; ctx.lineWidth = 1; ctx.textBaseline = "middle"; ctx.textAlign = "left";
   for (let k = 0; k < 3; k++) {
-    const v = lo + (hi - lo) * (0.15 + 0.35 * k), y = Math.round(ys(v)) + 0.5;
+    const v = lo + (hi - lo) * (0.14 + 0.36 * k), y = Math.round(ys(v)) + 0.5;
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
     const label = fmtPrice(v), tw = ctx.measureText(label).width;
     ctx.fillStyle = "rgba(26,26,25,0.85)"; ctx.fillRect(padL, y - 13, tw + 4, 12);
     ctx.fillStyle = C.muted; ctx.fillText(label, padL + 2, y - 7);
   }
+
+  // forecast fan
   const xLast = xs(n - 1), xEnd = padL + plotW;
   const anchor = L ? L.price : closes[n - 1];
   if (fan) {
@@ -143,26 +154,60 @@ function drawChart(card) {
     ctx.beginPath(); ctx.moveTo(xLast, ys(anchor)); ctx.lineTo(xEnd, ys(fan[2])); ctx.stroke(); ctx.setLineDash([]);
     ctx.fillStyle = C.ink2; ctx.textAlign = "right"; ctx.fillText(`${fmtBps(L.q[2])} bps`, xEnd - 2, ys(fan[2]) - 9); ctx.textAlign = "left";
   }
-  ctx.strokeStyle = C.blue; ctx.lineWidth = 2; ctx.lineJoin = "round";
-  ctx.beginPath(); closes.forEach((v, i) => i ? ctx.lineTo(xs(i), ys(v)) : ctx.moveTo(xs(i), ys(v))); ctx.stroke();
+
+  // candlesticks
+  const cw = Math.max(1, Math.min(dx * 0.68, 9));
+  bars.forEach((b, i) => {
+    const x = xs(i), col = b.c >= b.o ? upC : downC;
+    ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1;
+    const wx = Math.round(x) + 0.5;
+    ctx.beginPath(); ctx.moveTo(wx, ys(b.h)); ctx.lineTo(wx, ys(b.l)); ctx.stroke();
+    const yo = ys(b.o), yc = ys(b.c);
+    ctx.fillRect(x - cw / 2, Math.min(yo, yc), cw, Math.max(1, Math.abs(yc - yo)));
+  });
   if (live) {
     ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(xLast, ys(live), 4, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = C.surface; ctx.lineWidth = 2; ctx.stroke();
   }
-  ctx.fillStyle = C.muted; ctx.textBaseline = "alphabetic";
-  ctx.fillText(fmtTime(bars[0].t), padL, h - 5);
-  ctx.textAlign = "center"; ctx.fillText(fmtTime(bars[n - 1].t), xLast, h - 5);
-  ctx.textAlign = "right"; ctx.fillText(`+${Math.round(H * cfg.bar_seconds)}s`, xEnd, h - 5); ctx.textAlign = "left";
-  ctx.strokeStyle = C.axis; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(Math.round(xLast) + 0.5, padT); ctx.lineTo(Math.round(xLast) + 0.5, h - padB); ctx.stroke(); ctx.setLineDash([]);
+
+  // MACD pane (12/26/9)
+  const ef = ema(closes, 12), es = ema(closes, 26);
+  const mline = closes.map((_, i) => ef[i] - es[i]);
+  const sigl = ema(mline, 9);
+  const hist = mline.map((v, i) => v - sigl[i]);
+  let mmax = 1e-9;
+  for (let i = 0; i < n; i++) mmax = Math.max(mmax, Math.abs(mline[i]), Math.abs(sigl[i]), Math.abs(hist[i]));
+  mmax *= 1.15;
+  const ym = v => (mT + mB) / 2 - (v / mmax) * (macdH / 2);
+  const hw = Math.max(1, Math.min(dx * 0.6, 7));
+  hist.forEach((v, i) => { const x = xs(i), y0 = ym(0), y1 = ym(v); ctx.fillStyle = v >= 0 ? "rgba(38,160,105,0.55)" : "rgba(224,87,75,0.55)"; ctx.fillRect(x - hw / 2, Math.min(y0, y1), hw, Math.max(1, Math.abs(y1 - y0))); });
+  const zeroY = Math.round(ym(0)) + 0.5;
+  ctx.strokeStyle = C.grid; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(padL, zeroY); ctx.lineTo(xLast, zeroY); ctx.stroke();
+  const drawLine = (arr, color) => { ctx.strokeStyle = color; ctx.lineWidth = 1.3; ctx.lineJoin = "round"; ctx.beginPath(); for (let i = 0; i < n; i++) { const x = xs(i), y = ym(arr[i]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); } ctx.stroke(); };
+  drawLine(mline, "#3987e5");
+  drawLine(sigl, "#e0913b");
+  ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
+  let lx = padL + 1;
+  ctx.fillStyle = "#3987e5"; ctx.fillText("MACD", lx, mT + 9); lx += ctx.measureText("MACD").width + 6;
+  ctx.fillStyle = "#e0913b"; ctx.fillText("signal", lx, mT + 9); lx += ctx.measureText("signal").width + 6;
+  ctx.fillStyle = C.muted; ctx.fillText("12·26·9", lx, mT + 9);
+
+  // x axis + now marker
+  ctx.fillStyle = C.muted; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
+  ctx.fillText(fmtTime(bars[0].t), padL, h - 4);
+  ctx.textAlign = "center"; ctx.fillText(fmtTime(bars[n - 1].t), xLast, h - 4);
+  ctx.textAlign = "right"; ctx.fillText(`+${Math.round(H * cfg.bar_seconds)}s`, xEnd, h - 4); ctx.textAlign = "left";
+  ctx.strokeStyle = C.axis; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(Math.round(xLast) + 0.5, pT); ctx.lineTo(Math.round(xLast) + 0.5, mB); ctx.stroke(); ctx.setLineDash([]);
+
   card.geom = { padL, dx, n, bars };
   if (card.hoverX != null) {
     const i = Math.max(0, Math.min(n - 1, Math.round((card.hoverX - padL) / dx)));
     const x = xs(i);
     ctx.strokeStyle = C.ink2; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
-    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, h - padB); ctx.stroke(); ctx.setLineDash([]);
-    ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(x, ys(closes[i]), 4, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(x, pT); ctx.lineTo(x, mB); ctx.stroke(); ctx.setLineDash([]);
     const b = bars[i], prev = i ? bars[i - 1].c : b.o;
-    showTooltip(card.tipX, card.tipY, `${fmtTime(b.t)}\nclose ${fmtPrice(b.c)}\n${fmtBps(Math.log(b.c / prev) * 1e4)} bps  vol ${b.v.toPrecision(3)}`);
+    ctx.fillStyle = b.c >= b.o ? upC : downC; ctx.beginPath(); ctx.arc(x, ys(b.c), 3.5, 0, Math.PI * 2); ctx.fill();
+    showTooltip(card.tipX, card.tipY, `${fmtTime(b.t)}\nO ${fmtPrice(b.o)}  H ${fmtPrice(b.h)}\nL ${fmtPrice(b.l)}  C ${fmtPrice(b.c)}\n${fmtBps(Math.log(b.c / prev) * 1e4)} bps  vol ${b.v.toPrecision(3)}\nMACD ${mline[i].toFixed(3)}  sig ${sigl[i].toFixed(3)}`);
   }
 }
 
