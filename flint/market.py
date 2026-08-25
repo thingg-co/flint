@@ -111,7 +111,7 @@ class MarketScanner:
             idx = await self._finnhub_quotes(c, list(INDEX_ETFS)) if self.finnhub_key else {}
             sect = await self._finnhub_quotes(c, list(SECTOR_ETFS)) if self.finnhub_key else {}
             vix = await self._vix(c)
-            crypto = await self._crypto_global(c)
+            crypto = None   # crypto removed from flint; equities only
             actives = await self._movers(c, "most_actives")
             gainers = await self._movers(c, "day_gainers")
             losers = await self._movers(c, "day_losers")

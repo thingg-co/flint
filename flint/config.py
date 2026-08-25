@@ -122,6 +122,11 @@ class Config:
     eodhd_seconds: float = _env("EODHD_SECONDS", 20.0)         # seconds between EODHD delayed-quote polls
     fmp_key: str = field(default_factory=_fmp_key)             # Financial Modeling Prep (reliable 5-min history)
     fmp_seconds: float = _env("FMP_SECONDS", 20.0)            # seconds between FMP quote polls
+    ibkr_enabled: bool = _env("IBKR_ENABLED", False, cast=lambda v: v.lower() in ("1", "true", "yes", "on"))
+    ibkr_host: str = _env("IBKR_HOST", "127.0.0.1")           # IB Gateway / TWS host
+    ibkr_port: int = _env("IBKR_PORT", 4002)                  # Gateway paper 4002 / live 4001; TWS paper 7497 / live 7496
+    ibkr_client_id: int = _env("IBKR_CLIENT_ID", 17)          # any unused API client id
+    ibkr_market_data_type: int = _env("IBKR_MARKET_DATA_TYPE", 1)  # 1 live, 2 frozen, 3 delayed, 4 delayed-frozen (auto-falls back)
     anthropic_key: str = field(default_factory=_anthropic_key)  # optional Claude key for the narrative brief
     brief_model: str = _env("BRIEF_MODEL", "claude-haiku-4-5-20251001")
     brief_minutes: float = _env("BRIEF_MINUTES", 5.0)          # cache the narrative brief this long
@@ -142,6 +147,7 @@ class Config:
     device: str = _env("DEVICE", "auto")               # auto | cpu | cuda | mps
     auto_size: bool = _env("AUTO_SIZE", "1") not in ("0", "false", "no")
     autotune_util: float = _env("AUTOTUNE_UTIL", 0.7)  # fraction of the bar interval training may use
+    max_warmup_seconds: float = _env("MAX_WARMUP_SECONDS", 180.0)  # go-live warmup ceiling; caps auto model size
 
     # Model (overridden by auto-sizing unless auto_size is off)
     d_model: int = _env("D_MODEL", 48)
@@ -175,6 +181,7 @@ class Config:
     muted_symbols: str = _env("MUTED", "")           # symbols to watch-but-not-suggest (comma list)
     signals_off: str = _env("SIGNALS_OFF", "")          # signal providers off by default: wsb, feargreed, derivatives, scion
     signals_minutes: float = _env("SIGNALS_MINUTES", 5.0)   # how often to refresh exogenous signals
+    operator_half_life: float = _env("OPERATOR_HALF_LIFE", 1800.0)  # decay of an injected human note (seconds)
     radar_top: int = _env("RADAR_TOP", 250)                 # how many market-wide movers to watch
     max_universe: int = _env("MAX_UNIVERSE", 64)            # cap on modeled symbols (cross-attention + data-rate limit)
     burry_enabled: bool = _env("BURRY", "1") not in ("0", "false", "no")

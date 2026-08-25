@@ -188,163 +188,6 @@ class Source:
         raise NotImplementedError
 
 
-# Crypto websocket sources ---------------------------------------------------------
-
-class CoinbaseSource(Source):
-    id = "coinbase"
-    name = "Coinbase"
-    kind = "crypto"
-    mechanism = "websocket"
-    priority = 10
-    classes = ("crypto",)
-    fresh_after = 15.0
-    WS = "wss://ws-feed.exchange.coinbase.com"
-    REST = "https://api.exchange.coinbase.com"
-
-    def _parse(self, s: str) -> float:
-        from datetime import datetime
-        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
-
-    async def backfill(self, symbols: list[str], cutoff: float) -> list[Tick]:
-        if self.cfg.bar_seconds > 30:      # raw trades don't scale to long windows; Binance klines backfill instead
-            return []
-        syms = [s for s in symbols if self.supports(s)]
-        ticks: list[Tick] = []
-        async with httpx.AsyncClient(base_url=self.REST, timeout=20, headers={"User-Agent": "flint/0.1"}) as client:
-            for sym in syms:
-                after = None
-                for _ in range(self.cfg.backfill_pages):
-                    params = {"limit": 1000}
-                    if after:
-                        params["after"] = after
-                    r = await client.get(f"/products/{sym}/trades", params=params)
-                    r.raise_for_status()
-                    rows = r.json()
-                    if not rows:
-                        break
-                    oldest = math.inf
-                    for row in rows:
-                        ts = self._parse(row["time"])
-                        oldest = min(oldest, ts)
-                        if ts >= cutoff:
-                            ticks.append(Tick(sym, ts, float(row["price"]), float(row["size"]), row.get("side") == "sell"))
-                    if oldest < cutoff:
-                        break
-                    after = r.headers.get("CB-AFTER") or str(min(int(x["trade_id"]) for x in rows))
-                    await asyncio.sleep(0.12)
-        return ticks
-
-    async def run(self, emit) -> None:
-        if not self.symbols:
-            return
-        backoff = 1.0
-        sub = json.dumps({"type": "subscribe", "product_ids": self.symbols, "channels": ["ticker", "heartbeat"]})
-        while True:
-            try:
-                async with websockets.connect(self.WS, ping_interval=20, ping_timeout=20, max_queue=4096) as ws:
-                    await ws.send(sub)
-                    backoff = 1.0
-                    self.note = "connected"
-                    async for raw in ws:
-                        m = json.loads(raw)
-                        if m.get("type") != "ticker" or not m.get("price"):
-                            continue
-                        ts = self._parse(m["time"]) if m.get("time") else time.time()
-                        side = m.get("side")
-                        bid = float(m["best_bid"]) if m.get("best_bid") else None
-                        ask = float(m["best_ask"]) if m.get("best_ask") else None
-                        self._emit(emit, Tick(m["product_id"], ts, float(m["price"]), float(m.get("last_size") or 0.0),
-                                              (side == "buy") if side else None, bid, ask))
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:  # noqa: BLE001
-                self.note = f"reconnecting: {type(e).__name__}"
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
-
-
-class BinanceSource(Source):
-    id = "binance"
-    name = "Binance"
-    kind = "crypto"
-    mechanism = "websocket"
-    priority = 20
-    classes = ("crypto",)
-    fresh_after = 15.0
-    HOSTS = ("api.binance.com", "data-api.binance.vision")
-    WS = "wss://stream.binance.com:9443/stream"
-
-    def pair(self, sym: str) -> str:
-        return crypto_base(sym) + "USDT"
-
-    def _interval(self) -> str:
-        return {60: "1m", 300: "5m", 900: "15m", 1800: "30m", 3600: "1h"}.get(int(self.cfg.bar_seconds), "1s")
-
-    async def backfill(self, symbols: list[str], cutoff: float) -> list[Tick]:
-        syms = [s for s in symbols if self.supports(s)]
-        ticks: list[Tick] = []
-        start = int(cutoff * 1000)
-        interval = self._interval()
-        step_ms = int(self.cfg.bar_seconds * 1000)
-        async with httpx.AsyncClient(timeout=20, headers={"User-Agent": UA}) as client:
-            for sym in syms:
-                host_ok = None
-                cur = start
-                for _ in range(self.cfg.backfill_pages):
-                    data = None
-                    for host in ([host_ok] if host_ok else self.HOSTS):
-                        try:
-                            r = await client.get(f"https://{host}/api/v3/klines",
-                                                 params={"symbol": self.pair(sym), "interval": interval, "startTime": cur, "limit": 1000})
-                            if r.status_code == 200:
-                                data = r.json()
-                                host_ok = host
-                                break
-                        except Exception:  # noqa: BLE001
-                            continue
-                    if not data:
-                        break
-                    for k in data:
-                        vol = float(k[5]); buyv = float(k[9])
-                        ticks.append(Tick(sym, k[0] / 1000.0 + self.cfg.bar_seconds, float(k[4]), vol, (buyv > vol / 2) if vol else None,
-                                          o=float(k[1]), h=float(k[2]), l=float(k[3])))
-                    cur = data[-1][0] + step_ms
-                    if cur >= time.time() * 1000 or len(data) < 1000:
-                        break
-                    await asyncio.sleep(0.1)
-        return ticks
-
-    async def run(self, emit) -> None:
-        if not self.symbols:
-            return
-        streams = "/".join(f"{self.pair(s).lower()}@trade" for s in self.symbols)
-        url = f"{self.WS}?streams={streams}"
-        rev = {self.pair(s): s for s in self.symbols}
-        backoff = 1.0
-        while True:
-            try:
-                async with websockets.connect(url, ping_interval=20, ping_timeout=20, max_queue=4096) as ws:
-                    backoff = 1.0
-                    self.note = "connected"
-                    async for raw in ws:
-                        m = json.loads(raw).get("data", {})
-                        if m.get("e") != "trade":
-                            continue
-                        sym = rev.get(m["s"])
-                        if not sym:
-                            continue
-                        # m["m"] is true when the buyer is the maker, i.e. the taker sold.
-                        self._emit(emit, Tick(sym, m["T"] / 1000.0, float(m["p"]), float(m["q"]), not m["m"]))
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:  # noqa: BLE001
-                self.note = f"reconnecting: {type(e).__name__}"
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
-
-
-# Poll sources ---------------------------------------------------------------------
-
 class YahooSource(Source):
     id = "yahoo"
     name = "Yahoo Finance"
@@ -485,104 +328,6 @@ class YahooSource(Source):
                 return
         states = {v for v in self.market_state.values() if v}
         self.note = ("markets " + ",".join(sorted(states)) if states else "polled") + f"; {got} new bar(s)"
-
-
-class KrakenSource(Source):
-    id = "kraken"
-    name = "Kraken"
-    kind = "crypto"
-    mechanism = "poll"
-    priority = 40
-    classes = ("crypto",)
-    poll_interval = 12.0
-    fresh_after = 40.0
-
-    def __init__(self, cfg, symbols):
-        super().__init__(cfg, symbols)
-        self._seen: dict[str, float] = {}
-
-    def pair(self, sym: str) -> str:
-        b = crypto_base(sym)
-        return KRAKEN_BASE.get(b, b) + "USD"
-
-    async def _ohlc(self, client, sym, since=None):
-        params = {"pair": self.pair(sym), "interval": 1}
-        if since:
-            params["since"] = int(since)
-        r = await client.get("https://api.kraken.com/0/public/OHLC", params=params, headers={"User-Agent": UA})
-        r.raise_for_status()
-        res = r.json().get("result", {})
-        rows = next((v for k, v in res.items() if k != "last"), [])
-        return rows
-
-    async def backfill(self, symbols, cutoff):
-        syms = [s for s in symbols if self.supports(s)]
-        ticks = []
-        async with httpx.AsyncClient(timeout=20) as client:
-            for sym in syms:
-                try:
-                    for row in await self._ohlc(client, sym, since=cutoff):
-                        t = float(row[0])
-                        if t >= cutoff:
-                            ticks.append(Tick(sym, t + 60.0, float(row[4]), float(row[6]), None,
-                                              o=float(row[1]), h=float(row[2]), l=float(row[3])))
-                            self._seen[sym] = t
-                    await asyncio.sleep(0.3)
-                except Exception as e:  # noqa: BLE001
-                    self.note = f"{sym}: {type(e).__name__}"
-        return ticks
-
-    async def run(self, emit):
-        await self._poll_loop(emit)
-
-    async def poll_once(self, emit):
-        if not self.symbols:
-            return
-        async with httpx.AsyncClient(timeout=20) as client:
-            for sym in self.symbols:
-                try:
-                    rows = await self._ohlc(client, sym, since=self._seen.get(sym, time.time() - 300))
-                    for row in rows:
-                        t = float(row[0])
-                        if t > self._seen.get(sym, 0):
-                            self._emit(emit, Tick(sym, t + 60.0, float(row[4]), float(row[6]), None))
-                            self._seen[sym] = t
-                    await asyncio.sleep(0.3)
-                except Exception as e:  # noqa: BLE001
-                    self.note = f"{sym}: {type(e).__name__}"
-
-
-class CoinGeckoSource(Source):
-    id = "coingecko"
-    name = "CoinGecko"
-    kind = "crypto"
-    mechanism = "poll"
-    priority = 60
-    classes = ("crypto",)
-    poll_interval = 20.0
-    fresh_after = 60.0
-
-    def supports(self, sym):
-        return asset_class(sym) == "crypto" and crypto_base(sym) in COINGECKO_IDS
-
-    async def run(self, emit):
-        await self._poll_loop(emit)
-
-    async def poll_once(self, emit):
-        if not self.symbols:
-            return
-        ids = ",".join(COINGECKO_IDS[crypto_base(s)] for s in self.symbols)
-        rev = {COINGECKO_IDS[crypto_base(s)]: s for s in self.symbols}
-        async with httpx.AsyncClient(timeout=20, headers={"User-Agent": UA}) as client:
-            r = await client.get("https://api.coingecko.com/api/v3/simple/price",
-                                 params={"ids": ids, "vs_currencies": "usd", "include_last_updated_at": "true"})
-            r.raise_for_status()
-            d = r.json()
-        for cid, row in d.items():
-            sym = rev.get(cid)
-            if sym and row.get("usd"):
-                self._emit(emit, Tick(sym, float(row.get("last_updated_at", time.time())), float(row["usd"]), 0.0, None))
-        self.note = f"polled {len(d)} prices"
 
 
 class AlphaVantageQuoteSource(Source):
@@ -1011,66 +756,6 @@ class GoldApiSource(Source):
         self.note = f"spot metals for {len(self.symbols)} symbols"
 
 
-class BitfinexSource(Source):
-    """Bitfinex spot ticker (poll). Crypto, no key."""
-
-    id = "bitfinex"
-    name = "Bitfinex"
-    kind = "crypto"
-    mechanism = "poll"
-    priority = 24
-    classes = ("crypto",)
-    poll_interval = 8.0
-    fresh_after = 30.0
-
-    async def run(self, emit):
-        await self._poll_loop(emit)
-
-    async def poll_once(self, emit):
-        if not self.symbols:
-            return
-        async with httpx.AsyncClient(timeout=15, headers={"User-Agent": UA}) as c:
-            for sym in self.symbols:
-                try:
-                    r = await c.get(f"https://api-pub.bitfinex.com/v2/ticker/t{crypto_base(sym)}USD")
-                    if r.status_code == 200:
-                        d = r.json()
-                        if isinstance(d, list) and len(d) > 7:
-                            self._emit(emit, Tick(sym, time.time(), float(d[6]), float(d[7]), None))
-                    await asyncio.sleep(0.15)
-                except Exception as e:  # noqa: BLE001
-                    self.note = f"{crypto_base(sym)}: {type(e).__name__}"
-
-
-class GeminiSource(Source):
-    """Gemini spot ticker (poll). Crypto, no key."""
-
-    id = "gemini"
-    name = "Gemini"
-    kind = "crypto"
-    mechanism = "poll"
-    priority = 26
-    classes = ("crypto",)
-    poll_interval = 8.0
-    fresh_after = 30.0
-
-    async def run(self, emit):
-        await self._poll_loop(emit)
-
-    async def poll_once(self, emit):
-        if not self.symbols:
-            return
-        async with httpx.AsyncClient(timeout=15, headers={"User-Agent": UA}) as c:
-            for sym in self.symbols:
-                try:
-                    r = await c.get(f"https://api.gemini.com/v1/pubticker/{crypto_base(sym).lower()}usd")
-                    if r.status_code == 200 and r.json().get("last"):
-                        self._emit(emit, Tick(sym, time.time(), float(r.json()["last"]), 0.0, None))
-                    await asyncio.sleep(0.15)
-                except Exception as e:  # noqa: BLE001
-                    self.note = f"{crypto_base(sym)}: {type(e).__name__}"
-
-
 class SimSource(Source):
     id = "sim"
     name = "Simulator"
@@ -1100,8 +785,166 @@ class SimSource(Source):
 
 # Manager --------------------------------------------------------------------------
 
-REGISTRY = [CoinbaseSource, BinanceSource, BitfinexSource, GeminiSource, KrakenSource, SchwabSource, FMPSource,
-            FinnhubSource, EODHDSource, GoldApiSource, YahooSource, CoinGeckoSource, AlphaVantageQuoteSource]
+class IBKRSource(Source):
+    """Interactive Brokers market data via a local IB Gateway / TWS (opt-in).
+
+    Uses the ib_async library to talk to a running IB Gateway or TWS on ibkr_port,
+    streaming real-time (or delayed, if the account lacks a subscription) L1 quotes and
+    backfilling true intraday OHLC bars. Off by default and fails gracefully when the
+    Gateway is not running, so it never blocks the other feeds. Market data only -- it
+    places no orders."""
+    id = "ibkr"
+    name = "Interactive Brokers"
+    kind = "equity"
+    mechanism = "websocket"
+    priority = 22                 # above FMP (33) and Yahoo (50): the user's own real-time feed
+    classes = ("equity",)
+    fresh_after = 30.0
+    _SIZES = {30: "30 secs", 60: "1 min", 120: "2 mins", 180: "3 mins", 300: "5 mins",
+              600: "10 mins", 900: "15 mins", 1800: "30 mins", 3600: "1 hour"}
+
+    @staticmethod
+    def _imp():
+        try:
+            from ib_async import IB, Stock
+            return IB, Stock
+        except ImportError:
+            try:
+                from ib_insync import IB, Stock
+                return IB, Stock
+            except ImportError:
+                return None, None
+
+    @staticmethod
+    def _num(x):
+        try:
+            x = float(x)
+            return x if x == x else None      # NaN -> None
+        except (TypeError, ValueError):
+            return None
+
+    def _barsize(self):
+        return self._SIZES.get(int(self.cfg.bar_seconds), "5 mins")
+
+    def _duration(self):
+        days = max(1, (int(self.cfg.backfill_seconds) + 86399) // 86400)
+        return f"{days} D"
+
+    async def backfill(self, symbols, cutoff):
+        syms = [s for s in symbols if self.supports(s)]
+        if not syms:
+            return []
+        IB, Stock = self._imp()
+        if IB is None:
+            self.note = "pip/uv add ib_async to use IBKR"
+            return []
+        ib = IB()
+        try:
+            await ib.connectAsync(self.cfg.ibkr_host, self.cfg.ibkr_port,
+                                  clientId=self.cfg.ibkr_client_id + 1, timeout=8)
+        except Exception as e:  # noqa: BLE001
+            self.note = f"backfill: no Gateway at {self.cfg.ibkr_host}:{self.cfg.ibkr_port} ({type(e).__name__})"
+            return []
+        ticks = []
+        try:
+            try:
+                ib.reqMarketDataType(self.cfg.ibkr_market_data_type)
+            except Exception:  # noqa: BLE001
+                pass
+            dur, size = self._duration(), self._barsize()
+            contracts = [Stock(s, "SMART", "USD") for s in syms]
+            try:
+                await ib.qualifyContractsAsync(*contracts)
+            except Exception:  # noqa: BLE001
+                pass
+            for c in contracts:
+                try:
+                    bars = await ib.reqHistoricalDataAsync(
+                        c, endDateTime="", durationStr=dur, barSizeSetting=size,
+                        whatToShow="TRADES", useRTH=False, formatDate=2)
+                    for b in bars:
+                        ts = b.date.timestamp() if hasattr(b.date, "timestamp") else float(b.date)
+                        ticks.append(Tick(c.symbol, ts + self.cfg.bar_seconds, float(b.close),
+                                          float(b.volume or 0.0), None,
+                                          o=float(b.open), h=float(b.high), l=float(b.low)))
+                except Exception as e:  # noqa: BLE001
+                    self.note = f"hist {c.symbol}: {type(e).__name__}"
+        finally:
+            try:
+                ib.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+        return ticks
+
+    async def run(self, emit):
+        IB, Stock = self._imp()
+        if IB is None:
+            self.note = "pip/uv add ib_async to use IBKR"
+            return
+        ib = IB()
+        try:
+            await ib.connectAsync(self.cfg.ibkr_host, self.cfg.ibkr_port,
+                                  clientId=self.cfg.ibkr_client_id, timeout=8)
+        except Exception as e:  # noqa: BLE001
+            self.note = f"no IB Gateway at {self.cfg.ibkr_host}:{self.cfg.ibkr_port} -- start it and enable the API ({type(e).__name__})"
+            return
+        self.note = f"connected {self.cfg.ibkr_host}:{self.cfg.ibkr_port}"
+
+        def on_err(reqId, code, msg, contract=None, *a):
+            if code in (354, 10089, 10090, 10167, 10168, 10197):   # market data not subscribed / not available
+                self.note = "no real-time subscription; using delayed data"
+                try:
+                    ib.reqMarketDataType(3)
+                except Exception:  # noqa: BLE001
+                    pass
+        ib.errorEvent += on_err
+        try:
+            ib.reqMarketDataType(self.cfg.ibkr_market_data_type)
+        except Exception:  # noqa: BLE001
+            pass
+
+        want = set(self.symbols)
+        contracts = [Stock(s, "SMART", "USD") for s in self.symbols]
+        try:
+            await ib.qualifyContractsAsync(*contracts)
+        except Exception as e:  # noqa: BLE001
+            self.note = f"qualify failed: {type(e).__name__}"
+        for c in contracts:
+            try:
+                ib.reqMktData(c, "", False, False)
+            except Exception:  # noqa: BLE001
+                pass
+
+        def on_ticks(tickers):
+            now = time.time()
+            for t in tickers:
+                sym = getattr(t.contract, "symbol", None)
+                if sym not in want:
+                    continue
+                px = self._num(t.last)
+                if px is None:
+                    px = self._num(t.close)
+                bid, ask = self._num(t.bid), self._num(t.ask)
+                if px is None and bid and ask:
+                    px = (bid + ask) / 2
+                if px is None or px <= 0:
+                    continue
+                self._emit(emit, Tick(sym, now, float(px), float(self._num(t.lastSize) or 0.0),
+                                      None, bid=bid, ask=ask))
+        ib.pendingTickersEvent += on_ticks
+        try:
+            while ib.isConnected():
+                await asyncio.sleep(5)
+            self.note = "disconnected from IB Gateway"
+        finally:
+            try:
+                ib.pendingTickersEvent -= on_ticks
+                ib.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+REGISTRY = [IBKRSource, SchwabSource, FMPSource, FinnhubSource, EODHDSource, GoldApiSource, YahooSource, AlphaVantageQuoteSource]
 
 
 class SourceManager:
@@ -1146,6 +989,8 @@ class SourceManager:
                 on = bool(cfg.eodhd_key)
             if src.id == "fmp":
                 on = bool(cfg.fmp_key)
+            if src.id == "ibkr":
+                on = bool(cfg.ibkr_enabled)   # opt-in: needs IB Gateway running
             self.enabled[src.id] = on and bool(src.symbols)
         self.seen: dict[str, dict[str, float]] = {s: {} for s in symbols}   # sym -> source_id -> last ts
         self.active: dict[str, str | None] = {s: None for s in symbols}

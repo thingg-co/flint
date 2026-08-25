@@ -98,7 +98,8 @@ def autotune(cfg, n_features: int, say=None) -> dict:
     say = say or (lambda *a, **k: log.info(*a))
     device = pick_device(cfg.device)
     cache = Path(cfg.state_dir) / "machine.json"
-    key = f"{device}|{os.cpu_count()}|{cfg.n_assets}|{n_features}|{cfg.bar_seconds}|{cfg.batch_size}|{cfg.autotune_util}"
+    key = (f"{device}|{os.cpu_count()}|{cfg.n_assets}|{n_features}|{cfg.bar_seconds}|{cfg.batch_size}"
+           f"|{cfg.autotune_util}|{cfg.max_warmup_seconds}|{cfg.warmup_steps}")
     try:
         c = json.loads(cache.read_text())
         if c.get("key") == key:
@@ -112,9 +113,12 @@ def autotune(cfg, n_features: int, say=None) -> dict:
     threads = _best_threads(device, cfg.n_assets, n_features, cfg.n_quantiles, say)
     torch.set_num_threads(threads)
     steps_per_bar = max(1, cfg.steps_per_label) + 1
-    budget = min(cfg.bar_seconds * 1000.0 * cfg.autotune_util / steps_per_bar, 1500.0)  # cap: keep warmup/predict snappy
+    cadence = cfg.bar_seconds * 1000.0 * cfg.autotune_util / steps_per_bar        # must keep up with online training
+    warmup_ceiling = cfg.max_warmup_seconds * 1000.0 / max(1, cfg.warmup_steps)   # keep go-live warmup bearable
+    budget = min(cadence, warmup_ceiling)
     say(f"device {device} ({threads} cpu threads); step budget {budget:.0f} ms "
-        f"({cfg.autotune_util:.0%} of {cfg.bar_seconds:.0f}s bar over {steps_per_bar} steps)")
+        f"(min of {cadence:.0f} ms training cadence, {warmup_ceiling:.0f} ms warmup ceiling "
+        f"= {cfg.max_warmup_seconds:.0f}s over {cfg.warmup_steps} steps)")
 
     chosen, chosen_ms, chosen_n = PRESETS[0], None, None
     for preset in PRESETS:

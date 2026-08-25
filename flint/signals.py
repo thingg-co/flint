@@ -404,8 +404,7 @@ class SignalHub:
     def __init__(self, cfg, symbols):
         self.cfg = cfg
         self.symbols = symbols
-        self.providers = {p.id: p for p in (WSBProvider(), FearGreedProvider(), DerivativesProvider(),
-                                            FundamentalsProvider(cfg.finnhub_key))}
+        self.providers = {p.id: p for p in (WSBProvider(), FundamentalsProvider(cfg.finnhub_key))}
         self.gurus = {g["id"]: Guru13F(g["id"], g["name"], g["cik"]) for g in GURUS}
         self.guru_meta = {g["id"]: g for g in GURUS}
         off = {x.strip() for x in cfg.signals_off.split(",") if x.strip()}
@@ -440,24 +439,13 @@ class SignalHub:
 
     async def gather(self, say=None) -> dict:
         say = say or (lambda *a, **k: None)
-        wsb, fg, deriv = self.providers["wsb"], self.providers["feargreed"], self.providers["derivatives"]
-        market = {"fng": 0.0, "fng_value": None, "fng_class": None}
-        if self.enabled["feargreed"]:
-            try:
-                fgv = await fg.gather(say)
-                market.update(fng=fgv["norm"], fng_value=fgv["value"], fng_class=fgv["class"])
-            except Exception as e:  # noqa: BLE001
-                say(f"Fear & Greed failed: {type(e).__name__}", "warn")
+        wsb = self.providers["wsb"]
+        market = {"fng": 0.0, "fng_value": None, "fng_class": None}   # fng retired with crypto; stays neutral
         if self.enabled["wsb"]:
             try:
                 await wsb.gather(say)
             except Exception as e:  # noqa: BLE001
                 say(f"WSB failed: {type(e).__name__}", "warn")
-        if self.enabled["derivatives"]:
-            try:
-                await deriv.gather(self.symbols, say)
-            except Exception as e:  # noqa: BLE001
-                say(f"derivatives failed: {type(e).__name__}", "warn")
         for gid, guru in self.gurus.items():
             if self.enabled.get(gid):
                 try:
@@ -493,7 +481,7 @@ class SignalHub:
         per_asset, crowding, guru_tilt, ethos_bias = {}, {}, {}, {}
         for sym in self.symbols:
             w = wsb.for_symbol(sym) if self.enabled["wsb"] else {"wsb_sent": 0.0, "wsb_attn": 0.0, "mentions": 0, "top": None}
-            d = deriv.last.get(sym, {}) if self.enabled["derivatives"] else {}
+            d = {}   # derivatives (crypto perps) retired; funding/oi/longshort stay neutral
             funding_sig, oi_sig, ls_sig = d.get("funding_sig", 0.0), d.get("oi_chg_sig", 0.0), d.get("longshort_sig", 0.0)
             crowd = (0.9 * market["fng"] + 1.1 * w["wsb_attn"] * (0.3 + 0.7 * clip(w["wsb_sent"] + 0.15)) +
                      1.0 * funding_sig + 0.7 * ls_sig + 0.4 * oi_sig)

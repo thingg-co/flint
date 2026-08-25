@@ -128,7 +128,7 @@
   </section>
   <section class="panel signals">
     <div class="sources-head">
-      <h3>Signals &amp; strategy <small>retail, derivatives, market sentiment and guru 13Fs — fed to the model and the Burry overlay</small></h3>
+      <h3>Signals &amp; strategy <small>retail chatter, market breadth, and guru 13Fs — fed to the model and the Burry overlay</small></h3>
       <label class="overlay-toggle" id="burry-toggle-wrap">Burry / Buffett overlay</label>
       <button type="button" data-action="refresh_signals" id="refresh-signals">Refresh signals</button>
     </div>
@@ -167,6 +167,13 @@
   </div>
 </div>
 <div class="tooltip" id="tooltip"></div>
+<button id="inject-fab" title="Inject a note to flint  (⌘/Ctrl+I)">✎ Tell flint</button>
+<div id="inject-pop" hidden>
+  <div class="inject-head">Inject input <span>name a watched ticker to nudge it, or just leave a market note</span></div>
+  <textarea id="inject-text" rows="3" placeholder="e.g. NVDA looks like a breakout, going long — CPI print at 8:30 — fade the SMCI pop"></textarea>
+  <div class="inject-row"><span class="inject-ack" id="inject-ack"></span><button id="inject-send">Send &crarr;</button></div>
+</div>
+
 <script src="/static/app.js"></script>
 </body>
 </html>

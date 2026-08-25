@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -142,6 +143,8 @@ class Engine:
         token_file = cfg.schwab_token_file or os.path.join(cfg.state_dir, "schwab_tokens.json")
         self.schwab_auth = SchwabAuth(ak, asec, acb, token_file)
         self.log: deque[dict] = deque(maxlen=cfg.log_size)
+        self.operator: dict[str, dict] = {}                 # per-symbol human bias {sent, attn, t, text}
+        self.operator_notes: deque[dict] = deque(maxlen=50)  # raw injected notes, for display
         self.status = "starting"
         self.started = time.time()
         self.learning_enabled = True
@@ -178,6 +181,7 @@ class Engine:
             cfg.device = pick_device(cfg.device)
         self.builder = BarBuilder(self.symbols, cfg.bar_seconds)
         self.features = FeatureBuilder(self.symbols, cfg.window)
+        self.news_base = {s: (0.0, 0.0) for s in self.symbols}  # last pure news skim, before operator blend
         self.learner = OnlineLearner(cfg, N_FEATURES)
         self.sources = SourceManager(cfg, self.symbols, self.av, on_tick=self._on_live_tick,
                                      on_provider_change=self._on_provider_change, trace=self.trace,
@@ -270,6 +274,71 @@ class Engine:
 
     def _log(self, text: str, kind: str = "info") -> None:
         self.log.append({"t": time.time(), "kind": kind, "text": text})
+
+    _BULL = {"buy", "bull", "bullish", "long", "longs", "breakout", "moon", "squeeze", "rip", "rally",
+             "pump", "strong", "beat", "beats", "upgrade", "surge", "calls", "bounce", "green", "add"}
+    _BEAR = {"sell", "bear", "bearish", "short", "shorts", "crash", "dump", "puke", "fade", "tank",
+             "weak", "miss", "misses", "downgrade", "drop", "puts", "risk", "red", "trim", "avoid"}
+
+    def _op_effective(self, sym: str):
+        """Current decayed operator bias for a symbol, or None once it has faded out."""
+        op = self.operator.get(sym)
+        if not op:
+            return None
+        decay = 0.5 ** ((time.time() - op["t"]) / max(60.0, self.cfg.operator_half_life))
+        if decay < 0.05:
+            self.operator.pop(sym, None)
+            return None
+        return op["sent"], op["attn"] * decay
+
+    def _blend_news(self, sym: str, base_sent: float, base_attn: float):
+        """Blend a human note over the news skim: attention takes the max, sentiment is
+        pulled toward the note in proportion to its (decayed) attention."""
+        eff = self._op_effective(sym)
+        if not eff:
+            return base_sent, base_attn
+        osent, oattn = eff
+        return base_sent * (1 - oattn) + osent * oattn, max(base_attn, oattn)
+
+    def inject_note(self, text: str) -> dict:
+        """Human input from the dashboard: log it to the operator console and, for any
+        watched ticker it names, nudge that symbol's news sentiment/attention feature."""
+        text = (text or "").strip()
+        if not text:
+            return {"ok": False, "reason": "empty"}
+        self.operator_notes.append({"t": time.time(), "text": text})
+        self.trace.emit("operator", text, "act")
+        self._log("note: " + text, "operator")
+
+        words = [w.lower() for w in re.findall(r"[A-Za-z']+", text)]
+        hits = [w for w in words if w in self._BULL or w in self._BEAR]
+        score = sum(1 for w in words if w in self._BULL) - sum(1 for w in words if w in self._BEAR)
+        sent = max(-1.0, min(1.0, score / 2.0)) if hits else 0.0
+
+        bases = {self.base[s]: s for s in self.symbols}       # NVDA->NVDA, XAU->XAU-USD
+        mentioned, seen = [], set()
+        for dollar, tok in re.findall(r"(\$?)([A-Za-z][A-Za-z.\-]{0,6})", text):
+            u = tok.upper().strip(".-")
+            if u in bases and bases[u] not in seen and (dollar or tok.isupper() or len(tok) >= 3):
+                mentioned.append(bases[u]); seen.add(bases[u])
+
+        now, applied = time.time(), []
+        for sym in mentioned:
+            self.operator[sym] = {"sent": sent, "attn": 0.85, "t": now, "text": text}
+            es, ea = self._blend_news(sym, *self.news_base.get(sym, (0.0, 0.0)))
+            self.features.set_news(sym, es, ea)
+            applied.append(sym)
+        if applied:
+            self.trace.emit("features", f"operator bias on {', '.join(applied)}: sentiment {sent:+.2f}, "
+                            f"attention 85%" + (f" ({', '.join(sorted(set(hits)))})" if hits else " (attention only)"), "act")
+        elif not mentioned:
+            self.trace.emit("system", "note logged as context (named no watched ticker)", "info")
+        self._publish({"type": "operator", "operator": self.operator_state()})
+        return {"ok": True, "applied": applied, "sentiment": round(sent, 3)}
+
+    def operator_state(self) -> dict:
+        return {"notes": list(self.operator_notes)[-20:],
+                "bias": {s: {"sent": o["sent"], "text": o["text"], "t": o["t"]} for s, o in self.operator.items()}}
 
     def status_dict(self) -> dict:
         providers = self.sources.provider_map()
@@ -386,6 +455,7 @@ class Engine:
             "history": {k: list(v) for k, v in self.history.items()},
             "log": list(self.log),
             "trace": self.trace.recent(),
+            "operator": self.operator_state(),
             "news": self.news,
         }
 
@@ -926,8 +996,9 @@ class Engine:
             res = await asyncio.wait_for(self.news_hub.skim(say), timeout=300)
             for s in self.symbols:
                 pa = res["per_asset"].get(s)
-                if pa:
-                    self.features.set_news(s, pa["sentiment"], pa["attention"])
+                base = (pa["sentiment"], pa["attention"]) if pa else (0.0, 0.0)
+                self.news_base[s] = base
+                self.features.set_news(s, *self._blend_news(s, *base))
             self.news = res
             fresh = [h for h in res["headlines"] if h["new"]]
             self.trace.emit("news", f"{len(res['headlines'])} relevant headlines via {res['method']}, {len(fresh)} new")
@@ -1045,6 +1116,8 @@ class Engine:
             if added:
                 self.trace.emit("system", f"added top {len(added)} movers: {', '.join(added)}", "act")
                 asyncio.get_running_loop().create_task(self.reconfigure())
+        elif action == "inject":
+            return {"type": "inject", **self.inject_note(payload.get("text", ""))}
         state = {"type": "controls", "controls": self.controls(), "metrics": self.metrics.as_dict(),
                  "sources": self.sources.status(), "news_sources": self.news_hub.status(),
                  "signal_providers": self.signals.status()}

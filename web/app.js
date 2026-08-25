@@ -14,7 +14,8 @@ const CHANNELS = {
   policy: "how each forecast became BUY, SELL or HOLD",
   learn: "matured labels, training steps, loss",
   news: "headless-browser skim: headlines, tone, ideas",
-  signals: "WSB, derivatives, Fear & Greed, and guru 13F refreshes",
+  signals: "WSB retail chatter, guru 13F refreshes, and the whole-market scan",
+  operator: "input you inject from the dashboard, and the nudges it applies",
   system: "checkpoints, settings, lifecycle",
 };
 const CONTROL_FIELDS = [
@@ -528,6 +529,40 @@ async function control(payload) {
   const res = await r.json();
   if (res.controls) { state.controls = res.controls; syncControls(); }
   if (res.metrics) { state.metrics = res.metrics; if (document.body.dataset.view === "dashboard") renderTiles(); }
+  return res;
+}
+
+// --- inject input: a compose box that pipes a human note into the model ---
+const injectFab = $("#inject-fab"), injectPop = $("#inject-pop"), injectText = $("#inject-text"), injectAck = $("#inject-ack");
+function injectToggle(show) {
+  injectPop.hidden = show === undefined ? !injectPop.hidden : !show;
+  if (!injectPop.hidden) { injectText.focus(); }
+}
+async function injectSend() {
+  const text = injectText.value.trim();
+  if (!text) return;
+  const res = await control({ action: "inject", text });
+  if (res && res.applied && res.applied.length) {
+    injectAck.textContent = `nudged ${res.applied.join(", ")} (${res.sentiment >= 0 ? "+" : ""}${res.sentiment})`;
+  } else {
+    injectAck.textContent = "logged to the operator console";
+  }
+  injectText.value = "";
+  clearTimeout(injectSend._t); injectSend._t = setTimeout(() => { injectAck.textContent = ""; injectToggle(false); }, 2200);
+}
+if (injectFab) {
+  injectFab.onclick = () => injectToggle();
+  $("#inject-send").onclick = injectSend;
+  injectText.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); injectSend(); }
+    else if (e.key === "Escape") { injectToggle(false); }
+  });
+  document.addEventListener("keydown", e => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "i") { e.preventDefault(); injectToggle(); }
+  });
+  document.addEventListener("click", e => {
+    if (!injectPop.hidden && !injectPop.contains(e.target) && e.target !== injectFab) injectToggle(false);
+  });
 }
 
 $$(".actions button").forEach(b => b.onclick = () => {
@@ -977,8 +1012,6 @@ function renderSignals() {
         <div class="sh"><b>${esc(base(sym))}</b><span class="crowd ${crowd > 0.15 ? "hot" : crowd < -0.15 ? "cold" : ""}">crowding ${fmt(crowd)}</span></div>
         <div class="rows">
           <span>WSB <b>${pa.mentions || 0}</b> mentions</span><span>WSB tone <b class="${sgn(f.wsb_sent)}">${fmt(f.wsb_sent)}</b></span>
-          <span>funding <b class="${sgn(f.funding)}">${fmt(f.funding)}</b></span><span>long/short <b class="${sgn(f.longshort)}">${fmt(f.longshort)}</b></span>
-          <span>Fear&amp;Greed <b>${mk.fng_value != null ? mk.fng_value : "·"}</b></span><span>OI Δ <b class="${sgn(f.oi_chg)}">${fmt(f.oi_chg)}</b></span>
           <span>guru net <b class="${sgn(f.guru_net)}">${fmt(f.guru_net)}</b></span><span>ethos bias <b class="${sgn(f.ethos_bias)}">${fmt(f.ethos_bias)}</b></span>
           ${pa.fundamentals && pa.fundamentals.pe != null ? `<span>value <b class="${sgn(f.f_value)}">${fmt(f.f_value)}</b></span><span>quality <b class="${sgn(f.f_quality)}">${fmt(f.f_quality)}</b></span>` : ""}
         </div>${pa.fundamentals && pa.fundamentals.pe != null ? `<div class="frow">P/E ${pa.fundamentals.pe.toFixed(1)} · EPS ${pa.fundamentals.eps != null ? pa.fundamentals.eps.toFixed(2) : "·"} · ROE ${pa.fundamentals.roe != null ? pa.fundamentals.roe.toFixed(0) + "%" : "·"} · β ${pa.fundamentals.beta != null ? pa.fundamentals.beta.toFixed(2) : "·"}</div>` : ""}${guruHolders(pa)}</div>`;

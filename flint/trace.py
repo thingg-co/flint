@@ -5,7 +5,7 @@ import time
 from collections import deque
 from typing import Callable
 
-CHANNELS = ["feed", "bars", "features", "model", "policy", "learn", "news", "signals", "system"]
+CHANNELS = ["feed", "bars", "features", "model", "policy", "learn", "news", "signals", "operator", "system"]
 
 
 class Trace:
