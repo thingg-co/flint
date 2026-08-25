@@ -426,6 +426,15 @@ function renderStatus() {
   $("#bars").textContent = s.bar_index ?? 0;
   $("#pending").textContent = s.pending ?? 0;
   $("#learning").classList.toggle("off", s.learning === false);
+  const mk = $("#market");
+  if (mk) {
+    let fresh = 0;
+    for (const v of Object.values(state.prices || {})) if (v && v.ts) fresh = Math.max(fresh, v.ts);
+    const age = fresh ? (Date.now() / 1000 - fresh) : Infinity;
+    if (age < 90) { mk.textContent = "market open"; mk.className = "pill live"; }
+    else if (fresh) { mk.textContent = "market closed · last " + fmtTime(fresh); mk.className = "pill closed"; }
+    else { mk.textContent = "market —"; mk.className = "pill closed"; }
+  }
   updateLoading();
 }
 

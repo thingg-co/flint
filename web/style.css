@@ -40,6 +40,7 @@ button.active { background: var(--blue); border-color: var(--blue); color: #fff;
 .pill.warn { border-color: var(--warning); color: var(--warning); }
 .pill.err { border-color: var(--critical); color: var(--critical); }
 .pill.off { color: var(--muted); text-decoration: line-through; }
+.pill.closed { color: var(--muted); border-color: var(--border); }
 .kv label { color: var(--muted); font-size: 12px; margin-right: 4px; }
 .kv b { font-family: var(--mono); font-weight: 500; }
 .conn { color: var(--critical); }
