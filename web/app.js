@@ -193,11 +193,17 @@ function drawChart(card) {
   ctx.fillStyle = "#e0913b"; ctx.fillText("signal", lx, mT + 9); lx += ctx.measureText("signal").width + 6;
   ctx.fillStyle = C.muted; ctx.fillText("12·26·9", lx, mT + 9);
 
-  // x axis + now marker
-  ctx.fillStyle = C.muted; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
-  ctx.fillText(fmtTime(bars[0].t), padL, h - 4);
-  ctx.textAlign = "center"; ctx.fillText(fmtTime(bars[n - 1].t), xLast, h - 4);
-  ctx.textAlign = "right"; ctx.fillText(`+${Math.round(H * cfg.bar_seconds)}s`, xEnd, h - 4); ctx.textAlign = "left";
+  // x axis + now marker — show dates when the window spans more than a day, so a multi-day
+  // chart doesn't read as a few minutes (times of day alone repeat every 24h)
+  const spanH = (bars[n - 1].t - bars[0].t) / 3600;
+  const fmtAxis = ts => { const d = new Date(ts * 1000), hm = d.toTimeString().slice(0, 5);
+    return spanH > 20 ? `${d.getMonth() + 1}/${d.getDate()} ${hm}` : d.toTimeString().slice(0, 8); };
+  const mid = (n - 1) >> 1;
+  ctx.fillStyle = C.muted; ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left"; ctx.fillText(fmtAxis(bars[0].t), padL, h - 4);
+  ctx.textAlign = "center"; ctx.fillText(fmtAxis(bars[mid].t), xs(mid), h - 4);
+  ctx.textAlign = "right"; ctx.fillText(fmtAxis(bars[n - 1].t), xLast, h - 4);
+  ctx.fillText(`+${Math.round(H * cfg.bar_seconds / 60)}m`, xEnd, h - 4); ctx.textAlign = "left";
   ctx.strokeStyle = C.axis; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(Math.round(xLast) + 0.5, pT); ctx.lineTo(Math.round(xLast) + 0.5, mB); ctx.stroke(); ctx.setLineDash([]);
 
   card.geom = { padL, dx, n, bars };

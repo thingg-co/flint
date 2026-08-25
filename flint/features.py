@@ -106,3 +106,14 @@ class FeatureBuilder:
         if len(self.window) < self.window_len:
             return None
         return np.stack(self.window, axis=1)
+
+    def peek_window(self) -> np.ndarray | None:
+        """A predict-only window from whatever history exists, left-edge padded to
+        window_len. Seeds forecasts before a full real window has accumulated; never
+        used as a training sample, so training data stays real."""
+        if not self.window:
+            return None
+        frames = list(self.window)
+        if len(frames) < self.window_len:
+            frames = [frames[0]] * (self.window_len - len(frames)) + frames
+        return np.stack(frames, axis=1)

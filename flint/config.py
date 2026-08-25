@@ -132,7 +132,7 @@ class Config:
     brief_minutes: float = _env("BRIEF_MINUTES", 5.0)          # cache the narrative brief this long
     av_rate_seconds: float = _env("AV_RATE_SECONDS", 1.0)     # global floor between ANY two Alpha Vantage calls
     bar_seconds: float = _env("BAR_SECONDS", 300.0)   # 5-minute bars (FMP provides reliable 5-min history)
-    backfill_seconds: float = _env("BACKFILL_SECONDS", 172800.0)  # ~2 trading days of 5-min history
+    backfill_seconds: float = _env("BACKFILL_SECONDS", 432000.0)  # ~5 trading days: enough real bars to fill the model window + training
     backfill_pages: int = _env("BACKFILL_PAGES", 40)  # max REST pages per symbol
     coinbase_ws: str = "wss://ws-feed.exchange.coinbase.com"
     coinbase_rest: str = "https://api.exchange.coinbase.com"

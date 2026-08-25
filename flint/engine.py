@@ -638,15 +638,21 @@ class Engine:
     def _seed_forecast(self) -> None:
         """Populate forecasts from the backfilled window immediately at go-live, so cards
         aren't blank until the first live bar closes (important at long bar intervals)."""
-        if not self.pending:
-            return
-        pp = self.pending[-1]
-        pred = self.learner.predict(pp.x)
+        if self.pending:
+            pp = self.pending[-1]
+            x, closes, ts = pp.x, pp.closes, pp.ts
+        else:                                        # not enough bars for a full window yet
+            x = self.features.peek_window()
+            if x is None or not all(self.bars[s] for s in self.symbols):
+                return
+            closes = np.array([self.bars[s][-1].close for s in self.symbols], dtype=np.float32)
+            ts = self.bars[self.symbols[0]][-1].ts
+        pred = self.learner.predict(x)
         sugg = {s: self._suggest(i, s, pred) for i, s in enumerate(self.symbols)}
         self.gate = [float(g) for g in pred.gate]
         self.latest = {}
         for i, s in enumerate(self.symbols):
-            self.latest[s] = {**sugg[s], "price": float(pp.closes[i]), "ts": pp.ts, "attn": [float(a) for a in pred.attn[i]]}
+            self.latest[s] = {**sugg[s], "price": float(closes[i]), "ts": ts, "attn": [float(a) for a in pred.attn[i]]}
         self._publish({"type": "bar", "index": self.bar_index,
                        "bars": {s: self.bars[s][-1].to_json() for s in self.symbols if self.bars[s]},
                        "latest": self.latest, "gate": self.gate, "metrics": self.metrics.as_dict(),
