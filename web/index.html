@@ -4,11 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>flint</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='88'%3E%F0%9F%94%A5%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body data-view="dashboard">
 <header class="top">
-  <div class="brand">flint <span class="sub">continuously learning market model</span></div>
+  <div class="brand"><span class="fire">🔥</span> flint <span class="sub">continuously learning market model</span></div>
   <div class="status">
     <span class="pill" id="phase">starting</span>
     <span class="pill" id="feed">feed: ?</span>
@@ -20,10 +21,15 @@
     <span class="conn" id="conn" title="websocket">●</span>
   </div>
   <nav class="tabs">
+    <button data-tab="brief">Brief</button>
     <button data-tab="dashboard" class="active">Dashboard</button>
     <button data-tab="consoles">Control panel</button>
   </nav>
 </header>
+
+<main id="brief" class="view">
+  <div class="brief" id="brief-body"><div class="why">waiting for the first market scan…</div></div>
+</main>
 
 <main id="dashboard" class="view">
   <section class="panel market" id="market-panel">
@@ -95,6 +101,16 @@
       <button type="button" data-action="reset" class="danger">Reset model</button>
     </div>
   </section>
+  <section class="panel universe">
+    <div class="sources-head"><h3>Universe <small id="uni-meta">tickers the model trades — mute to pause, remove to drop (frees compute)</small></h3>
+      <div class="class-toggles" id="class-toggles"></div></div>
+    <div class="uni-add">
+      <input type="text" id="uni-add-input" placeholder="add ticker, e.g. NKE" autocomplete="off" autocapitalize="characters">
+      <button type="button" data-action="add_symbol">Add</button>
+      <button type="button" data-action="add_movers">+ Top 20 movers</button>
+    </div>
+    <div class="uni-list" id="uni-list"></div>
+  </section>
   <section class="panel keys">
     <div class="sources-head"><h3>API keys <small>stored locally in gitignored files, never shown in full</small></h3></div>
     <div class="key-list" id="key-list"></div>
@@ -144,26 +160,7 @@
 
 <div class="loading" id="loading" hidden>
   <div class="loading-card">
-    <svg class="fs" viewBox="0 0 220 180" width="220" height="180" aria-hidden="true">
-      <!-- tinder + growing fire -->
-      <g class="fire">
-        <path class="flame f3" d="M110 168 C96 150 100 140 104 132 C108 142 112 140 112 132 C120 142 124 152 116 164 Z"/>
-        <path class="flame f2" d="M110 170 C92 150 98 132 108 118 C112 134 120 130 118 120 C132 138 134 156 120 168 Z"/>
-        <path class="flame f1" d="M110 172 C84 148 96 120 110 100 C114 126 128 120 124 106 C146 130 148 160 126 172 Z"/>
-        <ellipse class="embers" cx="110" cy="171" rx="34" ry="6"/>
-      </g>
-      <!-- flint (rock) -->
-      <path class="flint" d="M36 96 L74 78 L96 92 L86 116 L52 122 Z"/>
-      <!-- steel striker -->
-      <g class="steel">
-        <path d="M150 44 C176 52 186 74 176 96 C170 84 156 78 150 84 C160 70 158 58 138 54 Z"/>
-      </g>
-      <!-- sparks -->
-      <g class="sparks">
-        <circle class="spark s1" r="2.4"/><circle class="spark s2" r="2"/><circle class="spark s3" r="2.6"/>
-        <circle class="spark s4" r="1.8"/><circle class="spark s5" r="2.2"/><circle class="spark s6" r="1.6"/>
-      </g>
-    </svg>
+<div class="sparks" id="spark-field"></div>
     <div class="loading-title" id="loading-title">Striking flint…</div>
     <div class="loading-sub" id="loading-sub">warming up</div>
     <div class="loading-bar"><i id="loading-bar-i"></i></div>

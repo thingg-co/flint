@@ -63,6 +63,10 @@ KEY_SERVICES = [
      "url": "https://eodhd.com/register",
      "note": "Delayed US equity quotes.",
      "fields": [{"id": "key", "label": "API token"}]},
+    {"id": "fmp", "name": "Financial Modeling Prep", "file": "fmp.json", "kind": "json",
+     "url": "https://site.financialmodelingprep.com/developer/docs",
+     "note": "Primary equity feed: reliable 5-min history + quotes (Starter plan).",
+     "fields": [{"id": "key", "label": "API key"}]},
     {"id": "schwab", "name": "Charles Schwab", "file": "schwab.json", "kind": "json_multi",
      "url": "https://developer.schwab.com",
      "note": "Market data via OAuth. After saving, run  flint schwab-auth  to log in.",
@@ -127,19 +131,54 @@ class Metrics:
 
 class Engine:
     def __init__(self, cfg):
+        import os
         self.cfg = cfg
-        self.symbols = list(cfg.symbols)
-        self.base = {s: s.split("-")[0] for s in self.symbols}
-        self.builder = BarBuilder(self.symbols, cfg.bar_seconds)
-        self.features = FeatureBuilder(self.symbols, cfg.window)
-        self.learner = OnlineLearner(cfg, N_FEATURES)
+        self.all_symbols = [s.upper() for s in cfg.symbols]     # full configured universe
+        self.muted = {x.strip().upper() for x in cfg.muted_symbols.split(",") if x.strip()} & set(self.all_symbols)
         self.subs: set[asyncio.Queue] = set()
         self.trace = Trace(self._publish)
         self.av = AlphaVantage(cfg.av_key, cfg.av_rate_seconds)
-        import os
         ak, asec, acb = cfg.schwab_creds
         token_file = cfg.schwab_token_file or os.path.join(cfg.state_dir, "schwab_tokens.json")
         self.schwab_auth = SchwabAuth(ak, asec, acb, token_file)
+        self.log: deque[dict] = deque(maxlen=cfg.log_size)
+        self.status = "starting"
+        self.started = time.time()
+        self.learning_enabled = True
+        self.burry_enabled = cfg.burry_enabled
+        self.news: dict = {"t": None, "method": None, "status": {}, "headlines": [], "per_asset": {}, "ideas": [], "new": 0}
+        self.autotune_info = None
+        self._skimming = False
+        self._gathering = False
+        self._reconfiguring = False
+        self._tasks: list[asyncio.Task] = []
+        self._lifecycle: asyncio.Task | None = None
+        self._build(self._active())
+
+    def _active(self) -> list[str]:
+        a = [s for s in self.all_symbols if s not in self.muted]
+        return a or self.all_symbols[:1]
+
+    def _build(self, symbols: list[str]) -> None:
+        """(Re)build all per-symbol state for the active universe. Muted symbols are left
+        out entirely, so they cost no model compute and no data/API calls."""
+        cfg = self.cfg
+        cfg.symbols = list(symbols)                            # active set drives model + feeds
+        self.symbols = list(symbols)
+        self.base = {s: s.split("-")[0] for s in self.symbols}
+        if cfg.auto_size:
+            from .autotune import autotune
+            self.autotune_info = autotune(cfg, N_FEATURES, say=lambda m: print("  [tune]", m, flush=True))
+            ai = self.autotune_info
+            cfg.device, cfg.torch_threads = ai["device"], ai["threads"]
+            cfg.d_model, cfg.dilations = ai["d_model"], tuple(ai["dilations"])
+            cfg.n_experts, cfg.n_heads, cfg.window = ai["n_experts"], ai["n_heads"], ai["window"]
+        else:
+            from .autotune import pick_device
+            cfg.device = pick_device(cfg.device)
+        self.builder = BarBuilder(self.symbols, cfg.bar_seconds)
+        self.features = FeatureBuilder(self.symbols, cfg.window)
+        self.learner = OnlineLearner(cfg, N_FEATURES)
         self.sources = SourceManager(cfg, self.symbols, self.av, on_tick=self._on_live_tick,
                                      on_provider_change=self._on_provider_change, trace=self.trace,
                                      schwab=self.schwab_auth)
@@ -156,20 +195,49 @@ class Engine:
         self.history = {k: deque(maxlen=240) for k in ("loss", "hit", "coverage", "pnl")}
         self._history_new: dict[str, list] = {k: [] for k in self.history}
         self.metrics = Metrics(pnl_by_symbol={s: 0.0 for s in self.symbols})
-        self.log: deque[dict] = deque(maxlen=cfg.log_size)
-        self.status = "starting"
-        self.started = time.time()
-        self.learning_enabled = True
-        self.news: dict = {"t": None, "method": None, "status": {}, "headlines": [], "per_asset": {}, "ideas": [], "new": 0}
-        self._skimming = False
-        self.signals_state: dict = self.signals.state
+        self.signals_state = self.signals.state
         self.crowding: dict[str, float] = {}
         self.guru_tilt: dict[str, float] = {}
         self.ethos_bias: dict[str, float] = {}
         self.council: dict[str, float] = {}
-        self.burry_enabled = cfg.burry_enabled
-        self._gathering = False
-        self._tasks: list[asyncio.Task] = []
+
+    def start(self) -> None:
+        self._lifecycle = asyncio.create_task(self.run())
+
+    async def stop(self) -> None:
+        if self._lifecycle:
+            self._lifecycle.cancel()
+        for t in self._tasks:
+            t.cancel()
+        await self.sources.stop()
+        await asyncio.to_thread(self._save)
+
+    async def reconfigure(self) -> None:
+        """Rebuild for the current active universe (all_symbols minus muted) and restart
+        the lifecycle. Muted / removed symbols then cost no compute or API calls."""
+        if self._reconfiguring:
+            return
+        self._reconfiguring = True
+        try:
+            self.muted &= set(self.all_symbols)
+            for t in self._tasks:
+                t.cancel()
+            if self._lifecycle:
+                self._lifecycle.cancel()
+            try:
+                await self.sources.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            await asyncio.sleep(0.15)
+            self._tasks = []
+            self.status = "starting"
+            await asyncio.to_thread(self._build, self._active())   # benchmark/build off the event loop
+            self.trace.emit("system", f"universe rebuilt: {len(self.symbols)} active "
+                                      f"({len(self.muted)} muted) — {', '.join(self.base[s] for s in self.symbols)}", "act")
+            self._publish(self.snapshot())                         # UI rebuilds cards for the new set
+            self._lifecycle = asyncio.create_task(self.run())
+        finally:
+            self._reconfiguring = False
 
     # Pub/sub ------------------------------------------------------------------------
 
@@ -217,7 +285,7 @@ class Engine:
         cfg = self.cfg
         ak, asec, acb = cfg.schwab_creds
         return {"alphavantage": {"key": cfg.av_key}, "finnhub": {"key": cfg.finnhub_key},
-                "eodhd": {"key": cfg.eodhd_key}, "schwab": {"app_key": ak, "app_secret": asec}}
+                "eodhd": {"key": cfg.eodhd_key}, "fmp": {"key": cfg.fmp_key}, "schwab": {"app_key": ak, "app_secret": asec}}
 
     def keys_status(self) -> list:
         vals = self._key_values()
@@ -271,7 +339,7 @@ class Engine:
         if service == "alphavantage":
             cfg.av_key = self.av.key = vals["key"]
             self.av.exhausted = False
-        elif service in ("finnhub", "eodhd"):
+        elif service in ("finnhub", "eodhd", "fmp"):
             setattr(cfg, f"{service}_key", vals["key"])
             src = self.sources.sources.get(service)
             if src:
@@ -289,11 +357,13 @@ class Engine:
         return {
             "type": "snapshot",
             "config": {
-                "symbols": self.symbols, "bar_seconds": cfg.bar_seconds, "horizon": cfg.horizon, "window": cfg.window,
+                "symbols": self.symbols, "bar_seconds": cfg.bar_seconds, "horizon": cfg.horizon, "window": cfg.window, "max_universe": cfg.max_universe, "chart_bars": cfg.chart_bars,
                 "quantiles": list(cfg.quantiles), "min_labels": cfg.min_labels, "features": FEATURES,
                 "model": {"params": self.learner.n_params, "d_model": cfg.d_model, "experts": cfg.n_experts,
-                          "dilations": list(cfg.dilations), "heads": cfg.n_heads,
-                          "receptive_field": self.learner.model.receptive_field},
+                          "dilations": list(cfg.dilations), "heads": cfg.n_heads, "window": cfg.window,
+                          "receptive_field": self.learner.model.receptive_field,
+                          "device": cfg.device, "ms_per_step": (self.autotune_info or {}).get("ms_per_step"),
+                          "preset": (self.autotune_info or {}).get("preset")},
             },
             "status": self.status_dict(),
             "controls": self.controls(),
@@ -304,7 +374,9 @@ class Engine:
             "keys": self.keys_status(),
             "burry": {"enabled": self.burry_enabled, "aggr": self.cfg.burry_aggr, "fade_at": self.cfg.burry_fade_at,
                       "safety": self.cfg.burry_safety},
-            "classes": {s: asset_class(s) for s in self.symbols},
+            "classes": {s: asset_class(s) for s in self.all_symbols},
+            "muted": sorted(self.muted),
+            "universe": self.all_symbols,
             "prices": self.prices,
             "bars": {s: [b.to_json() for b in self.bars[s]] for s in self.symbols},
             "latest": self.latest,
@@ -349,9 +421,11 @@ class Engine:
             self.metrics.steps = self.learner.steps
             self.trace.emit("system", f"restored checkpoint from {cfg.state_dir}: {self.learner.steps} steps, "
                                       f"{self.learner.labels} labels, {self.learner.size} windows in replay")
-        self.trace.emit("system", f"FlintNet: {self.learner.n_params:,} parameters, {cfg.n_assets} assets, "
+        ai = self.autotune_info
+        dev = cfg.device + (f", {ai['preset']} preset, {ai['ms_per_step']} ms/step" if ai else "")
+        self.trace.emit("system", f"FlintNet: {self.learner.n_params:,} parameters on {dev}; {cfg.n_assets} assets, "
                                   f"{cfg.window} x {cfg.bar_seconds:.0f}s window, {cfg.horizon}-bar horizon, "
-                                  f"{cfg.n_experts} regime experts")
+                                  f"{cfg.n_experts} regime experts, {cfg.n_heads} heads")
 
         self.status = "backfilling"
         self._publish({"type": "status", "status": self.status_dict()})
@@ -372,6 +446,7 @@ class Engine:
                         ", ".join(f"{self.base[s]} {per_sym[s]}" for s in self.symbols) + ")")
         self._ingest_history(ticks)
         await self._warmup()
+        self._seed_forecast()
         self.status = "live"
         self._publish({"type": "status", "status": self.status_dict()})
         self.trace.emit("system", "live: streaming ticks, forecasting every bar, learning as labels mature")
@@ -384,6 +459,15 @@ class Engine:
         for t in ticks:
             self.builder.add(t)
             self._on_tick(t, live=False)
+        # Symbols with no deep history (e.g. equities on free feeds backfill one seed tick,
+        # commodities a spot price) would otherwise block every aligned row and leave the
+        # feature window empty until ~64 live bars pass. Seed each symbol's last close from
+        # its earliest backfilled tick so historical rows emit, flat-filling the sparse ones.
+        first: dict[str, float] = {}
+        for t in ticks:
+            first.setdefault(t.symbol, t.price)
+        for sym, px in first.items():
+            self.builder.last_close.setdefault(sym, px)
         rows = self.builder.roll(time.time())
         self.trace.muted = True
         try:
@@ -480,6 +564,24 @@ class Engine:
 
     def _fmt_price(self, s: str, v: float) -> str:
         return f"{v:,.2f}" if v >= 100 else f"{v:.4f}"
+
+    def _seed_forecast(self) -> None:
+        """Populate forecasts from the backfilled window immediately at go-live, so cards
+        aren't blank until the first live bar closes (important at long bar intervals)."""
+        if not self.pending:
+            return
+        pp = self.pending[-1]
+        pred = self.learner.predict(pp.x)
+        sugg = {s: self._suggest(i, s, pred) for i, s in enumerate(self.symbols)}
+        self.gate = [float(g) for g in pred.gate]
+        self.latest = {}
+        for i, s in enumerate(self.symbols):
+            self.latest[s] = {**sugg[s], "price": float(pp.closes[i]), "ts": pp.ts, "attn": [float(a) for a in pred.attn[i]]}
+        self._publish({"type": "bar", "index": self.bar_index,
+                       "bars": {s: self.bars[s][-1].to_json() for s in self.symbols if self.bars[s]},
+                       "latest": self.latest, "gate": self.gate, "metrics": self.metrics.as_dict(),
+                       "history": {}, "outcomes": {s: list(self.outcomes[s]) for s in self.symbols},
+                       "log": list(self.log), "status": self.status_dict()})
 
     async def _process_row(self, row: dict[str, Bar]) -> None:
         cfg = self.cfg
@@ -597,7 +699,11 @@ class Engine:
         size = cfg.max_size * min(1.0, max(0.0, (conviction - 2 * cfg.prob_margin) / 0.5)) if side else 0.0
         why = "; ".join(reasons) if reasons else f"q50 {q50:+.1f} bps over IQR {iqr:.1f} (score {score:+.2f}), P(up) {p:.2f}"
         base_side, base_size = side, size
-        overlay = self._council_overlay(s, side, size, score, qc, iqr) if self.burry_enabled else None
+        muted = s in self.muted
+        if muted:
+            side, size, reasons = 0, 0.0, ["muted"]
+            why = "muted — watching but not suggesting"
+        overlay = self._council_overlay(s, side, size, score, qc, iqr) if (self.burry_enabled and not muted) else None
         if overlay:
             side, size = overlay["side"], overlay["size"]
             if overlay["notes"]:
@@ -608,7 +714,7 @@ class Engine:
                 "trusted": m.trusted, "why": why,
                 "crowding": round(self.crowding.get(s, 0.0), 3), "guru_tilt": round(self.guru_tilt.get(s, 0.0), 3),
                 "base_action": "BUY" if base_side > 0 else "SELL" if base_side < 0 else "HOLD",
-                "overlay": overlay["notes"] if overlay else []}
+                "overlay": overlay["notes"] if overlay else [], "muted": muted}
 
     def _council_overlay(self, s: str, side: int, size: float, score: float, qc: list, iqr: float) -> dict:
         """Apply the investor council's combined trading ethos to the raw model call.
@@ -898,6 +1004,47 @@ class Engine:
         elif action == "burry":
             self.burry_enabled = bool(payload.get("on"))
             self.trace.emit("policy", f"Burry/Buffett overlay {'enabled' if self.burry_enabled else 'disabled'}", "act")
+        elif action == "mute":
+            on = bool(payload.get("on"))  # on == muted
+            for sym in payload.get("symbols", []):
+                sym = str(sym).upper()
+                self.muted.add(sym) if on else self.muted.discard(sym)
+            asyncio.get_running_loop().create_task(self.reconfigure())
+        elif action == "mute_class":
+            cls, on = payload.get("class"), bool(payload.get("on"))
+            for sym in self.all_symbols:
+                if asset_class(sym) == cls:
+                    self.muted.add(sym) if on else self.muted.discard(sym)
+            asyncio.get_running_loop().create_task(self.reconfigure())
+        elif action == "add_symbols":
+            added = []
+            for sym in payload.get("symbols", []):
+                sym = str(sym).strip().upper()
+                if sym and sym not in self.all_symbols and len(self.all_symbols) < self.cfg.max_universe:
+                    self.all_symbols.append(sym); added.append(sym)
+            if added:
+                self.trace.emit("system", f"added to universe: {', '.join(added)}", "act")
+                asyncio.get_running_loop().create_task(self.reconfigure())
+        elif action == "remove_symbols":
+            rem = {str(s).strip().upper() for s in payload.get("symbols", [])}
+            self.all_symbols = [s for s in self.all_symbols if s not in rem]
+            self.muted -= rem
+            if rem:
+                self.trace.emit("system", f"removed from universe: {', '.join(sorted(rem))}", "act")
+                asyncio.get_running_loop().create_task(self.reconfigure())
+        elif action == "add_movers":
+            n = int(payload.get("n", 20))
+            radar = (self.signals_state.get("market", {}) or {}).get("radar", [])
+            added = []
+            for r in radar:
+                sym = str(r.get("symbol", "")).upper()
+                if sym and "." not in sym and sym not in self.all_symbols and len(self.all_symbols) < self.cfg.max_universe:
+                    self.all_symbols.append(sym); added.append(sym)
+                if len(added) >= n:
+                    break
+            if added:
+                self.trace.emit("system", f"added top {len(added)} movers: {', '.join(added)}", "act")
+                asyncio.get_running_loop().create_task(self.reconfigure())
         state = {"type": "controls", "controls": self.controls(), "metrics": self.metrics.as_dict(),
                  "sources": self.sources.status(), "news_sources": self.news_hub.status(),
                  "signal_providers": self.signals.status()}

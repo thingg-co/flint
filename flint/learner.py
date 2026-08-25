@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from .autotune import pick_device
 from .model import FlintNet, flint_loss
 
 log = logging.getLogger(__name__)
@@ -28,8 +29,9 @@ class OnlineLearner:
         torch.set_num_threads(cfg.torch_threads)
         torch.manual_seed(0)
         self.cfg = cfg
+        self.device = torch.device(pick_device(cfg.device))
         self.model = FlintNet(n_features, cfg.n_assets, cfg.n_quantiles, cfg.d_model, cfg.dilations,
-                              cfg.n_experts, cfg.n_heads, cfg.dropout)
+                              cfg.n_experts, cfg.n_heads, cfg.dropout).to(self.device)
         self.opt = torch.optim.AdamW(self.model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
         self.lock = threading.Lock()
         cap = cfg.replay_size
@@ -49,7 +51,7 @@ class OnlineLearner:
         with self.lock:
             torch.manual_seed(int(time.time()) % 100000)
             self.model = FlintNet(self.rx.shape[-1], cfg.n_assets, cfg.n_quantiles, cfg.d_model, cfg.dilations,
-                                  cfg.n_experts, cfg.n_heads, cfg.dropout)
+                                  cfg.n_experts, cfg.n_heads, cfg.dropout).to(self.device)
             self.opt = torch.optim.AdamW(self.model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
             self.steps = 0
             self.loss_ema = self.pinball_ema = self.bce_ema = None
@@ -65,8 +67,9 @@ class OnlineLearner:
     def predict(self, x: np.ndarray) -> Prediction:
         with self.lock, torch.no_grad():
             self.model.eval()
-            q, logit, gate, attn = self.model(torch.from_numpy(x)[None])
-        return Prediction(q[0].numpy(), torch.sigmoid(logit[0]).numpy(), gate[0].numpy(), attn[0].numpy())
+            q, logit, gate, attn = self.model(torch.from_numpy(x)[None].to(self.device))
+        return Prediction(q[0].cpu().numpy(), torch.sigmoid(logit[0]).cpu().numpy(),
+                          gate[0].cpu().numpy(), attn[0].cpu().numpy())
 
     def add(self, x: np.ndarray, y: np.ndarray) -> None:
         self.rx[self.ptr] = x
@@ -94,6 +97,8 @@ class OnlineLearner:
             self.model.train()
             for _ in range(n):
                 x, y = self._sample(batch)
+                x = x.to(self.device)
+                y = y.to(self.device)
                 if self.cfg.input_noise > 0:
                     x = x + self.cfg.input_noise * torch.randn_like(x)
                 q, logit, gate, _ = self.model(x)

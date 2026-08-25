@@ -19,14 +19,12 @@ WEB = Path(__file__).resolve().parent.parent / "web"
 def create_app(engine: Engine) -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
-        task = asyncio.create_task(engine.run())
+        engine.start()
         try:
             yield
         finally:
-            task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await task
-            await engine.shutdown()
+                await engine.stop()
 
     app = FastAPI(title="flint", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=WEB), name="static")

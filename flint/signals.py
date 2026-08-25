@@ -17,6 +17,7 @@ import time
 import httpx
 
 from .market import MarketScanner
+from .sources import asset_class
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +74,9 @@ GURUS = [
     {"id": "europac", "name": "Schiff / Euro Pacific", "cik": "0001796651",
      "ethos": {"contrarian": 0.7, "value": 0.6, "momentum": -0.3, "quality": 0.4, "macro_bear": 0.95, "activist": 0.1, "safety": 0.7},
      "basis": "Perma-bearish on US bubbles and the dollar; favors gold, commodities, foreign value."},
+    {"id": "dailyjournal", "name": "Munger / Daily Journal", "cik": "0000783412",
+     "ethos": {"contrarian": 0.6, "value": 0.95, "momentum": -0.5, "quality": 0.95, "macro_bear": 0.2, "activist": 0.1, "safety": 0.9},
+     "basis": "Great businesses at fair prices, extreme patience and concentration, avoid stupidity (Daily Journal; Munger d. 2023)."},
 ]
 
 
@@ -330,6 +334,69 @@ class Guru13F:
         return clip(self._by_ticker.get(base_of(sym), 0.0) * 3.0)
 
 
+class FundamentalsProvider:
+    """Per-equity fundamentals from Finnhub (P/E, EPS, growth, margins, ROE, 52w range).
+
+    Fundamentals move slowly, so the whole set is cached for hours. They are turned into
+    two bounded features — value (cheapness, from the earnings multiple) and quality (from
+    margins, ROE and growth) — and the raw numbers are kept for display. The key is never
+    logged.
+    """
+
+    id = "fundamentals"
+    name = "Fundamentals (Finnhub)"
+    REST = "https://finnhub.io/api/v1"
+
+    def __init__(self, key: str):
+        self.key = key
+        self.data: dict = {}
+        self._fetched = 0.0
+        self.status = ""
+
+    async def gather(self, symbols, say=None, max_age: float = 21600.0) -> dict:
+        say = say or (lambda *a, **k: None)
+        if not self.key:
+            self.status = "no Finnhub key"
+            return self.data
+        equities = [s for s in symbols if asset_class(s) == "equity"]
+        if not equities:
+            self.status = "no equities"
+            return {}
+        if self.data and time.time() - self._fetched < max_age:
+            return self.data
+        out = {}
+        async with httpx.AsyncClient(timeout=15) as c:
+            for sym in equities:
+                try:
+                    r = await c.get(f"{self.REST}/stock/metric", params={"symbol": sym, "metric": "all", "token": self.key})
+                    if r.status_code != 200:
+                        continue
+                    m = r.json().get("metric", {})
+                    pe = m.get("peTTM"); eps = m.get("epsTTM"); margin = m.get("netProfitMarginTTM")
+                    roe = m.get("roeTTM"); rev_g = m.get("revenueGrowthTTMYoy"); eps_g = m.get("epsGrowthTTMYoy")
+                    value = clip(math.tanh((25 - pe) / 25)) if pe and pe > 0 else 0.0
+                    quality = clip(0.4 * math.tanh((margin or 0) / 25) + 0.3 * math.tanh((roe or 0) / 25) +
+                                   0.3 * math.tanh((rev_g or 0) / 20))
+                    out[sym] = {"pe": pe, "eps": eps, "ps": m.get("psTTM"), "pb": m.get("pbAnnual"),
+                                "roe": roe, "margin": margin, "rev_growth": rev_g, "eps_growth": eps_g,
+                                "div_yield": m.get("dividendYieldIndicatedAnnual"), "beta": m.get("beta"),
+                                "w52_high": m.get("52WeekHigh"), "w52_low": m.get("52WeekLow"),
+                                "value": round(value, 3), "quality": round(quality, 3)}
+                    await asyncio.sleep(0.15)
+                except Exception as e:  # noqa: BLE001
+                    say(f"{sym} fundamentals: {type(e).__name__}", "warn")
+        self.data = out
+        self._fetched = time.time()
+        self.status = f"{len(out)} equities"
+        say(f"fundamentals: {len(out)} equities (e.g. " +
+            ", ".join(f"{s} P/E {d['pe']:.0f}" for s, d in list(out.items())[:3] if d.get("pe")) + ")")
+        return out
+
+    def feat(self, sym: str) -> dict:
+        d = self.data.get(sym)
+        return {"f_value": d["value"], "f_quality": d["quality"]} if d else {"f_value": 0.0, "f_quality": 0.0}
+
+
 class SignalHub:
     """Runs the toggleable signal providers and the investor council, assembling per-asset
     features (including a guru consensus and an ethos bias) plus a crowding index."""
@@ -337,7 +404,8 @@ class SignalHub:
     def __init__(self, cfg, symbols):
         self.cfg = cfg
         self.symbols = symbols
-        self.providers = {p.id: p for p in (WSBProvider(), FearGreedProvider(), DerivativesProvider())}
+        self.providers = {p.id: p for p in (WSBProvider(), FearGreedProvider(), DerivativesProvider(),
+                                            FundamentalsProvider(cfg.finnhub_key))}
         self.gurus = {g["id"]: Guru13F(g["id"], g["name"], g["cik"]) for g in GURUS}
         self.guru_meta = {g["id"]: g for g in GURUS}
         off = {x.strip() for x in cfg.signals_off.split(",") if x.strip()}
@@ -397,6 +465,13 @@ class SignalHub:
                 except Exception as e:  # noqa: BLE001
                     say(f"{guru.name} 13F failed: {type(e).__name__}", "warn")
 
+        fundamentals = self.providers["fundamentals"]
+        if self.enabled.get("fundamentals"):
+            try:
+                await fundamentals.gather(self.symbols, say)
+            except Exception as e:  # noqa: BLE001
+                say(f"fundamentals failed: {type(e).__name__}", "warn")
+
         market_feat = {"breadth": 0.0, "vix": 0.0}
         if self.enabled.get("market"):
             try:
@@ -439,15 +514,18 @@ class SignalHub:
             feats = {"wsb_sent": w["wsb_sent"], "wsb_attn": w["wsb_attn"], "fng": market["fng"],
                      "funding": funding_sig, "oi_chg": oi_sig, "longshort": ls_sig,
                      "guru_net": round(guru_net, 3), "ethos_bias": ethos_bias[sym],
+                     **(fundamentals.feat(sym) if self.enabled.get("fundamentals") else {"f_value": 0.0, "f_quality": 0.0}),
                      "breadth": market_feat["breadth"], "vix": market_feat["vix"]}
             per_asset[sym] = {**feats, "mentions": w["mentions"], "wsb_top": w.get("top"),
                               "funding": d.get("funding"), "oi_chg": d.get("oi_chg"), "longshort": d.get("longshort"),
-                              "gurus": {gid: round(v, 3) for gid, v in gsig.items() if abs(v) > 1e-6}, "feat": feats}
+                              "gurus": {gid: round(v, 3) for gid, v in gsig.items() if abs(v) > 1e-6},
+                              "fundamentals": fundamentals.data.get(sym), "feat": feats}
 
         gurus_view = [{"id": gid, "name": g.name, "asof": g.asof, "enabled": self.enabled.get(gid),
                        "ethos": self.guru_meta[gid]["ethos"], "basis": self.guru_meta[gid]["basis"],
                        "n_holdings": len(g.holdings), "holdings": g.holdings[:20]} for gid, g in self.gurus.items()]
         self.state = {"per_asset": per_asset, "market": self.market.state, "gurus": gurus_view, "council": council,
+                      "fear_greed": {"value": market.get("fng_value"), "class": market.get("fng_class"), "norm": market["fng"]},
                       "crowding": crowding, "guru_tilt": guru_tilt, "ethos_bias": ethos_bias,
                       "providers": self.status(), "t": time.time()}
         return self.state

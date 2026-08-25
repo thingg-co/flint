@@ -26,12 +26,13 @@ const CONTROL_FIELDS = [
 const state = { config: null, status: {}, controls: {}, prices: {}, bars: {}, latest: {}, gate: [], outcomes: {},
   metrics: {}, history: { loss: [], hit: [], coverage: [], pnl: [] }, log: [], news: null,
   sources: [], news_sources: [], providers: {}, classes: {},
-  signals: null, signal_providers: [], burry: { enabled: true }, keys: [] };
+  signals: null, signal_providers: [], burry: { enabled: true }, keys: [], muted: [], classes: {}, universe: [] };
 const cards = {};
 const consoles = {};
 const lastPrices = {};
 let ws, retry = 1000, drawQueued = false;
 let audioCtx = null, soundOn = false;
+let demoLoading = /[?&#]loading\b/i.test(location.href);
 const prevAction = {};
 try { soundOn = localStorage.getItem("flint.sound") === "1"; } catch (e) { /* ignore */ }
 
@@ -55,9 +56,10 @@ function ringEvent(kind) {
 
 function checkAlerts() {
   if (!state.config) return;
+  const mutedSet = new Set(state.muted || []);
   state.config.symbols.forEach(sym => {
     const L = state.latest[sym];
-    if (!L) return;
+    if (!L || mutedSet.has(sym)) return;
     const now = L.trusted && L.side ? L.action : "HOLD";
     const was = prevAction[sym];
     if (was !== undefined && now !== was && now !== "HOLD") {
@@ -102,7 +104,7 @@ function ctx2d(canvas) {
 
 function drawChart(card) {
   const sym = card.sym;
-  const bars = (state.bars[sym] || []).slice(-120);
+  const bars = (state.bars[sym] || []).slice(-(state.config && state.config.chart_bars || 160));
   const { ctx, w, h } = ctx2d(card.canvas);
   ctx.font = "10px system-ui, sans-serif";
   if (bars.length < 2) { ctx.fillStyle = C.muted; ctx.fillText("waiting for bars", 10, 20); return; }
@@ -215,7 +217,8 @@ function buildCards() {
       <div class="pmeter" title="P(up): fill right of centre is up, left is down"><i></i></div>
       <div class="outcomes" title="matured forecasts, newest right: green hit, red miss, outlined = acted on"></div>
       <div class="why"></div>
-      <div class="strategy"></div>`;
+      <div class="strategy"></div>
+      <div class="fundamentals"></div>`;
     root.appendChild(el);
     const card = cards[sym] = { sym, el, canvas: $("canvas", el), hoverX: null };
     card.canvas.addEventListener("mousemove", e => { card.hoverX = e.offsetX; card.tipX = e.clientX; card.tipY = e.clientY; drawChart(card); });
@@ -359,9 +362,34 @@ function renderStatus() {
   updateLoading();
 }
 
+function seedSparks() {
+  const f = $("#spark-field");
+  if (!f || f.childElementCount) return;
+  const hues = ["#fab219", "#ec835a", "#fff2b0", "#ff8b3a", "#d98a2b"];
+  for (let i = 0; i < 30; i++) {
+    const e = document.createElement("i");
+    e.className = "ember";
+    const dur = 1.8 + Math.random() * 2.8, size = 1 + Math.random() * 2.6;
+    e.style.left = (Math.random() * 100) + "%";
+    e.style.width = e.style.height = size.toFixed(1) + "px";
+    e.style.setProperty("--dur", dur.toFixed(2) + "s");
+    e.style.setProperty("--delay", (-Math.random() * dur).toFixed(2) + "s");
+    e.style.setProperty("--drift", (Math.random() * 60 - 30).toFixed(0) + "px");
+    e.style.setProperty("--hue", hues[i % hues.length]);
+    f.appendChild(e);
+  }
+}
+
 function updateLoading(offline) {
   const el = $("#loading");
   if (!el) return;
+  seedSparks();
+  if (demoLoading) {
+    el.hidden = false;
+    $("#loading-title").textContent = "Starting a fire…";
+    $("#loading-sub").textContent = "loading-screen preview — click to dismiss";
+    return;
+  }
   const phase = offline ? "offline" : ((state.status && state.status.phase) || "starting");
   const busy = phase !== "live" && phase !== "error";
   el.hidden = !busy;
@@ -371,7 +399,7 @@ function updateLoading(offline) {
   if (phase === "offline") { title.textContent = "Rekindling…"; sub.textContent = "reconnecting to flint"; }
   else if (phase === "starting") { title.textContent = "Striking flint…"; sub.textContent = "waking up"; }
   else if (phase.indexOf("backfilling") === 0) { title.textContent = "Gathering tinder…"; sub.textContent = "backfilling market history" + (feed && feed !== "none" ? ` from ${feed}` : ""); }
-  else if (phase === "training") { title.textContent = "Catching a spark…"; const m = state.metrics || {}; sub.textContent = `training on history — step ${m.steps || 0}`; }
+  else if (phase === "training") { title.textContent = "Starting a fire…"; const m = state.metrics || {}; sub.textContent = `training on history — step ${m.steps || 0}`; }
   else { title.textContent = "Kindling the model…"; sub.textContent = phase; }
 }
 
@@ -384,7 +412,8 @@ function renderAll() {
     renderTiles(); renderSparks(); renderGate(); renderAttn(); renderArch(); renderLog(); renderMarket(); renderWatch(); reorderCards(true);
   }
   renderNews();
-  if (document.body.dataset.view === "consoles") { renderKeys(); renderSources(); renderSignals(); renderRadar(); }
+  if (document.body.dataset.view === "consoles") { renderUniverse(); renderKeys(); renderSources(); renderSignals(); renderRadar(); }
+  if (document.body.dataset.view === "brief") renderBrief();
 }
 
 function scheduleDraw() {
@@ -473,13 +502,47 @@ function sourceToggle(kind, id, on, disabled, reason) {
   return wrap;
 }
 
+function applyMuted() {
+  if (!state.config) return;
+  const muted = new Set(state.muted || []);
+  state.config.symbols.forEach(sym => { if (cards[sym]) cards[sym].el.classList.toggle("muted", muted.has(sym)); });
+  lastOrder = ""; reorderCards(true);
+}
+
+function renderUniverse() {
+  const box = $("#uni-list");
+  if (!box || !state.config) return;
+  const active = new Set(state.config.symbols || []);
+  const universe = (state.universe && state.universe.length) ? state.universe : state.config.symbols;
+  box.innerHTML = universe.map(sym => {
+    const cls = (state.classes || {})[sym] || "";
+    const on = active.has(sym);
+    return `<div class="uni ${on ? "" : "muted"}"><span><span class="un">${esc(base(sym))}</span> <span class="uc">${esc(cls)}</span></span>` +
+      `<span class="right"><label class="switch"><input type="checkbox" data-mute="${esc(sym)}" ${on ? "checked" : ""}><span class="track"></span><span class="thumb"></span></label>` +
+      `<button type="button" class="rm" data-remove="${esc(sym)}" title="remove from universe">×</button></span></div>`;
+  }).join("");
+  const meta = $("#uni-meta");
+  if (meta) meta.textContent = `${(state.config.symbols || []).length} active of ${universe.length} (cap ${state.config.max_universe || 64}) — mute to pause, remove to drop`;
+  // class-level disable/enable
+  const ct = $("#class-toggles");
+  if (ct) {
+    const universe2 = (state.universe && state.universe.length) ? state.universe : state.config.symbols;
+    const classes = [...new Set(universe2.map(s => (state.classes || {})[s]).filter(Boolean))];
+    ct.innerHTML = classes.map(cls => {
+      const syms = universe2.filter(s => (state.classes || {})[s] === cls);
+      const allMuted = syms.every(s => !active.has(s));
+      return `<button type="button" class="${allMuted ? "" : "danger"}" data-class="${esc(cls)}" data-on="${allMuted ? "0" : "1"}">${allMuted ? "Enable" : "Disable"} ${esc(cls)}</button>`;
+    }).join("");
+  }
+}
+
 function renderKeys() {
   const box = $("#key-list");
   if (!box) return;
   box.innerHTML = (state.keys || []).map(k => {
     const fields = k.fields.map(f =>
       `<div class="kfield"><label>${esc(f.label)}${f.present ? ` <span class="cur">set: ${esc(f.masked)}</span>` : ""}</label>` +
-      `<input type="password" data-svc="${esc(k.id)}" data-field="${esc(f.id)}" placeholder="${f.present ? "replace…" : "paste key…"}" autocomplete="off"></div>`).join("");
+      `<input type="text" class="kmask" data-svc="${esc(k.id)}" data-field="${esc(f.id)}" placeholder="${f.present ? "replace…" : "paste key…"}" autocomplete="off" autocapitalize="off" spellcheck="false"></div>`).join("");
     return `<div class="keyrow"><div class="kh"><span class="dot ${k.present ? "on" : "off"}"></span>` +
       `<span class="kname">${esc(k.name)}</span>` +
       `<a class="klink" href="${esc(safeUrl(k.url))}" target="_blank" rel="noopener noreferrer">${k.present ? "manage ↗" : "get a key ↗"}</a></div>` +
@@ -500,6 +563,19 @@ async function saveKey(service) {
 document.addEventListener("click", e => {
   const b = e.target.closest && e.target.closest("button.ksave");
   if (b) saveKey(b.dataset.svc);
+  const cb = e.target.closest && e.target.closest("button[data-class]");
+  if (cb) control({ action: "mute_class", class: cb.dataset.class, on: cb.dataset.on === "1" });
+  const rm = e.target.closest && e.target.closest("button[data-remove]");
+  if (rm) control({ action: "remove_symbols", symbols: [rm.dataset.remove] });
+  if (e.target.closest && e.target.closest("button[data-action=add_symbol]")) {
+    const inp = $("#uni-add-input"); const v = (inp.value || "").trim().toUpperCase();
+    if (v) { control({ action: "add_symbols", symbols: v.split(/[ ,]+/).filter(Boolean) }); inp.value = ""; }
+  }
+  if (e.target.closest && e.target.closest("button[data-action=add_movers]")) control({ action: "add_movers", n: 20 });
+});
+document.addEventListener("change", e => {
+  if (e.target && e.target.dataset && e.target.dataset.mute)
+    control({ action: "mute", symbols: [e.target.dataset.mute], on: !e.target.checked });
 });
 
 function renderSources() {
@@ -511,7 +587,8 @@ function renderSources() {
     const el = document.createElement("div");
     el.className = "source" + (src.enabled ? "" : " off") + (owning ? " owning" : "");
     const isSim = src.id === "sim";
-    const ownsText = owning ? `serving ${src.owned.map(base).join(", ")}`
+    const capList = (a, n) => a.slice(0, n).map(base).join(", ") + (a.length > n ? ` +${a.length - n}` : "");
+    const ownsText = owning ? `serving ${capList(src.owned, 8)}`
       : src.enabled ? (src.supported && src.supported.length ? "standby / backup" : "idle — no matching symbols") : "off";
     const noteErr = /fail|stopped|error|invalid|no API/i.test(src.note || "");
     el.innerHTML = `<div></div><div>
@@ -519,7 +596,7 @@ function renderSources() {
           <span class="tag ${esc(src.kind)}">${esc(src.kind)}</span>
           <span class="tag ${esc(src.mechanism)}">${esc(src.mechanism)}</span>
           <span class="tag" title="priority (lower wins)">P${src.priority}</span></div>
-        <div class="meta">supports ${src.supported && src.supported.length ? src.supported.map(base).join(", ") : "none of the active symbols"} · ${src.ticks.toLocaleString()} ticks</div>
+        <div class="meta">supports ${src.supported && src.supported.length ? capList(src.supported, 8) : "none of the active symbols"} · ${src.ticks.toLocaleString()} ticks</div>
         <div class="owns ${owning ? "" : "backup"}">${esc(ownsText)}</div>
         ${src.note ? `<div class="snote ${noteErr ? "err" : ""}">${esc(src.note)}</div>` : ""}
       </div>`;
@@ -548,30 +625,82 @@ function renderSources() {
   }).join("");
 }
 
-function cardUrgency(sym) {
+const urgencyEMA = {};
+function realizedVol(sym) {
+  const b = (state.bars[sym] || []).slice(-30);
+  if (b.length < 4) return 0;
+  const r = [];
+  for (let i = 1; i < b.length; i++) r.push(Math.log(b[i].c / b[i - 1].c) * 1e4);
+  const mean = r.reduce((a, x) => a + x, 0) / r.length;
+  return Math.sqrt(r.reduce((a, x) => a + (x - mean) ** 2, 0) / r.length);  // bps
+}
+function rawUrgency(sym) {
   const L = state.latest[sym] || {};
   const pa = state.signals && state.signals.per_asset && state.signals.per_asset[sym];
   const f = (pa && pa.feat) || {};
-  const acted = (L.base_action && L.base_action !== L.action) || (L.overlay && L.overlay.length) ? 1 : 0;
   const traded = (L.side && L.trusted) ? 1 : 0;
-  const bars = state.bars[sym] || [], p = state.prices[sym] || {};
-  const mv = (p.price && bars.length) ? Math.abs(Math.log(p.price / bars[bars.length - 1].c) * 1e4) : 0;
-  return 3 * Math.abs(L.score || 0) + 2 * Math.abs(L.crowding || 0) + 1.5 * acted +
-    Math.abs(L.guru_tilt || 0) + Math.abs(f.ethos_bias || 0) + (f.wsb_attn || 0) + 2 * traded + 0.04 * mv;
+  // Primary signal is volatility — the model's expected 10-90 band plus recent realized vol,
+  // both slow-moving — so the ranking reflects what is actually active, not tick noise.
+  const band = L.q ? (L.q[4] - L.q[0]) : 0;
+  const vol = Math.min(1, band / 50) * 0.6 + Math.min(1, realizedVol(sym) / 30) * 0.4;
+  return 2.0 * vol + 1.2 * traded + 0.5 * Math.abs(L.crowding || 0) +
+    0.35 * (f.wsb_attn || 0) + 0.3 * Math.abs(L.guru_tilt || 0);
+}
+function cardUrgency(sym) {
+  const r = rawUrgency(sym);
+  urgencyEMA[sym] = urgencyEMA[sym] == null ? r : 0.9 * urgencyEMA[sym] + 0.1 * r;
+  return urgencyEMA[sym];
 }
 
 let lastOrder = "", lastReorder = 0;
 function reorderCards(force) {
   if (!state.config || document.body.dataset.view !== "dashboard") return;
   const now = Date.now();
-  if (!force && now - lastReorder < 700) return;
+  if (!force && now - lastReorder < 1500) return;
   lastReorder = now;
-  const order = state.config.symbols.slice().sort((a, b) => cardUrgency(b) - cardUrgency(a));
+  const HYST = 0.15;
+  const u = {};
+  state.config.symbols.forEach(s => { if (cards[s]) u[s] = cardUrgency(s); });
+  // Start from the current on-screen order and only let a card overtake its neighbour
+  // when it clearly leads (hysteresis) — so near-ties don't shuffle every bar.
+  const mutedSet = new Set(state.muted || []);
+  let order = [...document.querySelectorAll("#cards .card")].map(c => c.dataset.sym).filter(x => cards[x] && !mutedSet.has(x));
+  state.config.symbols.forEach(s => { if (cards[s] && !mutedSet.has(s) && !order.includes(s)) order.push(s); });
+  for (let pass = 0, changed = true; changed && pass < 40; pass++) {
+    changed = false;
+    for (let i = 0; i < order.length - 1; i++) {
+      if (u[order[i + 1]] > u[order[i]] + HYST) { const t = order[i]; order[i] = order[i + 1]; order[i + 1] = t; changed = true; }
+    }
+  }
   const key = order.join(",");
   if (key === lastOrder) return;
+  const firstRun = lastOrder === "";
   lastOrder = key;
   const root = $("#cards");
+  const syms = state.config.symbols.filter(s => cards[s]);
+  // FLIP: record current positions, reorder the DOM, then animate each card from
+  // its old position to its new one so the swap slides instead of jumping.
+  const first = {};
+  syms.forEach(s => { first[s] = cards[s].el.getBoundingClientRect(); });
   order.forEach(sym => { if (cards[sym]) root.appendChild(cards[sym].el); });
+  if (firstRun) return;
+  syms.forEach(s => {
+    const el = cards[s].el, a = first[s], b = el.getBoundingClientRect();
+    const dx = a.left - b.left, dy = a.top - b.top;
+    if (!dx && !dy) return;
+    el.style.transition = "none";
+    el.style.transform = `translate(${dx}px, ${dy}px)`;
+    el.style.zIndex = "2";
+  });
+  requestAnimationFrame(() => {
+    syms.forEach(s => {
+      const el = cards[s].el;
+      if (!el.style.transform) return;
+      el.style.transition = "transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1)";
+      el.style.transform = "";
+      el.addEventListener("transitionend", () => { el.style.transition = ""; el.style.zIndex = ""; }, { once: true });
+    });
+  });
 }
 
 function renderWatch() {
@@ -619,6 +748,128 @@ function renderRadar() {
       `<span class="cat">${esc(r.cat || "")}</span><span class="flags">${flags.join("") || `<span class="nm">${esc(r.name || "")}</span>`}</span></div>`;
   }).join("");
 }
+
+function clamp01(x) { return Math.max(0, Math.min(1, x)); }
+
+function gaugeSVG(frac, big, label, color) {
+  frac = clamp01(frac);
+  const cx = 60, cy = 56, r = 46;
+  const pol = d => [cx + r * Math.cos(d * Math.PI / 180), cy + r * Math.sin(d * Math.PI / 180)];
+  const arc = (a, b) => { const [x0, y0] = pol(a), [x1, y1] = pol(b); const large = (b - a) > 180 ? 1 : 0;
+    return `M${x0.toFixed(1)} ${y0.toFixed(1)} A${r} ${r} 0 ${large} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`; };
+  return `<svg viewBox="0 0 120 74" class="gauge">` +
+    `<path d="${arc(180, 360)}" fill="none" stroke="var(--grid)" stroke-width="9" stroke-linecap="round"/>` +
+    `<path d="${arc(180, 180 + frac * 180)}" fill="none" stroke="${color}" stroke-width="9" stroke-linecap="round"/>` +
+    `<text x="60" y="48" class="g-big">${big}</text><text x="60" y="68" class="g-lab">${esc(label)}</text></svg>`;
+}
+
+function rangeBar(q) {
+  const scale = Math.max(12, Math.abs(q[0]), Math.abs(q[4])) * 1.15;
+  const pos = v => (50 + (v / scale) * 50).toFixed(1);
+  return `<div class="brange"><div class="zero"></div>` +
+    `<div class="band" style="left:${pos(q[0])}%;right:${(100 - pos(q[4])).toFixed(1)}%"></div>` +
+    `<div class="mid" style="left:${pos(q[2])}%"></div></div>`;
+}
+
+function briefText(sig, m) {
+  const out = [];
+  const fmtc = v => v == null ? "·" : (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
+  const breadth = m.breadth != null ? Math.round(m.breadth * 100) : null;
+  let s1 = `Tone is <b>${esc(m.regime || "—")}</b>`;
+  if (breadth != null) s1 += `, with <b>${breadth}%</b> of tracked ETFs higher`;
+  if (m.sectors && m.sectors.length) { const a = m.sectors[0], z = m.sectors[m.sectors.length - 1];
+    s1 += `; <b>${esc(a.name)}</b> leads (${fmtc(a.chg)}) and <b>${esc(z.name)}</b> lags (${fmtc(z.chg)})`; }
+  out.push(s1 + (m.vix ? `. VIX ${m.vix.toFixed(1)}.` : "."));
+  if (m.crypto) out.push(`Crypto is <b>$${(m.crypto.total_mcap / 1e12).toFixed(2)}T</b> (${fmtc(m.crypto.chg24)} 24h), BTC dominance <b>${m.crypto.btc_dom.toFixed(0)}%</b>.`);
+  // retail + crowding extreme
+  const cr = sig.crowding || {};
+  const hot = Object.entries(cr).sort((a, b) => b[1] - a[1])[0];
+  const cold = Object.entries(cr).sort((a, b) => a[1] - b[1])[0];
+  let topWsb = null, topN = 0;
+  Object.entries(sig.per_asset || {}).forEach(([s, pa]) => { if ((pa.mentions || 0) > topN) { topN = pa.mentions; topWsb = s; } });
+  if (topWsb && topN) out.push(`Retail attention is on <b>${esc(base(topWsb))}</b> (${topN} WSB mentions)` +
+    (hot && hot[1] > 0.2 ? `; most crowded name is <b>${esc(base(hot[0]))}</b> (${hot[1].toFixed(2)})` : "") + ".");
+  // council lean
+  const gt = sig.guru_tilt || {};
+  const bear = Object.entries(gt).sort((a, b) => a[1] - b[1])[0];
+  const bull = Object.entries(gt).sort((a, b) => b[1] - a[1])[0];
+  if (bear && bear[1] < -0.2) out.push(`Smart money leans <b>bearish on ${esc(base(bear[0]))}</b> (${bear[1].toFixed(2)})` +
+    (bull && bull[1] > 0.2 ? ` and <b>bullish on ${esc(base(bull[0]))}</b> (+${bull[1].toFixed(2)})` : "") + ".");
+  // model
+  const m2 = state.metrics || {};
+  const calls = state.config.symbols.map(s => state.latest[s]).filter(L => L && L.side && L.trusted);
+  if (calls.length) out.push(`The model has <b>${calls.length}</b> live call${calls.length > 1 ? "s" : ""}: ` +
+    calls.slice(0, 4).map(L => `${esc(base(L.symbol))} ${L.action}`).join(", ") + ".");
+  else out.push(`The model is <b>holding</b> across the board` + (m2.trusted ? "" : ` while it warms up (${m2.live_labels || 0}/${state.config.min_labels} labels)`) + ".");
+  return out;
+}
+
+function renderBrief() {
+  const box = $("#brief-body");
+  if (!box || !state.config) return;
+  const sig = state.signals || {}, m = sig.market || {};
+  if (!m.t && !Object.keys(sig).length) { return; }
+  const rc = m.regime === "risk-on" ? "on" : m.regime === "risk-off" ? "off" : "mixed";
+  const hero = `<div class="brief-hero"><div class="htop"><span class="regime ${rc}">${esc((m.regime || "—").toUpperCase())}</span>` +
+    `<span class="hts">market brief · ${m.t ? fmtTime(m.t) : "scanning…"}</span></div>` +
+    briefText(sig, m).map(p => `<p>${p}</p>`).join("") + `</div>`;
+
+  // gauges
+  const fg = sig.fear_greed || {};
+  const breadth = m.breadth;
+  const gauges = [];
+  if (breadth != null) gauges.push(gauge_card(gaugeSVG(breadth, Math.round(breadth * 100) + "%", "breadth", breadth > 0.55 ? C.good : breadth < 0.45 ? C.serious : C.warning), `${m.breadth_up || 0}/${m.breadth_n || 0} ETFs up`));
+  if (fg.value != null) gauges.push(gauge_card(gaugeSVG(fg.value / 100, fg.value, "fear/greed", fg.value > 60 ? C.serious : fg.value < 40 ? C.blue : C.warning), esc(fg.class || "")));
+  if (m.vix) gauges.push(gauge_card(gaugeSVG(clamp01((m.vix - 10) / 40), m.vix.toFixed(1), "VIX", m.vix > 25 ? C.serious : m.vix > 18 ? C.warning : C.good), m.vix > 25 ? "elevated" : m.vix > 18 ? "moderate" : "calm"));
+  if (m.crypto) gauges.push(gauge_card(gaugeSVG(clamp01(m.crypto.btc_dom / 100), m.crypto.btc_dom.toFixed(0) + "%", "BTC dominance", C.yellow), `$${(m.crypto.total_mcap / 1e12).toFixed(2)}T total`));
+  const gaugeRow = gauges.length ? `<div class="gauges">${gauges.join("")}</div>` : "";
+
+  // movers
+  const mv = m.movers || {};
+  const moverPanel = (title, rows, up) => `<div class="bpanel"><h3>${title}</h3>` +
+    (rows || []).slice(0, 6).map(r => { const w = Math.min(100, Math.abs(r.chg) * 4);
+      return `<div class="bmover"><span class="sym">${esc(r.symbol)}</span>` +
+      `<div class="bar" style="width:${w}%;background:${up ? C.good : C.serious}"></div>` +
+      `<span class="v ${r.chg >= 0 ? "up" : "down"}">${r.chg >= 0 ? "+" : ""}${(r.chg || 0).toFixed(1)}%</span></div>`; }).join("") + `</div>`;
+
+  // model calls (strongest by |score|)
+  const calls = state.config.symbols.map(s => state.latest[s]).filter(L => L && L.q)
+    .sort((a, b) => Math.abs(b.score) - Math.abs(a.score)).slice(0, 6);
+  const callPanel = `<div class="bpanel"><h3>Model calls <small>60s forecast, 10–90 band</small></h3>` +
+    (calls.length ? calls.map(L => `<div class="bcall"><span class="sym">${esc(base(L.symbol))}</span>` +
+      `<span class="badge ${L.action.toLowerCase()}">${L.action}</span>${rangeBar(L.q)}</div>`).join("")
+      : `<div class="why">warming up…</div>`) + `</div>`;
+
+  // positioning & sentiment
+  const cr = sig.crowding || {};
+  const crowdRows = Object.entries(cr).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 4)
+    .map(([s, v]) => `<div class="bline"><span>${esc(base(s))} crowding</span><b class="${v >= 0 ? "down" : "up"}">${v >= 0 ? "+" : ""}${v.toFixed(2)}</b></div>`).join("");
+  const posPanel = `<div class="bpanel"><h3>Positioning &amp; sentiment</h3>` +
+    (fg.value != null ? `<div class="bline"><span>Fear &amp; Greed</span><b>${fg.value} ${esc(fg.class || "")}</b></div>` : "") +
+    crowdRows + `</div>`;
+
+  // smart money
+  const council = sig.council || {};
+  const ethos = Object.entries(council).sort((a, b) => b[1] - a[1]).slice(0, 4)
+    .map(([k, v]) => `<span>${esc(k)} <b>${v.toFixed(2)}</b></span>`).join("");
+  const gt = sig.guru_tilt || {};
+  const gtRows = Object.entries(gt).filter(([, v]) => Math.abs(v) > 0.05).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 5)
+    .map(([s, v]) => `<div class="bline"><span>${esc(base(s))}</span><b class="${v >= 0 ? "up" : "down"}">${v >= 0 ? "+" : ""}${v.toFixed(2)}</b></div>`).join("");
+  const smartPanel = `<div class="bpanel"><h3>Smart money <small>${(sig.gurus || []).filter(g => g.enabled).length} investors</small></h3>` +
+    `<div class="ethos-mini">${ethos}</div>` + (gtRows || `<div class="why">loading 13Fs…</div>`) + `</div>`;
+
+  // sectors
+  const sectorPanel = m.sectors && m.sectors.length ? `<div class="bpanel"><h3>Sector rotation</h3><div class="sector-heat">` +
+    m.sectors.map(sc => { const t = Math.max(-1, Math.min(1, sc.chg / 2));
+      const bg = t >= 0 ? `rgba(12,163,12,${0.25 + 0.55 * t})` : `rgba(208,59,59,${0.25 + 0.55 * -t})`;
+      return `<div class="sc" style="background:${bg}" title="${esc(sc.name)}"><span>${esc(sc.etf)}</span><b>${sc.chg >= 0 ? "+" : ""}${sc.chg.toFixed(1)}</b></div>`; }).join("") + `</div></div>` : "";
+
+  box.innerHTML = hero + gaugeRow + `<div class="brief-grid">` +
+    callPanel + moverPanel("Top gainers", mv.gainers, true) + moverPanel("Top losers", mv.losers, false) +
+    sectorPanel + posPanel + smartPanel + `</div>`;
+}
+
+function gauge_card(svg, sub) { return `<div class="gcard">${svg}<div class="gsub">${esc(sub)}</div></div>`; }
 
 function renderMarket() {
   const m = state.signals && state.signals.market;
@@ -684,7 +935,8 @@ function renderSignals() {
           <span>funding <b class="${sgn(f.funding)}">${fmt(f.funding)}</b></span><span>long/short <b class="${sgn(f.longshort)}">${fmt(f.longshort)}</b></span>
           <span>Fear&amp;Greed <b>${mk.fng_value != null ? mk.fng_value : "·"}</b></span><span>OI Δ <b class="${sgn(f.oi_chg)}">${fmt(f.oi_chg)}</b></span>
           <span>guru net <b class="${sgn(f.guru_net)}">${fmt(f.guru_net)}</b></span><span>ethos bias <b class="${sgn(f.ethos_bias)}">${fmt(f.ethos_bias)}</b></span>
-        </div>${guruHolders(pa)}</div>`;
+          ${pa.fundamentals && pa.fundamentals.pe != null ? `<span>value <b class="${sgn(f.f_value)}">${fmt(f.f_value)}</b></span><span>quality <b class="${sgn(f.f_quality)}">${fmt(f.f_quality)}</b></span>` : ""}
+        </div>${pa.fundamentals && pa.fundamentals.pe != null ? `<div class="frow">P/E ${pa.fundamentals.pe.toFixed(1)} · EPS ${pa.fundamentals.eps != null ? pa.fundamentals.eps.toFixed(2) : "·"} · ROE ${pa.fundamentals.roe != null ? pa.fundamentals.roe.toFixed(0) + "%" : "·"} · β ${pa.fundamentals.beta != null ? pa.fundamentals.beta.toFixed(2) : "·"}</div>` : ""}${guruHolders(pa)}</div>`;
     }).join("");
   } else if (assets) assets.innerHTML = `<div class="why">signals not gathered yet</div>`;
 
@@ -769,15 +1021,15 @@ function handle(msg) {
       Object.assign(state, { config: msg.config, status: msg.status, controls: msg.controls, prices: msg.prices, bars: msg.bars,
         latest: msg.latest, gate: msg.gate, outcomes: msg.outcomes, metrics: msg.metrics, history: msg.history, log: msg.log, news: msg.news,
         sources: msg.sources || [], news_sources: msg.news_sources || [], providers: (msg.status && msg.status.providers) || {}, classes: msg.classes || {},
-        signals: msg.signals || null, signal_providers: msg.signal_providers || [], burry: msg.burry || { enabled: true }, keys: msg.keys || [] });
-      buildCards(); buildConsoles(); buildControls();
+        signals: msg.signals || null, signal_providers: msg.signal_providers || [], burry: msg.burry || { enabled: true }, keys: msg.keys || [], muted: msg.muted || [], universe: msg.universe || (msg.config ? msg.config.symbols : []) });
+      buildCards(); buildConsoles(); buildControls(); applyMuted();
       Object.values(msg.trace || {}).forEach(evs => evs.forEach(ev => appendTrace(ev, false)));
       Object.values(consoles).forEach(c => { c.body.scrollTop = c.body.scrollHeight; });
       renderAll();
       break;
     case "tick":
       state.prices = msg.prices; state.status = msg.status; state.providers = msg.status.providers || state.providers; renderStatus();
-      if (document.body.dataset.view === "dashboard") { state.config.symbols.forEach(updatePrice); reorderCards(false); scheduleDraw(); }
+      if (document.body.dataset.view === "dashboard") { state.config.symbols.forEach(updatePrice); scheduleDraw(); }
       break;
     case "bar":
       state.status = msg.status;
@@ -795,9 +1047,10 @@ function handle(msg) {
       break;
     case "sources": state.sources = msg.sources; if (msg.status) { state.status = msg.status; state.providers = msg.status.providers || state.providers; } renderSources(); renderStatus(); if (document.body.dataset.view === "dashboard") state.config.symbols.forEach(updateVia); break;
     case "news_sources": state.news_sources = msg.news_sources; renderSources(); break;
-    case "signals": state.signals = msg.signals; if (msg.signal_providers) state.signal_providers = msg.signal_providers; renderSignals(); renderMarket(); renderRadar(); renderWatch(); if (document.body.dataset.view === "dashboard") { state.config.symbols.forEach(updateCard); reorderCards(true); } break;
+    case "signals": state.signals = msg.signals; if (msg.signal_providers) state.signal_providers = msg.signal_providers; renderSignals(); renderMarket(); renderRadar(); renderWatch(); renderBrief(); if (document.body.dataset.view === "dashboard") { state.config.symbols.forEach(updateCard); reorderCards(true); } break;
     case "signal_providers": state.signal_providers = msg.signal_providers; renderSignals(); break;
     case "keys": state.keys = msg.keys; renderKeys(); break;
+    case "muted": state.muted = msg.muted; applyMuted(); renderUniverse(); break;
     case "trace": appendTrace(msg.ev); break;
     case "news": state.news = msg.news; renderNews(); break;
     case "status": state.status = msg.status; state.providers = msg.status.providers || state.providers; renderStatus(); if (document.body.dataset.view === "dashboard") state.config.symbols.forEach(updateVia); break;
@@ -826,6 +1079,7 @@ $$(".tabs button").forEach(b => b.onclick = () => {
   try { localStorage.setItem("flint.view", b.dataset.tab); } catch (e) { /* storage may be unavailable */ }
   if (b.dataset.tab === "consoles") Object.values(consoles).forEach(c => { c.body.scrollTop = c.body.scrollHeight; });
   renderAll();
+  if (b.dataset.tab === "consoles") setTimeout(() => { const a = document.activeElement; if (a && a.tagName === "INPUT") a.blur(); }, 0);
 });
 try {
   const v = localStorage.getItem("flint.view");

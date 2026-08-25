@@ -60,8 +60,9 @@ class BarBuilder:
     def roll(self, now: float, grace: float = 0.5) -> list[dict[str, Bar]]:
         """Close every bar whose interval ended before now - grace. Rows come back oldest first.
 
-        A row is only emitted once every symbol has traded at least once; symbols
-        with no trades in an interval get a flat bar at their last close.
+        A row is emitted only for intervals with real activity (at least one symbol
+        traded), so closed-market gaps are skipped and the chart shows trading time;
+        within an active interval, symbols that did not trade get a flat bar.
         """
         end_idx = int((now - grace) // self.dt)
         if self.next_index is None:
@@ -75,6 +76,8 @@ class BarBuilder:
             partial = self.open_bars.pop(idx, {})
             for s, b in partial.items():
                 self.last_close[s] = b.close
+            if not partial:
+                continue          # no trades this interval (market closed / overnight) — skip the flat gap
             if any(s not in self.last_close for s in self.symbols):
                 continue
             row: dict[str, Bar] = {}

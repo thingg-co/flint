@@ -15,7 +15,7 @@ def _env(name: str, default, cast=None):
 
 
 def _symbols() -> list[str]:
-    return [s.strip().upper() for s in _env("SYMBOLS", "BTC-USD,ETH-USD,SOL-USD,NVDA,AAPL,TSLA,MSTR,PLTR,XAU-USD,XAG-USD").split(",") if s.strip()]
+    return [s.strip().upper() for s in _env("SYMBOLS", "NVDA,AAPL,MSFT,GOOGL,AMZN,META,TSLA,AVGO,AMD,QCOM,MU,ORCL,CRM,PLTR,MSTR,COIN,SMCI,NFLX,DIS,UBER,INTC,JPM,BAC,AXP,V,MA,KO,WMT,COST,LLY,CVX,XOM,SPY,QQQ,XAU-USD,XAG-USD").split(",") if s.strip()]
 
 
 def _eodhd_key() -> str:
@@ -23,6 +23,32 @@ def _eodhd_key() -> str:
     if key:
         return key
     for path in ("eodhd.json", ".eodhd.json"):
+        try:
+            import json
+            return json.loads(open(path).read()).get("key", "")
+        except (OSError, ValueError):
+            pass
+    return ""
+
+
+def _fmp_key() -> str:
+    key = _env("FMP_KEY", "")
+    if key:
+        return key
+    for path in ("fmp.json", ".fmp.json"):
+        try:
+            import json
+            return json.loads(open(path).read()).get("key", "")
+        except (OSError, ValueError):
+            pass
+    return ""
+
+
+def _anthropic_key() -> str:
+    key = _env("ANTHROPIC_KEY", "")
+    if key:
+        return key
+    for path in ("anthropic.json", ".anthropic.json"):
         try:
             import json
             return json.loads(open(path).read()).get("key", "")
@@ -94,19 +120,30 @@ class Config:
     finnhub_seconds: float = _env("FINNHUB_SECONDS", 15.0)     # seconds between Finnhub quote heartbeats
     eodhd_key: str = field(default_factory=_eodhd_key)         # EODHD API token (env FLINT_EODHD_KEY or eodhd.json)
     eodhd_seconds: float = _env("EODHD_SECONDS", 20.0)         # seconds between EODHD delayed-quote polls
+    fmp_key: str = field(default_factory=_fmp_key)             # Financial Modeling Prep (reliable 5-min history)
+    fmp_seconds: float = _env("FMP_SECONDS", 20.0)            # seconds between FMP quote polls
+    anthropic_key: str = field(default_factory=_anthropic_key)  # optional Claude key for the narrative brief
+    brief_model: str = _env("BRIEF_MODEL", "claude-haiku-4-5-20251001")
+    brief_minutes: float = _env("BRIEF_MINUTES", 5.0)          # cache the narrative brief this long
     av_rate_seconds: float = _env("AV_RATE_SECONDS", 1.0)     # global floor between ANY two Alpha Vantage calls
-    bar_seconds: float = _env("BAR_SECONDS", 5.0)
-    backfill_seconds: float = _env("BACKFILL_SECONDS", 1800.0)
+    bar_seconds: float = _env("BAR_SECONDS", 300.0)   # 5-minute bars (FMP provides reliable 5-min history)
+    backfill_seconds: float = _env("BACKFILL_SECONDS", 172800.0)  # ~2 trading days of 5-min history
     backfill_pages: int = _env("BACKFILL_PAGES", 40)  # max REST pages per symbol
     coinbase_ws: str = "wss://ws-feed.exchange.coinbase.com"
     coinbase_rest: str = "https://api.exchange.coinbase.com"
 
     # Problem definition
     window: int = _env("WINDOW", 64)      # bars of context fed to the model
-    horizon: int = _env("HORIZON", 12)    # bars ahead that the model forecasts
+    horizon: int = _env("HORIZON", 12)    # bars ahead (12 x 5min = 1h forecast)
     quantiles: tuple[float, ...] = (0.1, 0.25, 0.5, 0.75, 0.9)
 
-    # Model
+    # Compute + auto-sizing (benchmarks the machine on first run and picks the biggest
+    # model that still trains in real time; cached to <state_dir>/machine.json).
+    device: str = _env("DEVICE", "auto")               # auto | cpu | cuda | mps
+    auto_size: bool = _env("AUTO_SIZE", "1") not in ("0", "false", "no")
+    autotune_util: float = _env("AUTOTUNE_UTIL", 0.7)  # fraction of the bar interval training may use
+
+    # Model (overridden by auto-sizing unless auto_size is off)
     d_model: int = _env("D_MODEL", 48)
     dilations: tuple[int, ...] = (1, 2, 4, 8, 16)
     n_experts: int = _env("N_EXPERTS", 3)
@@ -121,7 +158,7 @@ class Config:
     replay_size: int = _env("REPLAY_SIZE", 4096)
     recent_frac: float = _env("RECENT_FRAC", 0.3)   # share of each batch drawn from the newest samples
     recent_n: int = _env("RECENT_N", 256)
-    warmup_steps: int = _env("WARMUP_STEPS", 100)   # training steps on backfilled history before going live
+    warmup_steps: int = _env("WARMUP_STEPS", 60)   # training steps on backfilled history before going live
     input_noise: float = _env("INPUT_NOISE", 0.1)  # gaussian noise on standardized inputs during training
     min_labels: int = _env("MIN_LABELS", 48)        # live (out-of-sample) labels before suggestions are counted
     band_gamma: float = _env("BAND_GAMMA", 0.05)     # adaptive conformal step for the band scale
@@ -135,9 +172,11 @@ class Config:
     max_size: float = _env("MAX_SIZE", 1.0)
 
     # Signals + Burry overlay
+    muted_symbols: str = _env("MUTED", "")           # symbols to watch-but-not-suggest (comma list)
     signals_off: str = _env("SIGNALS_OFF", "")          # signal providers off by default: wsb, feargreed, derivatives, scion
     signals_minutes: float = _env("SIGNALS_MINUTES", 5.0)   # how often to refresh exogenous signals
     radar_top: int = _env("RADAR_TOP", 250)                 # how many market-wide movers to watch
+    max_universe: int = _env("MAX_UNIVERSE", 64)            # cap on modeled symbols (cross-attention + data-rate limit)
     burry_enabled: bool = _env("BURRY", "1") not in ("0", "false", "no")
     burry_aggr: float = _env("BURRY_AGGR", 0.7)         # 0..1: how hard the contrarian overlay fades crowded trades
     burry_fade_at: float = _env("BURRY_FADE_AT", 0.45)  # crowding magnitude above which aligned trades get faded
@@ -154,7 +193,7 @@ class Config:
     host: str = _env("HOST", "127.0.0.1")
     port: int = _env("PORT", 8000)
     tick_hz: float = _env("TICK_HZ", 2.0)
-    chart_bars: int = _env("CHART_BARS", 180)
+    chart_bars: int = _env("CHART_BARS", 160)   # ~13h of trading at 5-min bars
     log_size: int = 60
 
     # Persistence

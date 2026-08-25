@@ -206,6 +206,8 @@ class CoinbaseSource(Source):
         return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
 
     async def backfill(self, symbols: list[str], cutoff: float) -> list[Tick]:
+        if self.cfg.bar_seconds > 30:      # raw trades don't scale to long windows; Binance klines backfill instead
+            return []
         syms = [s for s in symbols if self.supports(s)]
         ticks: list[Tick] = []
         async with httpx.AsyncClient(base_url=self.REST, timeout=20, headers={"User-Agent": "flint/0.1"}) as client:
@@ -275,10 +277,15 @@ class BinanceSource(Source):
     def pair(self, sym: str) -> str:
         return crypto_base(sym) + "USDT"
 
+    def _interval(self) -> str:
+        return {60: "1m", 300: "5m", 900: "15m", 1800: "30m", 3600: "1h"}.get(int(self.cfg.bar_seconds), "1s")
+
     async def backfill(self, symbols: list[str], cutoff: float) -> list[Tick]:
         syms = [s for s in symbols if self.supports(s)]
         ticks: list[Tick] = []
         start = int(cutoff * 1000)
+        interval = self._interval()
+        step_ms = int(self.cfg.bar_seconds * 1000)
         async with httpx.AsyncClient(timeout=20, headers={"User-Agent": UA}) as client:
             for sym in syms:
                 host_ok = None
@@ -288,7 +295,7 @@ class BinanceSource(Source):
                     for host in ([host_ok] if host_ok else self.HOSTS):
                         try:
                             r = await client.get(f"https://{host}/api/v3/klines",
-                                                 params={"symbol": self.pair(sym), "interval": "1s", "startTime": cur, "limit": 1000})
+                                                 params={"symbol": self.pair(sym), "interval": interval, "startTime": cur, "limit": 1000})
                             if r.status_code == 200:
                                 data = r.json()
                                 host_ok = host
@@ -298,11 +305,9 @@ class BinanceSource(Source):
                     if not data:
                         break
                     for k in data:
-                        ts = k[0] / 1000.0
-                        # One synthetic tick per 1s kline close; taker buy volume is field 9.
                         vol = float(k[5]); buyv = float(k[9])
-                        ticks.append(Tick(sym, ts + 1.0, float(k[4]), vol, (buyv > vol / 2) if vol else None))
-                    cur = data[-1][0] + 1000
+                        ticks.append(Tick(sym, k[0] / 1000.0 + self.cfg.bar_seconds, float(k[4]), vol, (buyv > vol / 2) if vol else None))
+                    cur = data[-1][0] + step_ms
                     if cur >= time.time() * 1000 or len(data) < 1000:
                         break
                     await asyncio.sleep(0.1)
@@ -411,40 +416,41 @@ class YahooSource(Source):
             self._emit(emit, Tick(sym, time.time(), float(price), 0.0, None))
         return n
 
+    def _bars_from(self, sym, resp, lo, cap=170):
+        meta = resp.get("meta", {})
+        self.market_state[sym] = meta.get("marketState", "")
+        ref = meta.get("regularMarketPrice") or meta.get("previousClose")
+        ts = resp.get("timestamp") or []
+        quote = (resp.get("indicators", {}).get("quote") or [{}])[0]
+        closes, vols = quote.get("close") or [], quote.get("volume") or []
+        rows = []
+        for i, t in enumerate(ts):
+            if t < lo or i >= len(closes) or not self._sane(closes[i], ref):
+                continue
+            v = float(vols[i]) if i < len(vols) and vols[i] else 0.0
+            rows.append(Tick(sym, float(t), float(closes[i]), v, None))
+        rows = rows[-cap:]
+        if rows:
+            self._seen[sym] = rows[-1].ts
+        return rows
+
     async def backfill(self, symbols: list[str], cutoff: float) -> list[Tick]:
         syms = [s for s in symbols if self.supports(s)]
+        if not syms:
+            return []
+        sec = self.cfg.bar_seconds
+        iv, rng = ("1m", "1d") if sec <= 60 else ("5m", "5d") if sec <= 900 else ("1h", "1mo")
         ticks: list[Tick] = []
-        cap = 240  # most recent bars to keep per symbol
         async with httpx.AsyncClient(timeout=25) as client:
             for sym in syms:
-                # Crypto trades 24/7 so the tight window applies; equities/fx may be closed,
-                # so take the last available session instead of an empty recent window.
-                rng = "1d"
-                lo = cutoff if asset_class(sym) == "crypto" else 0.0
+                lo = cutoff if asset_class(sym) == "crypto" else 0.0   # equities: keep the last sessions
                 try:
-                    chart = await self._chart(client, sym, rng, "1m")
+                    chart = await self._chart(client, sym, rng, iv)
+                    if chart:
+                        ticks.extend(self._bars_from(sym, chart, lo))
+                    await asyncio.sleep(0.35)
                 except Exception as e:  # noqa: BLE001
                     self.note = f"{sym}: {type(e).__name__}"
-                    continue
-                if not chart:
-                    continue
-                meta = chart.get("meta", {})
-                self.market_state[sym] = meta.get("marketState", "")
-                ref = meta.get("regularMarketPrice") or meta.get("previousClose")
-                ts = chart.get("timestamp") or []
-                quote = (chart.get("indicators", {}).get("quote") or [{}])[0]
-                closes, vols = quote.get("close") or [], quote.get("volume") or []
-                rows = []
-                for i, t in enumerate(ts):
-                    if t < lo or i >= len(closes) or not self._sane(closes[i], ref):
-                        continue
-                    v = float(vols[i]) if i < len(vols) and vols[i] else 0.0
-                    rows.append(Tick(sym, float(t), float(closes[i]), v, None))
-                rows = rows[-cap:]
-                if rows:
-                    self._seen[sym] = rows[-1].ts
-                ticks.extend(rows)
-                await asyncio.sleep(0.2)
         return ticks
 
     async def run(self, emit):
@@ -608,6 +614,88 @@ class AlphaVantageQuoteSource(Source):
                 self.note = f"{sym}: {type(e).__name__}"
 
 
+class FMPSource(Source):
+    """Financial Modeling Prep: reliable 5-minute intraday history (for backfill) plus
+    real-time quotes. Paid (Starter), so no free-tier throttling — this is the primary
+    equity feed. The API key is never placed in notes or logs."""
+
+    id = "fmp"
+    name = "Financial Modeling Prep"
+    kind = "equity"
+    mechanism = "poll"
+    priority = 33               # above Finnhub/Yahoo: paid, reliable history + quotes
+    classes = ("equity",)
+    fresh_after = 120.0
+    REST = "https://financialmodelingprep.com/stable"
+
+    def __init__(self, cfg, symbols):
+        super().__init__(cfg, symbols)
+        self.key = cfg.fmp_key
+        self.poll_interval = max(10.0, cfg.fmp_seconds)
+        if not self.key:
+            self.note = "no API key (set fmp.json or FLINT_FMP_KEY)"
+
+    async def backfill(self, symbols, cutoff):
+        syms = [s for s in symbols if self.supports(s)]
+        if not syms or not self.key:
+            return []
+        from datetime import datetime, date, timedelta
+        try:
+            from zoneinfo import ZoneInfo
+            et = ZoneInfo("America/New_York")
+        except Exception:  # noqa: BLE001
+            et = None
+        frm = (date.fromtimestamp(cutoff) - timedelta(days=1)).isoformat()
+        to = date.fromtimestamp(time.time() + 86400).isoformat()
+        ticks = []
+        async with httpx.AsyncClient(timeout=25) as c:
+            for sym in syms:
+                try:
+                    r = await c.get(f"{self.REST}/historical-chart/5min",
+                                    params={"symbol": sym, "from": frm, "to": to, "apikey": self.key})
+                    if r.status_code != 200:
+                        self.note = f"history {r.status_code}"
+                        continue
+                    for row in r.json():
+                        try:
+                            dt = datetime.strptime(row["date"], "%Y-%m-%d %H:%M:%S")
+                            ts = (dt.replace(tzinfo=et).timestamp() if et else dt.timestamp()) + self.cfg.bar_seconds
+                        except (ValueError, KeyError):
+                            continue
+                        if row.get("close"):
+                            ticks.append(Tick(sym, ts, float(row["close"]), float(row.get("volume") or 0.0), None))
+                    await asyncio.sleep(0.1)
+                except Exception as e:  # noqa: BLE001
+                    self.note = f"backfill: {type(e).__name__}"
+        return ticks
+
+    async def run(self, emit):
+        if not self.key or not self.symbols:
+            return
+        await self._poll_loop(emit)
+
+    async def poll_once(self, emit):
+        if not self.symbols or not self.key:
+            return
+        n = 0
+        async with httpx.AsyncClient(timeout=15) as c:
+            for sym in self.symbols:
+                try:
+                    r = await c.get(f"{self.REST}/quote", params={"symbol": sym, "apikey": self.key})
+                    if r.status_code == 200 and r.json():
+                        d = r.json()[0]
+                        if d.get("price"):
+                            self._emit(emit, Tick(sym, time.time(), float(d["price"]), float(d.get("volume") or 0.0), None))
+                            n += 1
+                    elif r.status_code in (401, 402, 403):
+                        self.note = f"quote {r.status_code} (plan?)"
+                        return
+                    await asyncio.sleep(0.05)
+                except Exception as e:  # noqa: BLE001
+                    self.note = f"{sym}: {type(e).__name__}"
+        self.note = f"{n} quotes"
+
+
 class SchwabSource(Source):
     """Charles Schwab market data: real-time equity quotes and 1-minute price history.
 
@@ -724,16 +812,15 @@ class FinnhubSource(Source):
         syms = [s for s in symbols if self.supports(s)]
         if not syms or not self.key:
             return []
-        ticks = []
+        ticks = []           # one current-price seed per symbol; Yahoo provides real history when it can
         async with httpx.AsyncClient(timeout=15) as c:
             for sym in syms:
                 try:
                     r = await c.get(f"{self.REST}/quote", params={"symbol": sym, "token": self.key})
                     if r.status_code == 200 and r.json().get("c"):
-                        d = r.json()
-                        ticks.append(Tick(sym, float(d.get("t") or time.time()), float(d["c"]), 0.0, None))
-                    await asyncio.sleep(0.2)
-                except Exception as e:  # noqa: BLE001  (never interpolate the URL/key)
+                        ticks.append(Tick(sym, time.time(), float(r.json()["c"]), 0.0, None))
+                    await asyncio.sleep(0.1)
+                except Exception as e:  # noqa: BLE001
                     self.note = f"backfill: {type(e).__name__}"
         return ticks
 
@@ -830,7 +917,7 @@ class EODHDSource(Source):
                 for row in await self._quote(c, syms):
                     sym = str(row.get("code", "")).split(".")[0]
                     if sym in syms and row.get("close") not in (None, "NA"):
-                        ticks.append(Tick(sym, float(row.get("timestamp") or time.time()), float(row["close"]), 0.0, None))
+                        ticks.append(Tick(sym, time.time(), float(row["close"]), 0.0, None))  # seed at now (no intraday history)
         except Exception as e:  # noqa: BLE001
             self.note = f"backfill: {type(e).__name__}"
         return ticks
@@ -997,8 +1084,8 @@ class SimSource(Source):
 
 # Manager --------------------------------------------------------------------------
 
-REGISTRY = [CoinbaseSource, BinanceSource, BitfinexSource, GeminiSource, KrakenSource, SchwabSource, FinnhubSource,
-            EODHDSource, GoldApiSource, YahooSource, CoinGeckoSource, AlphaVantageQuoteSource, SimSource]
+REGISTRY = [CoinbaseSource, BinanceSource, BitfinexSource, GeminiSource, KrakenSource, SchwabSource, FMPSource,
+            FinnhubSource, EODHDSource, GoldApiSource, YahooSource, CoinGeckoSource, AlphaVantageQuoteSource]
 
 
 class SourceManager:
@@ -1027,8 +1114,6 @@ class SourceManager:
                 src = cls(cfg, symbols)
             self.sources[src.id] = src
             on = src.id not in default_off
-            if src.id == "sim":
-                on = True  # always available as the fallback provider
             # Yahoo is the primary equity/fx feed; as a pure crypto backup it just adds load,
             # so default it on only when there are non-crypto symbols to serve.
             if src.id == "yahoo":
@@ -1043,6 +1128,8 @@ class SourceManager:
                 on = bool(cfg.finnhub_key)
             if src.id == "eodhd":
                 on = bool(cfg.eodhd_key)
+            if src.id == "fmp":
+                on = bool(cfg.fmp_key)
             self.enabled[src.id] = on and bool(src.symbols)
         self.seen: dict[str, dict[str, float]] = {s: {} for s in symbols}   # sym -> source_id -> last ts
         self.active: dict[str, str | None] = {s: None for s in symbols}
@@ -1081,11 +1168,10 @@ class SourceManager:
         """Backfill each symbol from the highest-priority enabled source that returns data."""
         chosen: dict[str, str] = {}
         collected: dict[str, list[Tick]] = {s: [] for s in self.symbols}
-        remaining = set(self.symbols)
         for src in self.ordered():
-            if not remaining or not self.enabled.get(src.id):
+            if not self.enabled.get(src.id):
                 continue
-            want = [s for s in remaining if src.supports(s)]
+            want = [s for s in self.symbols if src.supports(s)]
             if not want:
                 continue
             try:
@@ -1097,15 +1183,14 @@ class SourceManager:
             by_sym: dict[str, list[Tick]] = {}
             for t in ticks:
                 by_sym.setdefault(t.symbol, []).append(t)
+            # keep the source with the RICHEST history per symbol (real bars beat a single seed)
             for s in want:
-                if by_sym.get(s):
+                if len(by_sym.get(s, [])) > len(collected[s]):
                     collected[s] = by_sym[s]
                     chosen[s] = src.id
-                    remaining.discard(s)
                     self.seen[s][src.id] = time.time()
             if ticks and self.trace:
-                covered = ", ".join(sorted({t.symbol for t in ticks}))
-                self.trace.emit("feed", f"{src.name}: backfilled {len(ticks)} ticks for {covered}")
+                self.trace.emit("feed", f"{src.name}: {len(ticks)} ticks for {len({t.symbol for t in ticks})} symbols")
         merged: list[Tick] = []
         for s in self.symbols:
             merged.extend(collected[s])
@@ -1132,8 +1217,6 @@ class SourceManager:
         src = self.sources.get(src_id)
         if not src:
             return {"error": "unknown source"}
-        if src_id == "sim" and not on:
-            return {"error": "the simulator is the fallback provider and cannot be turned off"}
         if on and not src.symbols:
             return {"error": f"{src.name} supports none of the active symbols"}
         if on and src_id == "av_quote" and not self.av.key:
@@ -1144,6 +1227,8 @@ class SourceManager:
             return {"error": "no Finnhub API key configured"}
         if on and src_id == "eodhd" and not self.cfg.eodhd_key:
             return {"error": "no EODHD API token configured"}
+        if on and src_id == "fmp" and not self.cfg.fmp_key:
+            return {"error": "no FMP API key configured"}
         self.enabled[src_id] = on
         if on:
             if src_id not in self.tasks:
