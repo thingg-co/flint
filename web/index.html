@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>flint</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body data-view="dashboard">
+<header class="top">
+  <div class="brand">flint <span class="sub">continuously learning market model</span></div>
+  <div class="status">
+    <span class="pill" id="phase">starting</span>
+    <span class="pill" id="feed">feed: ?</span>
+    <span class="pill" id="learning">learning</span>
+    <span class="kv"><label>bars</label><b id="bars">0</b></span>
+    <span class="kv"><label>pending</label><b id="pending">0</b></span>
+    <span class="kv"><label>uptime</label><b id="uptime">0s</b></span>
+    <button class="pill sound" id="sound-toggle" title="alerts on major events">🔕</button>
+    <span class="conn" id="conn" title="websocket">●</span>
+  </div>
+  <nav class="tabs">
+    <button data-tab="dashboard" class="active">Dashboard</button>
+    <button data-tab="consoles">Control panel</button>
+  </nav>
+</header>
+
+<main id="dashboard" class="view">
+  <section class="panel market" id="market-panel">
+    <div class="market-head">
+      <h3>Whole market <small id="market-meta">scanning…</small></h3>
+      <div class="market-stats" id="market-stats"></div>
+    </div>
+    <div class="market-grid">
+      <div class="market-sectors"><div class="mlabel">Sectors</div><div class="sector-heat" id="sector-heat"></div></div>
+      <div class="market-movers" id="market-movers"></div>
+    </div>
+  </section>
+  <section class="cards" id="cards"></section>
+  <section class="panel market-watch" id="market-watch">
+    <div class="mw-head">
+      <h3>Market watch <small id="mw-meta">everything we can see, most urgent first</small></h3>
+      <input type="text" id="watch-filter" placeholder="filter…" autocomplete="off">
+    </div>
+    <div class="watch-grid" id="watch-grid"></div>
+  </section>
+  <section class="panel model">
+    <div class="tiles" id="tiles"></div>
+    <div class="row">
+      <div class="block">
+        <h3>Live pinball loss <small>out of sample, bps</small></h3>
+        <canvas class="spark" id="spark-loss"></canvas>
+      </div>
+      <div class="block">
+        <h3>Directional hit rate <small>EMA, 0.5 = coin flip</small></h3>
+        <canvas class="spark" id="spark-hit"></canvas>
+      </div>
+      <div class="block">
+        <h3>10-90 band coverage <small>target 0.80</small></h3>
+        <canvas class="spark" id="spark-coverage"></canvas>
+      </div>
+      <div class="block">
+        <h3>Paper P&amp;L <small>cumulative bps, trusted suggestions only</small></h3>
+        <canvas class="spark" id="spark-pnl"></canvas>
+      </div>
+    </div>
+    <div class="row">
+      <div class="block">
+        <h3>Regime gate <small>mixture over expert heads</small></h3>
+        <div class="gate" id="gate"></div>
+      </div>
+      <div class="block">
+        <h3>Cross-asset attention <small>row attends to column</small></h3>
+        <div class="attn" id="attn"></div>
+      </div>
+      <div class="block">
+        <h3>Model</h3>
+        <div class="arch" id="arch"></div>
+      </div>
+      <div class="block wide">
+        <h3>Resolved suggestions</h3>
+        <ul class="log" id="log"></ul>
+      </div>
+    </div>
+  </section>
+</main>
+
+<main id="consoles" class="view">
+  <section class="panel controls">
+    <form id="controls" class="controls-form"></form>
+    <div class="actions">
+      <button type="button" data-action="pause" id="btn-pause">Pause learning</button>
+      <button type="button" data-action="checkpoint">Save checkpoint</button>
+      <button type="button" data-action="skim">Skim news now</button>
+      <button type="button" data-action="reset" class="danger">Reset model</button>
+    </div>
+  </section>
+  <section class="panel keys">
+    <div class="sources-head"><h3>API keys <small>stored locally in gitignored files, never shown in full</small></h3></div>
+    <div class="key-list" id="key-list"></div>
+  </section>
+  <section class="panel sources">
+    <div class="sources-head">
+      <h3>Data sources <small>toggle any source; the highest-priority live one serves each symbol</small></h3>
+      <div class="provider-map" id="provider-map"></div>
+    </div>
+    <div class="source-list" id="source-list"></div>
+    <div class="news-sources">
+      <h3>News sources <small>merged per asset; sentiment feeds two model features</small></h3>
+      <div class="source-list compact" id="news-source-list"></div>
+    </div>
+  </section>
+  <section class="panel signals">
+    <div class="sources-head">
+      <h3>Signals &amp; strategy <small>retail, derivatives, market sentiment and guru 13Fs — fed to the model and the Burry overlay</small></h3>
+      <label class="overlay-toggle" id="burry-toggle-wrap">Burry / Buffett overlay</label>
+      <button type="button" data-action="refresh_signals" id="refresh-signals">Refresh signals</button>
+    </div>
+    <div class="source-list compact" id="signal-list"></div>
+    <div class="signal-assets" id="signal-assets"></div>
+    <div class="council">
+      <div class="council-head"><h4>Investor council <small>combined ethos drives the overlay</small></h4><div class="ethos-bars" id="council-ethos"></div></div>
+      <div class="gurus" id="guru-list"></div>
+    </div>
+  </section>
+  <section class="panel radar">
+    <div class="radar-head">
+      <h3>Movers radar <small id="radar-meta">top market movers</small></h3>
+      <input type="text" id="radar-filter" placeholder="filter symbol…" autocomplete="off">
+    </div>
+    <div class="radar-table" id="radar-table"></div>
+  </section>
+  <section class="console-grid" id="console-grid"></section>
+  <section class="panel news">
+    <div class="news-head">
+      <h3>News skim <small id="news-meta">not run yet</small></h3>
+    </div>
+    <div class="news-body">
+      <div class="tone" id="tone"></div>
+      <ul class="headlines" id="headlines"></ul>
+    </div>
+  </section>
+</main>
+
+<div class="loading" id="loading" hidden>
+  <div class="loading-card">
+    <svg class="fs" viewBox="0 0 220 180" width="220" height="180" aria-hidden="true">
+      <!-- tinder + growing fire -->
+      <g class="fire">
+        <path class="flame f3" d="M110 168 C96 150 100 140 104 132 C108 142 112 140 112 132 C120 142 124 152 116 164 Z"/>
+        <path class="flame f2" d="M110 170 C92 150 98 132 108 118 C112 134 120 130 118 120 C132 138 134 156 120 168 Z"/>
+        <path class="flame f1" d="M110 172 C84 148 96 120 110 100 C114 126 128 120 124 106 C146 130 148 160 126 172 Z"/>
+        <ellipse class="embers" cx="110" cy="171" rx="34" ry="6"/>
+      </g>
+      <!-- flint (rock) -->
+      <path class="flint" d="M36 96 L74 78 L96 92 L86 116 L52 122 Z"/>
+      <!-- steel striker -->
+      <g class="steel">
+        <path d="M150 44 C176 52 186 74 176 96 C170 84 156 78 150 84 C160 70 158 58 138 54 Z"/>
+      </g>
+      <!-- sparks -->
+      <g class="sparks">
+        <circle class="spark s1" r="2.4"/><circle class="spark s2" r="2"/><circle class="spark s3" r="2.6"/>
+        <circle class="spark s4" r="1.8"/><circle class="spark s5" r="2.2"/><circle class="spark s6" r="1.6"/>
+      </g>
+    </svg>
+    <div class="loading-title" id="loading-title">Striking flint…</div>
+    <div class="loading-sub" id="loading-sub">warming up</div>
+    <div class="loading-bar"><i id="loading-bar-i"></i></div>
+  </div>
+</div>
+<div class="tooltip" id="tooltip"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

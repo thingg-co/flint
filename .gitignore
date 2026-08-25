@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+state/
+keys
+.env
+schwab.json
+schwab_tokens.json
+finnhub.json
+eodhd.json
