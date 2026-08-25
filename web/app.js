@@ -25,9 +25,9 @@ const CONTROL_FIELDS = [
 ];
 
 const state = { config: null, status: {}, controls: {}, prices: {}, bars: {}, latest: {}, gate: [], outcomes: {},
-  metrics: {}, history: { loss: [], hit: [], coverage: [], pnl: [] }, log: [], news: null,
+  metrics: {}, history: { loss: [], hit: [], coverage: [], pnl: [] }, log: [], news: null, bars_fine: {},
   sources: [], news_sources: [], providers: {}, classes: {},
-  signals: null, signal_providers: [], burry: { enabled: true }, keys: [], muted: [], classes: {}, universe: [] };
+  signals: null, signal_providers: [], brief: null, burry: { enabled: true }, keys: [], muted: [], classes: {}, universe: [] };
 const cards = {};
 const consoles = {};
 const lastPrices = {};
@@ -107,7 +107,10 @@ function ema(a, p) { const k = 2 / (p + 1); let e; return a.map((v, i) => (e = i
 
 function drawChart(card) {
   const sym = card.sym;
-  const bars = (state.bars[sym] || []).slice(-(state.config && state.config.chart_bars || 160));
+  const fine = card.res === "1m";
+  const src = fine ? (state.bars_fine[sym] || []) : (state.bars[sym] || []);
+  const cap = fine ? ((state.config && state.config.fine_bars) || 240) : ((state.config && state.config.chart_bars) || 160);
+  const bars = src.slice(-cap);
   const { ctx, w, h } = ctx2d(card.canvas);
   ctx.font = "10px system-ui, sans-serif";
   if (bars.length < 2) { ctx.fillStyle = C.muted; ctx.fillText("waiting for bars", 10, 20); return; }
@@ -115,7 +118,7 @@ function drawChart(card) {
   const padL = 8, padR = 8, padT = 10, padB = 16;
   const n = bars.length;
   const plotW = w - padL - padR;
-  const fanW = Math.max(0.2 * plotW, 64);
+  const fanW = fine ? 8 : Math.max(0.2 * plotW, 64);
   const dx = (plotW - fanW) / (n - 1);
   const xs = i => Math.min(padL + i * dx, padL + plotW);
   const closes = bars.map(b => b.c);
@@ -129,7 +132,7 @@ function drawChart(card) {
   let lo = Math.min(...bars.map(b => b.l)), hi = Math.max(...bars.map(b => b.h));
   if (live) { lo = Math.min(lo, live); hi = Math.max(hi, live); }
   let fan = null;
-  if (L && L.q) { fan = L.q.map(q => L.price * Math.exp(q / 1e4)); lo = Math.min(lo, fan[0]); hi = Math.max(hi, fan[4]); }
+  if (!fine && L && L.q) { fan = L.q.map(q => L.price * Math.exp(q / 1e4)); lo = Math.min(lo, fan[0]); hi = Math.max(hi, fan[4]); }
   const span = (hi - lo) || closes[n - 1] * 1e-4;
   lo -= span * 0.06; hi += span * 0.06;
   const ys = v => pT + (hi - v) / (hi - lo) * (pB - pT);
@@ -156,16 +159,23 @@ function drawChart(card) {
     ctx.fillStyle = C.ink2; ctx.textAlign = "right"; ctx.fillText(`${fmtBps(L.q[2])} bps`, xEnd - 2, ys(fan[2]) - 9); ctx.textAlign = "left";
   }
 
-  // candlesticks
-  const cw = Math.max(1, Math.min(dx * 0.68, 9));
-  bars.forEach((b, i) => {
-    const x = xs(i), col = b.c >= b.o ? upC : downC;
-    ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1;
-    const wx = Math.round(x) + 0.5;
-    ctx.beginPath(); ctx.moveTo(wx, ys(b.h)); ctx.lineTo(wx, ys(b.l)); ctx.stroke();
-    const yo = ys(b.o), yc = ys(b.c);
-    ctx.fillRect(x - cw / 2, Math.min(yo, yc), cw, Math.max(1, Math.abs(yc - yo)));
-  });
+  // candlesticks -- but spot feeds (e.g. metals via GoldAPI) have no intrabar OHLC, so their
+  // bars are flat (o=h=l=c) and would render as meaningless dashes; fall back to a close line there.
+  const flat = bars.reduce((k, b) => k + (b.o === b.h && b.h === b.l && b.l === b.c ? 1 : 0), 0);
+  if (flat < bars.length * 0.5) {
+    const cw = Math.max(1, Math.min(dx * 0.68, 9));
+    bars.forEach((b, i) => {
+      const x = xs(i), col = b.c >= b.o ? upC : downC;
+      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1;
+      const wx = Math.round(x) + 0.5;
+      ctx.beginPath(); ctx.moveTo(wx, ys(b.h)); ctx.lineTo(wx, ys(b.l)); ctx.stroke();
+      const yo = ys(b.o), yc = ys(b.c);
+      ctx.fillRect(x - cw / 2, Math.min(yo, yc), cw, Math.max(1, Math.abs(yc - yo)));
+    });
+  } else {
+    ctx.strokeStyle = C.blue; ctx.lineWidth = 2; ctx.lineJoin = "round";
+    ctx.beginPath(); bars.forEach((b, i) => (i ? ctx.lineTo(xs(i), ys(b.c)) : ctx.moveTo(xs(i), ys(b.c)))); ctx.stroke();
+  }
   if (live) {
     ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(xLast, ys(live), 4, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = C.surface; ctx.lineWidth = 2; ctx.stroke();
@@ -203,7 +213,7 @@ function drawChart(card) {
   ctx.textAlign = "left"; ctx.fillText(fmtAxis(bars[0].t), padL, h - 4);
   ctx.textAlign = "center"; ctx.fillText(fmtAxis(bars[mid].t), xs(mid), h - 4);
   ctx.textAlign = "right"; ctx.fillText(fmtAxis(bars[n - 1].t), xLast, h - 4);
-  ctx.fillText(`+${Math.round(H * cfg.bar_seconds / 60)}m`, xEnd, h - 4); ctx.textAlign = "left";
+  if (!fine) ctx.fillText(`+${Math.round(H * cfg.bar_seconds / 60)}m`, xEnd, h - 4); ctx.textAlign = "left";
   ctx.strokeStyle = C.axis; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(Math.round(xLast) + 0.5, pT); ctx.lineTo(Math.round(xLast) + 0.5, mB); ctx.stroke(); ctx.setLineDash([]);
 
   card.geom = { padL, dx, n, bars };
@@ -263,7 +273,7 @@ function buildCards() {
     el.innerHTML = `<header><span class="sym">${esc(sym)}</span><span class="spread num"></span><span class="price num">·</span></header>
       <div class="via" title="active data source for this symbol"></div>
       <div class="signal"><span class="badge hold">■ HOLD</span><span class="size num"></span><span class="warm" hidden>warming up</span></div>
-      <canvas class="chart"></canvas>
+      <div class="chart-wrap"><canvas class="chart"></canvas><span class="res-toggle"><button data-res="5m" class="on">5m</button><button data-res="1m">1m</button></span></div>
       <div class="stats"><div><label>median</label><b class="q50">·</b></div><div><label>10-90 band</label><b class="band">·</b></div>
         <div><label>P(up)</label><b class="pup">·</b></div><div><label>score</label><b class="score">·</b></div></div>
       <div class="pmeter" title="P(up): fill right of centre is up, left is down"><i></i></div>
@@ -272,7 +282,12 @@ function buildCards() {
       <div class="strategy"></div>
       <div class="fundamentals"></div>`;
     root.appendChild(el);
-    const card = cards[sym] = { sym, el, canvas: $("canvas", el), hoverX: null };
+    const card = cards[sym] = { sym, el, canvas: $("canvas", el), hoverX: null, res: "5m" };
+    $$(".res-toggle button", el).forEach(btn => btn.onclick = () => {
+      card.res = btn.dataset.res;
+      $$(".res-toggle button", el).forEach(b => b.classList.toggle("on", b === btn));
+      drawChart(card);
+    });
     card.canvas.addEventListener("mousemove", e => { card.hoverX = e.offsetX; card.tipX = e.clientX; card.tipY = e.clientY; drawChart(card); });
     card.canvas.addEventListener("mouseleave", () => { card.hoverX = null; hideTooltip(); drawChart(card); });
   });
@@ -464,7 +479,7 @@ function renderAll() {
     renderTiles(); renderSparks(); renderGate(); renderAttn(); renderArch(); renderLog(); renderMarket(); renderWatch(); reorderCards(true);
   }
   renderNews();
-  if (document.body.dataset.view === "consoles") { renderUniverse(); renderKeys(); renderSources(); renderSignals(); renderRadar(); }
+  if (document.body.dataset.view === "consoles") { renderUniverse(); renderKeys(); renderSources(); renderSignals(); renderRadar(); renderBriefCtl(); }
   if (document.body.dataset.view === "brief") renderBrief();
 }
 
@@ -506,6 +521,45 @@ function appendTrace(ev, scroll = true) {
   if (scroll) c.times.push(Date.now() / 1000);
   if (scroll && !c.paused && atBottom) c.body.scrollTop = c.body.scrollHeight;
 }
+
+// ---- unified console: a terminal-style firehose of every trace channel ----
+const termFilters = new Set(Object.keys(CHANNELS));
+let termFollow = true;
+function appendTerm(ev) {
+  const term = $("#term"); if (!term) return;
+  const atBottom = term.scrollHeight - term.scrollTop - term.clientHeight < 60;
+  const line = document.createElement("div");
+  line.className = "tline " + (ev.lvl || "info");
+  line.dataset.ch = ev.ch;
+  line.innerHTML = `<span class="tt">${fmtTime(ev.t)}</span><span class="tch ch-${ev.ch}">${esc(ev.ch)}</span><span class="tmsg">${esc(ev.text)}</span>`;
+  if (!termFilters.has(ev.ch)) line.style.display = "none";
+  term.appendChild(line);
+  while (term.childElementCount > 2500) term.removeChild(term.firstChild);
+  if (termFollow && atBottom) term.scrollTop = term.scrollHeight;
+}
+function setTermFollow(on) {
+  termFollow = on;
+  const fb = $("#term-follow"); if (fb) { fb.classList.toggle("on", on); fb.textContent = on ? "following" : "paused"; }
+  if (on) { const t = $("#term"); if (t) t.scrollTop = t.scrollHeight; }
+}
+(function initTerm() {
+  const box = $("#term-filters"); if (!box) return;
+  box.innerHTML = Object.keys(CHANNELS).map(ch =>
+    `<button class="tchip ch-${ch} on" data-ch="${ch}" title="${esc(CHANNELS[ch])}">${ch}</button>`).join("");
+  box.addEventListener("click", e => {
+    const b = e.target.closest(".tchip"); if (!b) return;
+    const ch = b.dataset.ch;
+    termFilters.has(ch) ? termFilters.delete(ch) : termFilters.add(ch);
+    b.classList.toggle("on", termFilters.has(ch));
+    $$("#term .tline").forEach(l => { if (l.dataset.ch === ch) l.style.display = termFilters.has(ch) ? "" : "none"; });
+  });
+  $("#term-follow").addEventListener("click", () => setTermFollow(!termFollow));
+  $("#term-clear").addEventListener("click", () => { $("#term").innerHTML = ""; });
+  $("#term").addEventListener("scroll", () => {
+    const t = $("#term"); const atBottom = t.scrollHeight - t.scrollTop - t.clientHeight < 60;
+    if (atBottom !== termFollow) setTermFollow(atBottom);
+  });
+})();
 
 function buildControls() {
   const form = $("#controls");
@@ -622,6 +676,66 @@ function renderUniverse() {
   }
 }
 
+// ---- first-launch setup walkthrough (every key is optional) ----
+const ONBOARD_KEY = "flint.onboarded";
+let onbStep = 0;
+function onboardSteps() {
+  return [{ type: "intro" }, ...(state.keys || []).map(k => ({ type: "key", id: k.id })), { type: "brief" }, { type: "done" }];
+}
+function onboardStart(force) {
+  if (!force) { try { if (localStorage.getItem(ONBOARD_KEY)) return; } catch (e) { /* storage may be unavailable */ } }
+  if (!state.keys || !state.keys.length) return;      // wait until the service list is known
+  onbStep = 0; const el = $("#onboard"); if (el) { el.hidden = false; renderOnboard(); }
+}
+function onboardClose() {
+  try { localStorage.setItem(ONBOARD_KEY, "1"); } catch (e) { /* storage may be unavailable */ }
+  const el = $("#onboard"); if (el) el.hidden = true;
+}
+function onbNext() { onbStep++; if (onbStep >= onboardSteps().length) onboardClose(); else renderOnboard(); }
+function onbBack() { if (onbStep > 0) { onbStep--; renderOnboard(); } }
+function renderOnboard() {
+  const steps = onboardSteps();
+  onbStep = Math.max(0, Math.min(onbStep, steps.length - 1));
+  const step = steps[onbStep], n = steps.length, nKeys = n - 3;
+  $("#onb-progress").innerHTML = steps.map((_, i) => `<span class="onb-dot${i === onbStep ? " on" : i < onbStep ? " done" : ""}"></span>`).join("");
+  const body = $("#onboard-body");
+  if (step.type === "intro") {
+    body.innerHTML = `<h2>Welcome to flint</h2>` +
+      `<p>flint runs out of the box on free, no-key data sources. Adding an API key unlocks better or faster data for that provider \u2014 but <b>every key is optional</b>, and you can add them anytime from the Control panel.</p>` +
+      `<p class="onb-sub">Let's walk through them. Skip any you don't have.</p>` +
+      `<div class="onb-actions"><button class="onb-ghost" id="onb-skipall">Skip setup</button><button class="onb-primary" id="onb-go">Get started</button></div>`;
+  } else if (step.type === "key") {
+    const k = (state.keys || []).find(x => x.id === step.id);
+    if (!k) { onbNext(); return; }
+    const fields = k.fields.map(f =>
+      `<div class="onb-field"><label>${esc(f.label)}${f.present ? ` <span class="cur">set: ${esc(f.masked)}</span>` : ""}</label>` +
+      `<input type="text" data-svc="${esc(k.id)}" data-field="${esc(f.id)}" placeholder="${f.present ? "replace\u2026" : "paste key\u2026"}" autocomplete="off" autocapitalize="off" spellcheck="false"></div>`).join("");
+    body.innerHTML = `<div class="onb-step">key ${onbStep} of ${nKeys}</div>` +
+      `<h2>${esc(k.name)} ${k.present ? '<span class="onb-set">\u2713 set</span>' : '<span class="onb-opt">optional</span>'}</h2>` +
+      `<p>${esc(k.note || "")}</p>` +
+      `<a class="onb-link" href="${esc(safeUrl(k.url))}" target="_blank" rel="noopener noreferrer">Get a ${esc(k.name)} key \u2197</a>` +
+      `<div class="onb-fields">${fields}</div>` +
+      `<div class="onb-actions"><button class="onb-ghost" id="onb-back">Back</button><button class="onb-ghost" id="onb-skip">Skip</button><button class="onb-primary" id="onb-save">Save &amp; continue</button></div>`;
+  } else if (step.type === "brief") {
+    body.innerHTML = `<h2>Narrative brief <span class="onb-opt">local \u00b7 optional</span></h2>` +
+      `<p>flint can write a plain-English market brief with a local LLM through <b>Ollama</b> \u2014 it runs entirely on your machine, no key and no cloud. If Ollama is installed and running, the brief works automatically.</p>` +
+      `<a class="onb-link" href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">Install Ollama \u2197</a>` +
+      `<p class="onb-sub">You can switch the brief on and off anytime in the Control panel.</p>` +
+      `<div class="onb-actions"><button class="onb-ghost" id="onb-back">Back</button><button class="onb-primary" id="onb-go">Continue</button></div>`;
+  } else {
+    body.innerHTML = `<h2>You're all set</h2>` +
+      `<p>flint is already running on free sources and learning from live data. Add or change keys anytime from <b>Control panel \u2192 API keys</b>.</p>` +
+      `<div class="onb-actions"><button class="onb-primary" id="onb-go">Enter flint</button></div>`;
+  }
+  const on = (id, fn) => { const b = $("#" + id); if (b) b.onclick = fn; };
+  on("onb-go", onbNext); on("onb-skip", onbNext); on("onb-back", onbBack); on("onb-skipall", onboardClose);
+  on("onb-save", async () => {
+    const svc = step.id;
+    if (svc && $$(`#onboard input[data-svc="${svc}"]`).some(i => i.value.trim())) { await saveKey(svc); }
+    onbNext();
+  });
+}
+
 function renderKeys() {
   const box = $("#key-list");
   if (!box) return;
@@ -639,7 +753,8 @@ function renderKeys() {
 
 async function saveKey(service) {
   const values = {};
-  $$(`input[data-svc="${service}"]`).forEach(i => { if (i.value.trim()) values[i.dataset.field] = i.value.trim(); });
+  const scope = ($("#onboard") && !$("#onboard").hidden) ? "#onboard " : "";
+  $$(`${scope}input[data-svc="${service}"]`).forEach(i => { if (i.value.trim()) values[i.dataset.field] = i.value.trim(); });
   if (!Object.keys(values).length) return;
   const r = await fetch("/api/keys", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ service, values }) });
   const res = await r.json();
@@ -890,15 +1005,45 @@ function briefText(sig, m) {
   return out;
 }
 
+function briefColumn() {
+  const b = state.brief;
+  const busy = b && b.generating;
+  const regen = `<button id="brief-regen"${busy ? " disabled" : ""}>${busy ? "writing…" : "\u21bb regenerate"}</button>`;
+  const masthead = meta => `<div class="col-masthead"><span class="col-name">flint \u00b7 Markets</span><span class="col-meta">${esc(meta)}</span>${regen}</div>`;
+  if (busy && !(b && b.text)) {
+    return `<div class="brief-column">${masthead("the local desk is writing\u2026")}<div class="col-loading"><div class="spark-mini"></div>` +
+      `<p>Fast models are digesting the tape, macro, positioning and smart money; a bigger model writes the column. This runs entirely on your machine and can take a minute.</p></div></div>`;
+  }
+  if (!b || (!b.text && !b.error)) return null;                 // fall back to the templated summary
+  if (b.error && !b.text) {
+    return `<div class="brief-column">${masthead("local brief unavailable")}<div class="col-error">${esc(b.error)}</div>` +
+      `<p class="col-hint">The written brief runs on a local model via <b>Ollama</b> \u2014 nothing leaves this machine.</p></div>`;
+  }
+  const parts = (b.text || "").trim().split(/\n{2,}/);
+  const headline = parts.shift() || "Market Brief";
+  const body = parts.map(x => `<p>${esc(x).replace(/\n/g, "<br>")}</p>`).join("");
+  const models = b.models || {};
+  const when = b.t ? new Date(b.t * 1000).toLocaleString() : "";
+  const takesArr = Object.entries(b.takes || {}).filter(([, v]) => v);
+  const takes = takesArr.length
+    ? `<details class="desk-notes"><summary>desk notes${models.small ? " \u00b7 " + esc(models.small) : ""}</summary>` +
+      takesArr.map(([k, v]) => `<div class="dnote"><span class="dk">${esc(k.replace("_", " "))}</span><span class="dv">${esc(v)}</span></div>`).join("") +
+      `</details>` : "";
+  return `<div class="brief-column">${masthead(when + (models.big ? " \u00b7 written locally by " + models.big : ""))}` +
+    `<article class="col-body"><h2 class="col-head">${esc(headline)}</h2>${body}</article>${takes}` +
+    `${busy ? '<div class="col-refreshing">refreshing\u2026</div>' : ""}</div>`;
+}
+
 function renderBrief() {
   const box = $("#brief-body");
   if (!box || !state.config) return;
   const sig = state.signals || {}, m = sig.market || {};
   if (!m.t && !Object.keys(sig).length) { return; }
   const rc = m.regime === "risk-on" ? "on" : m.regime === "risk-off" ? "off" : "mixed";
-  const hero = `<div class="brief-hero"><div class="htop"><span class="regime ${rc}">${esc((m.regime || "—").toUpperCase())}</span>` +
+  const templated = `<div class="brief-hero"><div class="htop"><span class="regime ${rc}">${esc((m.regime || "—").toUpperCase())}</span>` +
     `<span class="hts">market brief · ${m.t ? fmtTime(m.t) : "scanning…"}</span></div>` +
     briefText(sig, m).map(p => `<p>${p}</p>`).join("") + `</div>`;
+  const hero = briefColumn() || templated;
 
   // gauges
   const fg = sig.fear_greed || {};
@@ -980,6 +1125,25 @@ function renderMarket() {
   const col = (title, rows) => `<div class="mov"><h5>${title}</h5>` +
     (rows || []).slice(0, 6).map(r => `<div class="row"><span class="t">${esc(r.symbol || "")}</span><span class="c ${r.chg >= 0 ? "up" : "down"}">${r.chg >= 0 ? "+" : ""}${(r.chg || 0).toFixed(1)}%</span></div>`).join("") + "</div>";
   $("#market-movers").innerHTML = col("Most active", mv.actives) + col("Gainers", mv.gainers) + col("Losers", mv.losers);
+}
+
+function renderBriefCtl() {
+  const wrap = $("#brief-toggle-wrap");
+  if (wrap && !wrap.querySelector(".switch")) {
+    const sw = document.createElement("label"); sw.className = "switch";
+    sw.innerHTML = `<input type="checkbox"><span class="track"></span><span class="thumb"></span>`;
+    sw.querySelector("input").onchange = e => control({ action: "toggle_brief", on: e.target.checked });
+    wrap.appendChild(sw);
+  }
+  if (wrap) { const inp = wrap.querySelector("input"); if (inp) inp.checked = state.controls.brief_enabled !== false; }
+  const el = $("#brief-status"); if (!el) return;
+  const b = state.brief || {}, models = b.models || {};
+  let status;
+  if (b.generating) status = `<span class="bstat-run">writing\u2026</span> local analysts + writer running`;
+  else if (b.error) status = `<span class="bstat-err">${esc(b.error)}</span>`;
+  else if (b.text) status = `last written ${b.t ? fmtTime(b.t) : ""} \u00b7 <b>${esc(models.big || "?")}</b> from <b>${esc(models.small || "?")}</b> analysts`;
+  else status = `no brief yet \u2014 click \u201cWrite now\u201d`;
+  el.innerHTML = status;
 }
 
 function renderSignals() {
@@ -1103,13 +1267,16 @@ function handle(msg) {
   switch (msg.type) {
     case "snapshot":
       Object.assign(state, { config: msg.config, status: msg.status, controls: msg.controls, prices: msg.prices, bars: msg.bars,
-        latest: msg.latest, gate: msg.gate, outcomes: msg.outcomes, metrics: msg.metrics, history: msg.history, log: msg.log, news: msg.news,
+        latest: msg.latest, gate: msg.gate, outcomes: msg.outcomes, metrics: msg.metrics, history: msg.history, log: msg.log, news: msg.news, bars_fine: msg.bars_fine || {},
         sources: msg.sources || [], news_sources: msg.news_sources || [], providers: (msg.status && msg.status.providers) || {}, classes: msg.classes || {},
-        signals: msg.signals || null, signal_providers: msg.signal_providers || [], burry: msg.burry || { enabled: true }, keys: msg.keys || [], muted: msg.muted || [], universe: msg.universe || (msg.config ? msg.config.symbols : []) });
+        signals: msg.signals || null, signal_providers: msg.signal_providers || [], brief: msg.brief || null, burry: msg.burry || { enabled: true }, keys: msg.keys || [], muted: msg.muted || [], universe: msg.universe || (msg.config ? msg.config.symbols : []) });
       buildCards(); buildConsoles(); buildControls(); applyMuted();
       Object.values(msg.trace || {}).forEach(evs => evs.forEach(ev => appendTrace(ev, false)));
       Object.values(consoles).forEach(c => { c.body.scrollTop = c.body.scrollHeight; });
+      Object.values(msg.trace || {}).flat().sort((a, b) => (a.seq || a.t) - (b.seq || b.t)).forEach(appendTerm);
+      { const t = $("#term"); if (t) t.scrollTop = t.scrollHeight; }
       renderAll();
+      onboardStart();
       break;
     case "tick":
       state.prices = msg.prices; state.status = msg.status; state.providers = msg.status.providers || state.providers; renderStatus();
@@ -1135,7 +1302,14 @@ function handle(msg) {
     case "signal_providers": state.signal_providers = msg.signal_providers; renderSignals(); break;
     case "keys": state.keys = msg.keys; renderKeys(); break;
     case "muted": state.muted = msg.muted; applyMuted(); renderUniverse(); break;
-    case "trace": appendTrace(msg.ev); break;
+    case "trace": appendTrace(msg.ev); appendTerm(msg.ev); break;
+    case "brief": state.brief = msg.brief; if (document.body.dataset.view === "brief") renderBrief(); if (document.body.dataset.view === "consoles") renderBriefCtl(); break;
+    case "fine": {
+      const cap = (state.config && state.config.fine_bars) || 240;
+      Object.entries(msg.bars).forEach(([sy, b]) => { (state.bars_fine[sy] ||= []).push(b); while (state.bars_fine[sy].length > cap) state.bars_fine[sy].shift(); });
+      if (document.body.dataset.view === "dashboard") Object.values(cards).forEach(c => { if (c.res === "1m") drawChart(c); });
+      break;
+    }
     case "news": state.news = msg.news; renderNews(); break;
     case "status": state.status = msg.status; state.providers = msg.status.providers || state.providers; renderStatus(); if (document.body.dataset.view === "dashboard") state.config.symbols.forEach(updateVia); break;
     case "controls": state.controls = msg.controls; state.metrics = msg.metrics; if (msg.sources) state.sources = msg.sources; if (msg.news_sources) state.news_sources = msg.news_sources; if (msg.signal_providers) state.signal_providers = msg.signal_providers; if (msg.controls && "burry" in msg.controls) state.burry.enabled = msg.controls.burry; syncControls(); renderSources(); renderSignals(); if (document.body.dataset.view === "dashboard") renderTiles(); break;
@@ -1162,6 +1336,7 @@ $$(".tabs button").forEach(b => b.onclick = () => {
   document.body.dataset.view = b.dataset.tab;
   try { localStorage.setItem("flint.view", b.dataset.tab); } catch (e) { /* storage may be unavailable */ }
   if (b.dataset.tab === "consoles") Object.values(consoles).forEach(c => { c.body.scrollTop = c.body.scrollHeight; });
+  if (b.dataset.tab === "console") setTermFollow(true);
   renderAll();
   if (b.dataset.tab === "consoles") setTimeout(() => { const a = document.activeElement; if (a && a.tagName === "INPUT") a.blur(); }, 0);
 });
@@ -1170,6 +1345,9 @@ try {
   if (v === "consoles") $$(".tabs button").find(b => b.dataset.tab === v).click();
 } catch (e) { /* ignore */ }
 
+document.addEventListener("click", e => { if (e.target.closest && (e.target.closest("#brief-regen") || e.target.closest("#brief-now"))) control({ action: "brief" }); });
+{ const c = $("#onb-close"); if (c) c.onclick = onboardClose; }
+{ const r = $("#run-setup"); if (r) r.onclick = () => onboardStart(true); }
 window.addEventListener("resize", () => renderAll());
 setInterval(() => {
   if (state.status && state.status.started) $("#uptime").textContent = fmtDur(Date.now() / 1000 - state.status.started);

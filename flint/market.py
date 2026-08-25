@@ -86,7 +86,8 @@ class MarketScanner:
     async def _radar(self, c):
         """Merge the three big predefined screeners into one ranked movers watchlist."""
         seen = {}
-        for scr, cat in (("most_actives", "active"), ("day_gainers", "gainer"), ("day_losers", "loser")):
+        for scr, cat in (("most_actives", "active"), ("day_gainers", "gainer"), ("day_losers", "loser"),
+                         ("small_cap_gainers", "smallcap"), ("aggressive_small_caps", "smallcap")):  # include penny/small-cap movers
             try:
                 r = await c.get("https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved",
                                 params={"scrIds": scr, "count": 100}, headers={"User-Agent": UA})

@@ -15,7 +15,7 @@ def _env(name: str, default, cast=None):
 
 
 def _symbols() -> list[str]:
-    return [s.strip().upper() for s in _env("SYMBOLS", "NVDA,AAPL,MSFT,GOOGL,AMZN,META,TSLA,AVGO,AMD,QCOM,MU,ORCL,CRM,PLTR,MSTR,COIN,SMCI,NFLX,DIS,UBER,INTC,JPM,BAC,AXP,V,MA,KO,WMT,COST,LLY,CVX,XOM,SPY,QQQ,XAU-USD,XAG-USD").split(",") if s.strip()]
+    return [s.strip().upper() for s in _env("SYMBOLS", "NVDA,AAPL,MSFT,GOOGL,AMZN,META,TSLA,AVGO,AMD,QCOM,MU,ORCL,CRM,PLTR,MSTR,COIN,SMCI,NFLX,DIS,UBER,INTC,JPM,BAC,AXP,V,MA,KO,WMT,COST,LLY,CVX,XOM,SPY,QQQ").split(",") if s.strip()]
 
 
 def _eodhd_key() -> str:
@@ -128,8 +128,12 @@ class Config:
     ibkr_client_id: int = _env("IBKR_CLIENT_ID", 17)          # any unused API client id
     ibkr_market_data_type: int = _env("IBKR_MARKET_DATA_TYPE", 1)  # 1 live, 2 frozen, 3 delayed, 4 delayed-frozen (auto-falls back)
     anthropic_key: str = field(default_factory=_anthropic_key)  # optional Claude key for the narrative brief
-    brief_model: str = _env("BRIEF_MODEL", "claude-haiku-4-5-20251001")
-    brief_minutes: float = _env("BRIEF_MINUTES", 5.0)          # cache the narrative brief this long
+    ollama_host: str = _env("OLLAMA_HOST", "http://localhost:11434")   # local LLM runtime; the brief runs fully on-device
+    brief_model: str = _env("BRIEF_MODEL", "qwen3.5:latest")          # local writer model (bump to qwen3.6:27b / deepseek-r1:32b for more quality, much slower)
+    brief_small_model: str = _env("BRIEF_SMALL_MODEL", "qwen3.5:latest")  # fast local analysts that pre-digest each data slice
+    brief_minutes: float = _env("BRIEF_MINUTES", 15.0)         # auto-refresh cadence for the narrative brief
+    brief_timeout: float = _env("BRIEF_TIMEOUT", 1800.0)       # max seconds for the writer model (local, can be slow)
+    brief_enabled: bool = _env("BRIEF_ENABLED", True, cast=lambda v: v.lower() in ("1", "true", "yes", "on"))  # local LLM brief on/off
     av_rate_seconds: float = _env("AV_RATE_SECONDS", 1.0)     # global floor between ANY two Alpha Vantage calls
     bar_seconds: float = _env("BAR_SECONDS", 300.0)   # 5-minute bars (FMP provides reliable 5-min history)
     backfill_seconds: float = _env("BACKFILL_SECONDS", 432000.0)  # ~5 trading days: enough real bars to fill the model window + training
@@ -201,6 +205,8 @@ class Config:
     port: int = _env("PORT", 8000)
     tick_hz: float = _env("TICK_HZ", 2.0)
     chart_bars: int = _env("CHART_BARS", 160)   # ~13h of trading at 5-min bars
+    fine_seconds: float = _env("FINE_SECONDS", 60.0)   # display-only fine bars from the live tick feed (recent high-res)
+    fine_bars: int = _env("FINE_BARS", 240)            # fine bars kept (240 x 60s = 4h of 1-min detail)
     log_size: int = 60
 
     # Persistence

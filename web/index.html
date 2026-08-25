@@ -23,6 +23,7 @@
   <nav class="tabs">
     <button data-tab="brief">Brief</button>
     <button data-tab="dashboard" class="active">Dashboard</button>
+    <button data-tab="console">Console</button>
     <button data-tab="consoles">Control panel</button>
   </nav>
 </header>
@@ -76,16 +77,18 @@
         <div class="gate" id="gate"></div>
       </div>
       <div class="block">
-        <h3>Cross-asset attention <small>row attends to column</small></h3>
-        <div class="attn" id="attn"></div>
-      </div>
-      <div class="block">
         <h3>Model</h3>
         <div class="arch" id="arch"></div>
       </div>
       <div class="block wide">
         <h3>Resolved suggestions</h3>
         <ul class="log" id="log"></ul>
+      </div>
+    </div>
+    <div class="row">
+      <div class="block full">
+        <h3>Cross-asset attention <small>each row's weights across the columns it attends to</small></h3>
+        <div class="attn" id="attn"></div>
       </div>
     </div>
   </section>
@@ -112,7 +115,7 @@
     <div class="uni-list" id="uni-list"></div>
   </section>
   <section class="panel keys">
-    <div class="sources-head"><h3>API keys <small>stored locally in gitignored files, never shown in full</small></h3></div>
+    <div class="sources-head"><h3>API keys <small>stored locally in gitignored files, never shown in full</small></h3><button type="button" id="run-setup">Setup walkthrough</button></div>
     <div class="key-list" id="key-list"></div>
   </section>
   <section class="panel sources">
@@ -139,6 +142,14 @@
       <div class="gurus" id="guru-list"></div>
     </div>
   </section>
+  <section class="panel brief-ctl">
+    <div class="sources-head">
+      <h3>Narrative brief <small>written on-device by local models via Ollama — nothing leaves the machine</small></h3>
+      <label class="overlay-toggle" id="brief-toggle-wrap">auto-write</label>
+      <button type="button" id="brief-now">Write now</button>
+    </div>
+    <div class="brief-status" id="brief-status"></div>
+  </section>
   <section class="panel radar">
     <div class="radar-head">
       <h3>Movers radar <small id="radar-meta">top market movers</small></h3>
@@ -164,6 +175,22 @@
     <div class="loading-title" id="loading-title">Striking flint…</div>
     <div class="loading-sub" id="loading-sub">warming up</div>
     <div class="loading-bar"><i id="loading-bar-i"></i></div>
+  </div>
+</div>
+<main id="console" class="view">
+  <div class="term-head">
+    <span class="term-title">flint console</span>
+    <span class="term-filters" id="term-filters"></span>
+    <button id="term-follow" class="on">following</button>
+    <button id="term-clear">clear</button>
+  </div>
+  <div id="term" class="term"></div>
+</main>
+<div id="onboard" class="onboard" hidden>
+  <div class="onb-card">
+    <button id="onb-close" class="onb-close" title="Skip setup">✕</button>
+    <div class="onb-progress" id="onb-progress"></div>
+    <div class="onb-body" id="onboard-body"></div>
   </div>
 </div>
 <div class="tooltip" id="tooltip"></div>

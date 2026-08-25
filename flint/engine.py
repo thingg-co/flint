@@ -149,7 +149,9 @@ class Engine:
         self.started = time.time()
         self.learning_enabled = True
         self.burry_enabled = cfg.burry_enabled
+        self.brief_enabled = cfg.brief_enabled
         self.news: dict = {"t": None, "method": None, "status": {}, "headlines": [], "per_asset": {}, "ideas": [], "new": 0}
+        self.brief: dict = {"text": None, "takes": {}, "models": {}, "t": None, "generating": False, "error": None}
         self.autotune_info = None
         self._skimming = False
         self._gathering = False
@@ -191,6 +193,8 @@ class Engine:
         self.prices = {s: {"price": None, "bid": None, "ask": None, "ts": None} for s in self.symbols}
         self.tick_counts = {s: 0 for s in self.symbols}
         self.bars: dict[str, deque[Bar]] = {s: deque(maxlen=cfg.chart_bars) for s in self.symbols}
+        self.fine_builder = BarBuilder(self.symbols, cfg.fine_seconds)                       # display-only high-res
+        self.fine_bars: dict[str, deque[Bar]] = {s: deque(maxlen=cfg.fine_bars) for s in self.symbols}
         self.bar_index = 0
         self.pending: deque[Pending] = deque()
         self.latest: dict[str, dict] = {}
@@ -348,7 +352,7 @@ class Engine:
                 "pending": len(self.pending), "learning": self.learning_enabled, "subscribers": len(self.subs)}
 
     def controls(self) -> dict:
-        return {k: getattr(self.cfg, k) for k in TUNABLE} | {"learning": self.learning_enabled, "burry": self.burry_enabled}
+        return {k: getattr(self.cfg, k) for k in TUNABLE} | {"learning": self.learning_enabled, "burry": self.burry_enabled, "brief_enabled": self.brief_enabled}
 
     def _key_values(self) -> dict:
         cfg = self.cfg
@@ -448,6 +452,7 @@ class Engine:
             "universe": self.all_symbols,
             "prices": self.prices,
             "bars": {s: [b.to_json() for b in self.bars[s]] for s in self.symbols},
+            "bars_fine": {s: [b.to_json() for b in self.fine_bars[s]] for s in self.symbols},
             "latest": self.latest,
             "gate": self.gate,
             "outcomes": {s: list(self.outcomes[s]) for s in self.symbols},
@@ -457,6 +462,7 @@ class Engine:
             "trace": self.trace.recent(),
             "operator": self.operator_state(),
             "news": self.news,
+            "brief": self.brief,
         }
 
     def snapshot_json(self) -> str:
@@ -522,7 +528,7 @@ class Engine:
         self.trace.emit("system", "live: streaming ticks, forecasting every bar, learning as labels mature")
         self.sources.start()
         self._tasks = [asyncio.create_task(c) for c in
-                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop())]
+                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop(), self._brief_loop())]
         await asyncio.gather(*self._tasks)
 
     def _ingest_history(self, ticks: list[Tick]) -> None:
@@ -583,6 +589,7 @@ class Engine:
     def _on_live_tick(self, tick: Tick) -> None:
         """Called by the source manager with the active provider's tick for a symbol."""
         self.builder.add(tick)
+        self.fine_builder.add(tick)
         self._on_tick(tick, live=True)
 
     def _on_provider_change(self, sym: str, prev, active) -> None:
@@ -608,8 +615,16 @@ class Engine:
     async def _clock(self) -> None:
         while True:
             await asyncio.sleep(0.25)
-            for row in self.builder.roll(time.time()):
+            now = time.time()
+            for row in self.builder.roll(now):
                 await self._process_row(row)
+            upd = {}
+            for row in self.fine_builder.roll(now):
+                for s in self.symbols:
+                    self.fine_bars[s].append(row[s])
+                    upd[s] = row[s].to_json()
+            if upd:
+                self._publish({"type": "fine", "bars": upd})
 
     async def _ticker(self) -> None:
         period = 1.0 / max(self.cfg.tick_hz, 0.2)
@@ -1022,6 +1037,81 @@ class Engine:
 
     # Controls ---------------------------------------------------------------------------
 
+    def _brief_slices(self) -> dict:
+        """Assemble flint's current state into compact per-topic data slices for the analysts."""
+        sig = self.signals_state or {}
+        m = sig.get("market", {}) or {}
+        met = self.metrics
+        b = self.base
+        stance = "trusted" if met.trusted else f"warming up ({met.live_labels}/{self.cfg.min_labels} live labels)"
+
+        def line(v):
+            q = v.get("q") or [0, 0, 0, 0, 0]
+            return (f"{b.get(v['symbol'], v['symbol'])} {v.get('action')} score {v.get('score', 0):+.2f} "
+                    f"q50 {q[2]:+.0f}bps P(up) {v.get('p_up', 0):.2f} band[{q[0]:+.0f},{q[4]:+.0f}]")
+        calls = sorted((v for v in self.latest.values() if v.get("q")), key=lambda v: -abs(v.get("score", 0)))
+        tape = f"model stance: {stance}; regime {m.get('regime', '?')}\n" + "\n".join(line(v) for v in calls[:10])
+
+        secs = m.get("sectors") or []
+        lead = ", ".join(f"{s['name']} {s['chg']:+.1f}%" for s in secs[:2])
+        lag = ", ".join(f"{s['name']} {s['chg']:+.1f}%" for s in secs[-2:])
+        mv = m.get("movers", {}) or {}
+        g = ", ".join(f"{x['symbol']} {x['chg']:+.1f}%" for x in (mv.get("gainers") or [])[:5])
+        lo = ", ".join(f"{x['symbol']} {x['chg']:+.1f}%" for x in (mv.get("losers") or [])[:5])
+        macro = (f"breadth {round((m.get('breadth') or 0) * 100)}% of {m.get('breadth_n', '?')} ETFs up; "
+                 f"VIX {m.get('vix', '?')}; regime {m.get('regime', '?')}\n"
+                 f"sector leaders: {lead}; laggards: {lag}\ntop gainers: {g}\ntop losers: {lo}")
+
+        cr = sig.get("crowding", {}) or {}
+        hot = ", ".join(f"{b.get(s, s)} {v:+.2f}" for s, v in sorted(cr.items(), key=lambda kv: -kv[1])[:3])
+        wsb = ", ".join(f"{b.get(s, s)} {n} mentions" for n, s in
+                        sorted(((pa.get("mentions", 0), s) for s, pa in (sig.get("per_asset") or {}).items()), reverse=True)[:3] if n)
+        positioning = f"most crowded: {hot or 'n/a'}\ntop retail attention: {wsb or 'n/a'}"
+
+        gt = sig.get("guru_tilt", {}) or {}
+        bull = ", ".join(f"{b.get(s, s)} +{v:.2f}" for s, v in sorted(gt.items(), key=lambda kv: -kv[1])[:4] if v > 0.02)
+        bear = ", ".join(f"{b.get(s, s)} {v:.2f}" for s, v in sorted(gt.items(), key=lambda kv: kv[1])[:4] if v < -0.02)
+        council = sig.get("council", {}) or {}
+        lean = ", ".join(f"{k} {v:+.2f}" for k, v in sorted(council.items(), key=lambda kv: -abs(kv[1]))[:4])
+        smart = f"bullish tilts: {bull or 'none'}\nbearish tilts: {bear or 'none'}\npanel bias: {lean or 'n/a'}"
+
+        stats = (f"{len(self.symbols)} US equities tracked; model {stance}; regime {m.get('regime', '?')}; "
+                 f"breadth {round((m.get('breadth') or 0) * 100)}%; VIX {m.get('vix', '?')}")
+        return {"tape": tape, "macro": macro, "positioning": positioning, "smart_money": smart, "stats": stats}
+
+    async def generate_brief(self) -> None:
+        if self.brief.get("generating"):
+            return
+        self.brief = {**self.brief, "generating": True, "error": None}
+        self._publish({"type": "brief", "brief": self.brief})
+        say = lambda t: self.trace.emit("system", "brief: " + t)  # noqa: E731
+        try:
+            from .brief import write_brief
+            res = await write_brief(self.cfg, self._brief_slices(), say)
+            self.brief = {"text": None, "takes": {}, "models": {}, "generating": False, **res}
+            if res.get("error"):
+                self.trace.emit("system", "brief unavailable: " + res["error"], "warn")
+            else:
+                n = sum(1 for t in res.get("takes", {}).values() if t)
+                self.trace.emit("system", f"brief written by {res['models']['big']} from {n} local desk notes", "act")
+        except Exception as ex:  # noqa: BLE001
+            self.brief = {**self.brief, "generating": False, "error": f"{type(ex).__name__}: {str(ex)[:120]}"}
+            self.trace.emit("system", "brief failed: " + str(ex)[:120], "error")
+        self._publish({"type": "brief", "brief": self.brief})
+
+    async def _brief_loop(self) -> None:
+        while True:
+            # only write when the model is live: during backfill/warmup the local LLM and the
+            # DNN contend for the GPU and both crawl to a halt
+            if self.brief_enabled and self.status == "live" and (self.signals_state or {}).get("market"):
+                try:
+                    await self.generate_brief()
+                except Exception:  # noqa: BLE001
+                    pass
+                await asyncio.sleep(max(2.0, self.cfg.brief_minutes) * 60)
+            else:
+                await asyncio.sleep(15)
+
     def apply_control(self, payload: dict) -> dict:
         changed = {}
         for k, v in (payload.get("set") or {}).items():
@@ -1078,6 +1168,13 @@ class Engine:
             self._publish({"type": "signal_providers", "signal_providers": self.signals.status()})
         elif action == "refresh_signals":
             asyncio.get_running_loop().create_task(self.gather_signals())
+        elif action == "brief":
+            asyncio.get_running_loop().create_task(self.generate_brief())
+        elif action == "toggle_brief":
+            self.brief_enabled = bool(payload.get("on"))
+            self.trace.emit("system", f"local LLM brief {'enabled' if self.brief_enabled else 'disabled'}", "act")
+            if self.brief_enabled and not self.brief.get("text"):
+                asyncio.get_running_loop().create_task(self.generate_brief())
         elif action == "burry":
             self.burry_enabled = bool(payload.get("on"))
             self.trace.emit("policy", f"Burry/Buffett overlay {'enabled' if self.burry_enabled else 'disabled'}", "act")

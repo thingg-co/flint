@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -130,30 +131,46 @@ class OnlineLearner:
                 "shape": tuple(self.rx.shape[1:]),
                 "symbols": list(self.cfg.symbols),
                 "extra": extra or {},
-            }, d / "model.pt")
-            np.savez_compressed(d / "replay.npz", x=self.rx[:self.size], y=self.ry[:self.size], ptr=self.ptr)
+            }, d / "model.pt.tmp")
+            os.replace(d / "model.pt.tmp", d / "model.pt")                       # atomic: never leave a half-written file
+            np.savez_compressed(d / "replay.tmp.npz", x=self.rx[:self.size], y=self.ry[:self.size], ptr=self.ptr)
+            os.replace(d / "replay.tmp.npz", d / "replay.npz")
 
     def load(self, directory: str | Path) -> dict | None:
         d = Path(directory)
         f = d / "model.pt"
         if not f.exists():
             return None
-        ck = torch.load(f, map_location="cpu", weights_only=False)
+        try:
+            ck = torch.load(f, map_location="cpu", weights_only=False)
+        except Exception as e:  # noqa: BLE001 -- a corrupt/partial checkpoint must never crash startup
+            log.warning("could not read checkpoint %s (%s); starting fresh", f, e)
+            return None
         if tuple(ck.get("shape", ())) != tuple(self.rx.shape[1:]) or ck.get("symbols") != list(self.cfg.symbols):
             log.warning("checkpoint at %s does not match the current config; starting fresh", d)
             return None
-        with self.lock:
-            self.model.load_state_dict(ck["model"])
-            self.opt.load_state_dict(ck["opt"])
-            self.steps = int(ck["steps"])
-            self.labels = int(ck["labels"])
-            self.loss_ema, self.pinball_ema, self.bce_ema = ck["emas"]
-            r = d / "replay.npz"
-            if r.exists():
-                z = np.load(r)
-                n = len(z["y"])
-                self.rx[:n] = z["x"]
-                self.ry[:n] = z["y"]
-                self.size = n
-                self.ptr = int(z["ptr"]) % self.rx.shape[0] if n == self.rx.shape[0] else n % self.rx.shape[0]
+        try:
+            with self.lock:
+                self.model.load_state_dict(ck["model"])
+                self.opt.load_state_dict(ck["opt"])
+                self.steps = int(ck["steps"])
+                self.labels = int(ck["labels"])
+                self.loss_ema, self.pinball_ema, self.bce_ema = ck["emas"]
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not restore model state (%s); starting fresh", e)
+            return None
+        r = d / "replay.npz"
+        if r.exists():
+            try:
+                with self.lock:
+                    z = np.load(r)
+                    n = len(z["y"])
+                    self.rx[:n] = z["x"]
+                    self.ry[:n] = z["y"]
+                    self.size = n
+                    self.ptr = int(z["ptr"]) % self.rx.shape[0] if n == self.rx.shape[0] else n % self.rx.shape[0]
+            except Exception as e:  # noqa: BLE001 -- keep the model, just drop an unreadable replay buffer
+                log.warning("replay buffer unreadable (%s); keeping model with an empty buffer", e)
+                self.size = 0
+                self.ptr = 0
         return ck.get("extra", {})

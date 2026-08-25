@@ -556,7 +556,7 @@ class FinnhubSource(Source):
     name = "Finnhub"
     kind = "equity"
     mechanism = "websocket"
-    priority = 35
+    priority = 28              # above FMP (33): real-time trade ws beats 20s polling for live prices
     classes = ("equity",)
     fresh_after = 150.0
     WS = "wss://ws.finnhub.io"
