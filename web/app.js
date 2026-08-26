@@ -132,7 +132,7 @@ function drawChart(card) {
   let lo = Math.min(...bars.map(b => b.l)), hi = Math.max(...bars.map(b => b.h));
   if (live) { lo = Math.min(lo, live); hi = Math.max(hi, live); }
   let fan = null;
-  if (!fine && L && L.q) { fan = L.q.map(q => L.price * Math.exp(q / 1e4)); lo = Math.min(lo, fan[0]); hi = Math.max(hi, fan[4]); }
+  if (!fine && L && L.q) { fan = L.q.map(q => L.price * Math.exp(q / 1e4)); }   // fan drawn but clipped; wide model bands must not crush the candles
   const span = (hi - lo) || closes[n - 1] * 1e-4;
   lo -= span * 0.06; hi += span * 0.06;
   const ys = v => pT + (hi - v) / (hi - lo) * (pB - pT);
@@ -151,12 +151,16 @@ function drawChart(card) {
   const xLast = xs(n - 1), xEnd = padL + plotW;
   const anchor = L ? L.price : closes[n - 1];
   if (fan) {
+    ctx.save();
+    ctx.beginPath(); ctx.rect(padL, pT, w - padL - padR, pB - pT); ctx.clip();   // keep the fan inside the price pane
     const wedge = (a, b, color) => { ctx.beginPath(); ctx.moveTo(xLast, ys(anchor)); ctx.lineTo(xEnd, ys(a)); ctx.lineTo(xEnd, ys(b)); ctx.closePath(); ctx.fillStyle = color; ctx.fill(); };
     wedge(fan[0], fan[4], "rgba(57,135,229,0.16)");
     wedge(fan[1], fan[3], "rgba(57,135,229,0.30)");
     ctx.setLineDash([4, 3]); ctx.strokeStyle = C.blue; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(xLast, ys(anchor)); ctx.lineTo(xEnd, ys(fan[2])); ctx.stroke(); ctx.setLineDash([]);
-    ctx.fillStyle = C.ink2; ctx.textAlign = "right"; ctx.fillText(`${fmtBps(L.q[2])} bps`, xEnd - 2, ys(fan[2]) - 9); ctx.textAlign = "left";
+    ctx.restore();
+    const my = Math.max(pT + 8, Math.min(pB - 2, ys(fan[2]) - 9));   // keep the median label on-pane
+    ctx.fillStyle = C.ink2; ctx.textAlign = "right"; ctx.fillText(`${fmtBps(L.q[2])} bps`, xEnd - 2, my); ctx.textAlign = "left";
   }
 
   // candlesticks -- but spot feeds (e.g. metals via GoldAPI) have no intrabar OHLC, so their
