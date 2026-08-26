@@ -436,8 +436,8 @@ function renderLog() {
 }
 
 function updateETClock() {
-  const el = $("#et-clock"); if (!el) return;
-  el.textContent = new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }) + " ET";
+  const el = $("#et-seg"); if (!el) return;
+  el.textContent = new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" });
 }
 
 function marketState() {
@@ -446,8 +446,8 @@ function marketState() {
   if (ms && ms.isOpen != null) {
     if (ms.holiday) return { label: ms.holiday + " \u00b7 closed", cls: "closed" };
     if (ms.isOpen) return { label: "market open", cls: "live" };
-    if (ms.session === "pre-market") return { label: "pre-market", cls: "closed" };
-    if (ms.session === "post-market") return { label: "after-hours", cls: "closed" };
+    if (ms.session === "pre-market") return { label: "pre-market", cls: "ext" };
+    if (ms.session === "post-market") return { label: "after-hours", cls: "ext" };
     return { label: "market closed", cls: "closed" };
   }
   const et = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
@@ -455,8 +455,8 @@ function marketState() {
   if (day === 0 || day === 6) return { label: "market closed", cls: "closed" };
   const m = et.getHours() * 60 + et.getMinutes();
   if (m >= 570 && m < 960) return { label: "market open", cls: "live" };      // 9:30-16:00
-  if (m >= 240 && m < 570) return { label: "pre-market", cls: "closed" };     // 4:00-9:30
-  if (m >= 960 && m < 1200) return { label: "after-hours", cls: "closed" };   // 16:00-20:00
+  if (m >= 240 && m < 570) return { label: "pre-market", cls: "ext" };        // 4:00-9:30
+  if (m >= 960 && m < 1200) return { label: "after-hours", cls: "ext" };      // 16:00-20:00
   return { label: "market closed", cls: "closed" };
 }
 
