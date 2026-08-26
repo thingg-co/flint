@@ -422,8 +422,15 @@ function renderLog() {
 }
 
 function marketState() {
-  // US equity session in Eastern time (ignores holidays); tick freshness is unreliable
-  // off-hours because quote heartbeats keep updating the price.
+  // Prefer Finnhub's holiday-aware status; fall back to the Eastern clock if it hasn't loaded.
+  const ms = (state.status || {}).market_status;
+  if (ms && ms.isOpen != null) {
+    if (ms.holiday) return { label: ms.holiday + " \u00b7 closed", cls: "closed" };
+    if (ms.isOpen) return { label: "market open", cls: "live" };
+    if (ms.session === "pre-market") return { label: "pre-market", cls: "closed" };
+    if (ms.session === "post-market") return { label: "after-hours", cls: "closed" };
+    return { label: "market closed", cls: "closed" };
+  }
   const et = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
   const day = et.getDay();
   if (day === 0 || day === 6) return { label: "market closed", cls: "closed" };

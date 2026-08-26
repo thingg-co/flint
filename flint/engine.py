@@ -6,6 +6,8 @@ import json
 import logging
 import math
 import re
+
+import httpx
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -151,6 +153,7 @@ class Engine:
         self.burry_enabled = cfg.burry_enabled
         self.brief_enabled = cfg.brief_enabled
         self.news: dict = {"t": None, "method": None, "status": {}, "headlines": [], "per_asset": {}, "ideas": [], "new": 0}
+        self.market_status: dict = {"isOpen": None, "session": None, "holiday": None, "t": None}  # from Finnhub, holiday-aware
         self.brief: dict = {"text": None, "takes": {}, "models": {}, "t": None, "generating": False, "error": None}
         self.autotune_info = None
         self._skimming = False
@@ -349,7 +352,8 @@ class Engine:
         active = sorted({p for p in providers.values() if p})
         return {"phase": self.status, "feed": ", ".join(active) or "none", "providers": providers,
                 "started": self.started, "now": time.time(), "bar_index": self.bar_index,
-                "pending": len(self.pending), "learning": self.learning_enabled, "subscribers": len(self.subs)}
+                "pending": len(self.pending), "learning": self.learning_enabled, "subscribers": len(self.subs),
+                "market_status": self.market_status}
 
     def controls(self) -> dict:
         return {k: getattr(self.cfg, k) for k in TUNABLE} | {"learning": self.learning_enabled, "burry": self.burry_enabled, "brief_enabled": self.brief_enabled}
@@ -528,7 +532,7 @@ class Engine:
         self.trace.emit("system", "live: streaming ticks, forecasting every bar, learning as labels mature")
         self.sources.start()
         self._tasks = [asyncio.create_task(c) for c in
-                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop(), self._brief_loop())]
+                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop(), self._brief_loop(), self._market_status_loop())]
         await asyncio.gather(*self._tasks)
 
     def _ingest_history(self, ticks: list[Tick]) -> None:
@@ -1101,6 +1105,26 @@ class Engine:
             self.brief = {**self.brief, "generating": False, "error": f"{type(ex).__name__}: {str(ex)[:120]}"}
             self.trace.emit("system", "brief failed: " + str(ex)[:120], "error")
         self._publish({"type": "brief", "brief": self.brief})
+
+    async def _market_status_loop(self) -> None:
+        """Poll Finnhub for the holiday-aware US market status (open/pre/post/closed)."""
+        if not self.cfg.finnhub_key:
+            return
+        while True:
+            try:
+                async with httpx.AsyncClient(timeout=10) as c:
+                    r = await c.get("https://finnhub.io/api/v1/stock/market-status",
+                                    params={"exchange": "US", "token": self.cfg.finnhub_key})
+                    if r.status_code == 200:
+                        d = r.json()
+                        ms = {"isOpen": bool(d.get("isOpen")), "session": d.get("session"),
+                              "holiday": d.get("holiday"), "t": d.get("t")}
+                        if ms != self.market_status:
+                            self.market_status = ms
+                            self._publish({"type": "status", "status": self.status_dict()})
+            except Exception:  # noqa: BLE001
+                pass
+            await asyncio.sleep(60)
 
     async def _brief_loop(self) -> None:
         while True:

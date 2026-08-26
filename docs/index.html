@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>flint — a market model that keeps learning</title>
+<meta name="description" content="flint is a self-hosted neural network that reads live market data, forecasts the next hour for a basket of stocks, and shows its reasoning as it goes. Runs on your machine; your keys stay with you.">
+<meta property="og:title" content="flint">
+<meta property="og:description" content="A self-hosted, continuously learning market model with a live dashboard, an on-device LLM brief, and an investor council overlay.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>">
+<style>
+  :root{
+    --bg:#0b0b0a; --surface:#151513; --surface2:#1c1c19; --border:#2b2b27;
+    --ink:#f6f5f0; --ink2:#c6c5ba; --muted:#8c8a81;
+    --blue:#3987e5; --green:#26a269; --red:#e0574b; --fire:#ff7a1a; --gold:#ffd479;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --max:1080px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink2);font-family:var(--sans);line-height:1.6;font-size:16px;
+    -webkit-font-smoothing:antialiased}
+  a{color:var(--blue);text-decoration:none}
+  a:hover{text-decoration:underline}
+  h1,h2,h3{color:var(--ink);line-height:1.15;margin:0 0 .5em}
+  .wrap{max-width:var(--max);margin:0 auto;padding:0 24px}
+  .mono{font-family:var(--mono)}
+
+  /* nav */
+  header.nav{position:sticky;top:0;z-index:10;background:rgba(11,11,10,.82);backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--border)}
+  .nav .wrap{display:flex;align-items:center;gap:18px;height:60px}
+  .brand{font-weight:700;font-size:19px;color:var(--ink);display:flex;align-items:center;gap:8px}
+  .brand .fire{filter:drop-shadow(0 0 6px rgba(255,122,26,.5))}
+  .nav nav{margin-left:auto;display:flex;gap:22px;align-items:center;font-size:14px}
+  .nav nav a{color:var(--ink2)}
+  .nav .gh{border:1px solid var(--border);border-radius:8px;padding:7px 13px;color:var(--ink)}
+  .nav .gh:hover{border-color:var(--ink2);text-decoration:none}
+  @media(max-width:640px){.nav nav a.hide-sm{display:none}}
+
+  /* hero */
+  .hero{position:relative;overflow:hidden;border-bottom:1px solid var(--border)}
+  .hero::before{content:"";position:absolute;inset:-40% 0 auto 0;height:520px;
+    background:radial-gradient(60% 100% at 50% 0,rgba(255,122,26,.16),transparent 70%);pointer-events:none}
+  .hero .wrap{position:relative;padding:76px 24px 40px;text-align:center}
+  .eyebrow{font-family:var(--mono);font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--fire);margin-bottom:18px}
+  .hero h1{font-size:clamp(34px,6vw,56px);letter-spacing:-.02em}
+  .hero p.lede{font-size:clamp(17px,2.4vw,20px);max-width:680px;margin:18px auto 0;color:var(--ink2)}
+  .cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin:30px 0 8px}
+  .btn{display:inline-block;border-radius:10px;padding:12px 22px;font-weight:600;font-size:15px}
+  .btn.primary{background:var(--blue);color:#fff;border:1px solid var(--blue)}
+  .btn.primary:hover{filter:brightness(1.08);text-decoration:none}
+  .btn.ghost{border:1px solid var(--border);color:var(--ink)}
+  .btn.ghost:hover{border-color:var(--ink2);text-decoration:none}
+  .hero-note{font-size:13px;color:var(--muted);margin-top:6px}
+  .shot{margin-top:44px;border:1px solid var(--border);border-radius:14px;overflow:hidden;
+    box-shadow:0 24px 70px rgba(0,0,0,.55);background:var(--surface)}
+  .shot img{display:block;width:100%;height:auto}
+  .shot .cap{font-size:12.5px;color:var(--muted);padding:9px 14px;border-top:1px solid var(--border);font-family:var(--mono)}
+
+  section{padding:64px 0}
+  section h2{font-size:clamp(24px,3.4vw,32px);text-align:center;letter-spacing:-.01em}
+  section .sub{text-align:center;color:var(--muted);max-width:620px;margin:10px auto 0}
+
+  /* features */
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-top:40px}
+  .feat{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px}
+  .feat:hover{border-color:#3a3a34}
+  .feat .ic{font-size:22px;margin-bottom:12px}
+  .feat h3{font-size:17px;margin-bottom:6px}
+  .feat p{font-size:14.5px;margin:0;color:var(--ink2)}
+
+  /* how */
+  .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:40px;counter-reset:s}
+  .step{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;position:relative}
+  .step::before{counter-increment:s;content:counter(s);font-family:var(--mono);font-size:13px;font-weight:700;
+    color:var(--fire);border:1px solid var(--border);border-radius:8px;width:30px;height:30px;display:flex;
+    align-items:center;justify-content:center;margin-bottom:14px}
+  .step h3{font-size:16px}
+  .step p{font-size:14.5px;margin:0}
+
+  /* showcase */
+  .showcase{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:40px}
+  @media(max-width:760px){.showcase{grid-template-columns:1fr}}
+  .showcase figure{margin:0;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+  .showcase img{display:block;width:100%;height:auto}
+  .showcase figcaption{font-size:13px;color:var(--muted);padding:10px 14px;border-top:1px solid var(--border)}
+
+  /* quickstart */
+  .qs{background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:26px;max-width:720px;margin:34px auto 0}
+  pre{background:#0d0d0c;border:1px solid var(--border);border-radius:10px;padding:16px 18px;overflow-x:auto;margin:0}
+  code{font-family:var(--mono);font-size:13.5px;color:var(--ink)}
+  pre .c{color:var(--muted)}
+  pre .p{color:var(--fire)}
+  .qs p{font-size:14.5px;margin:16px 0 0;color:var(--ink2)}
+
+  /* disclaimer + footer */
+  .note{max-width:720px;margin:0 auto;border:1px solid var(--border);border-left:3px solid var(--gold);
+    border-radius:8px;padding:16px 18px;background:var(--surface);font-size:14px;color:var(--ink2)}
+  footer{border-top:1px solid var(--border);padding:30px 0;color:var(--muted);font-size:14px}
+  footer .wrap{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+  footer .brand{font-size:16px}
+  footer a{margin-left:auto}
+  .up{color:var(--green)} .down{color:var(--red)}
+</style>
+</head>
+<body>
+<header class="nav">
+  <div class="wrap">
+    <span class="brand"><span class="fire">🔥</span> flint</span>
+    <nav>
+      <a class="hide-sm" href="#features">Features</a>
+      <a class="hide-sm" href="#how">How it works</a>
+      <a class="hide-sm" href="#quickstart">Quickstart</a>
+      <a class="gh" href="https://github.com/thingg-co/flint">GitHub ↗</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="wrap">
+    <div class="eyebrow">self-hosted · continuously learning</div>
+    <h1>A market model that keeps learning.</h1>
+    <p class="lede">flint is a self-hosted neural network that reads live market data, forecasts the next
+      hour for a basket of stocks, and shows its reasoning as it goes. A local model even writes the daily
+      brief. It runs on your machine and your keys stay with you.</p>
+    <div class="cta">
+      <a class="btn primary" href="#quickstart">Get started</a>
+      <a class="btn ghost" href="https://github.com/thingg-co/flint">View on GitHub</a>
+    </div>
+    <div class="hero-note">Python · PyTorch · FastAPI · a no-build dashboard · optional local LLM via Ollama</div>
+    <div class="shot">
+      <img src="img/dashboard.png" alt="The flint dashboard: candlestick cards with forecasts, a whole-market panel, and live ticks">
+      <div class="cap">the live dashboard — candles, MACD, a forecast fan, and cards that reorder by urgency</div>
+    </div>
+  </div>
+</div>
+
+<section id="features">
+  <div class="wrap">
+    <h2>What it does</h2>
+    <p class="sub">A forecasting model, a trading dashboard, and a window into the model's head, in one thing you run yourself.</p>
+    <div class="grid">
+      <div class="feat"><div class="ic">🧠</div><h3>Always learning</h3><p>It trains online as its forecasts mature, and its calibration keeps it honest. When it has no real edge it holds, instead of trading noise.</p></div>
+      <div class="feat"><div class="ic">📈</div><h3>Live charts</h3><p>Every stock gets a candlestick chart with MACD and a forecast fan. Cards rank by urgency and reorder in real time, and any chart flips between 5 and 1 minute bars.</p></div>
+      <div class="feat"><div class="ic">🔦</div><h3>See it think</h3><p>A control panel streams the model's consciousness across eight consoles, and a Console tab tails everything at once: the feed, the features, the forecasts, the policy, the training.</p></div>
+      <div class="feat"><div class="ic">📝</div><h3>On-device brief</h3><p>Small models summarize the tape, the macro backdrop, positioning and the smart money. A larger local model turns those notes into a plain newspaper column. It all runs through Ollama, so nothing leaves the machine.</p></div>
+      <div class="feat"><div class="ic">🏛️</div><h3>Investor council</h3><p>A panel of well-known investors, built from their real 13F filings and documented style, nudges the model. Burry, Buffett, Ackman, Icahn and others.</p></div>
+      <div class="feat"><div class="ic">🛰️</div><h3>Whole-market radar</h3><p>Breadth, sector rotation, volatility and a large movers watchlist give you and the model the full picture. Penny and small-cap movers included.</p></div>
+      <div class="feat"><div class="ic">🔒</div><h3>Local and private</h3><p>Everything runs on your machine. API keys sit in gitignored files and only ever talk to their own provider.</p></div>
+      <div class="feat"><div class="ic">⚙️</div><h3>Fits your machine</h3><p>A first-run benchmark sizes the network to your hardware and uses the GPU when there is one, so it runs on a laptop or a workstation.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="how" style="background:var(--surface);border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+  <div class="wrap">
+    <h2>How it works</h2>
+    <p class="sub">It behaves less like a backtest and more like a trader who shows up every morning and keeps score.</p>
+    <div class="steps">
+      <div class="step"><h3>Warm up</h3><p>flint pulls intraday history, benchmarks your machine, and trains on the recent session before it goes live.</p></div>
+      <div class="step"><h3>Stream and forecast</h3><p>Real trades drive the charts. Each bar the model forecasts the next hour and turns it into a buy, sell or hold with a reason in plain English.</p></div>
+      <div class="step"><h3>Learn as it goes</h3><p>An hour later every forecast is scored and the model recalibrates. You judge it on live accuracy over hours, not on how well it fit the past.</p></div>
+    </div>
+    <div class="showcase">
+      <figure><img src="img/card.png" alt="A single stock card with candlesticks, MACD, forecast fan and a plain-English rationale"><figcaption>Each card shows the forecast, the band, and why the call is a buy, sell or hold.</figcaption></figure>
+      <figure><img src="img/console.png" alt="The Console tab: a terminal-style stream of everything the model is doing"><figcaption>The Console tab tails every channel the model runs through, live.</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section id="quickstart">
+  <div class="wrap">
+    <h2>Run it</h2>
+    <p class="sub">You need Python 3.12 and <a href="https://docs.astral.sh/uv/">uv</a>. For the written brief, install <a href="https://ollama.com/download">Ollama</a> and pull a model.</p>
+    <div class="qs">
+<pre><code><span class="c"># clone and install</span>
+git clone git@github.com:thingg-co/flint.git
+cd flint
+uv sync
+
+<span class="c"># run it, then open http://localhost:8000</span>
+uv run flint
+
+<span class="c"># optional: a local model for the daily brief</span>
+ollama pull qwen3.5          <span class="c"># or any chat model you like</span></code></pre>
+      <p>It works out of the box on free, no-key data sources. On first launch a short walkthrough lets you add
+        API keys for better feeds, and you can skip any of them. Everything, including the LLM brief, runs locally.</p>
+    </div>
+  </div>
+</section>
+
+<section style="padding-top:0">
+  <div class="wrap">
+    <div class="note"><strong>A word of caution.</strong> flint is for research and learning. Its forecasts are
+      the output of a model that is often wrong, and it makes no guarantees. Nothing here is financial advice.
+      Trading is risky and you can lose money.</div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span class="brand"><span class="fire">🔥</span> flint</span>
+    <span>a self-hosted market model</span>
+    <a href="https://github.com/thingg-co/flint">github.com/thingg-co/flint ↗</a>
+  </div>
+</footer>
+</body>
+</html>
