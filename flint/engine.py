@@ -499,8 +499,18 @@ class Engine:
                 self.features.norm.load(extra["norm"])
             self.metrics.labels = self.learner.labels
             self.metrics.steps = self.learner.steps
+            md = extra.get("metrics") or {}
+            m = self.metrics
+            for k in self._PERSIST_METRICS:
+                if md.get(k) is not None:
+                    setattr(m, k, md[k])
+            for sym, v in (md.get("pnl_by_symbol") or {}).items():
+                if sym in m.pnl_by_symbol:
+                    m.pnl_by_symbol[sym] = v
+            m.trusted = m.live_labels >= cfg.min_labels
             self.trace.emit("system", f"restored checkpoint from {cfg.state_dir}: {self.learner.steps} steps, "
-                                      f"{self.learner.labels} labels, {self.learner.size} windows in replay")
+                                      f"{self.learner.labels} labels, {m.live_labels}/{cfg.min_labels} live labels, "
+                                      f"{self.learner.size} windows in replay")
         ai = self.autotune_info
         dev = cfg.device + (f", {ai['preset']} preset, {ai['ms_per_step']} ms/step" if ai else "")
         self.trace.emit("system", f"FlintNet: {self.learner.n_params:,} parameters on {dev}; {cfg.n_assets} assets, "
@@ -646,9 +656,16 @@ class Engine:
             self.trace.emit("system", f"checkpoint saved to {self.cfg.state_dir} ({self.learner.steps} steps, "
                                       f"{self.learner.size} windows)")
 
+    _PERSIST_METRICS = ("live_labels", "live_pinball", "band_scale", "p_scale", "decisions", "hits",
+                        "hit_ema", "coverage_n", "covered", "coverage_ema", "sharpness_ema",
+                        "coverage_raw_n", "covered_raw", "suggestions", "suggestion_wins", "pnl_bps")
+
     def _save(self) -> None:
         try:
-            self.learner.save(self.cfg.state_dir, extra={"norm": self.features.norm.state()})
+            m = self.metrics
+            metrics = {k: getattr(m, k) for k in self._PERSIST_METRICS}
+            metrics["pnl_by_symbol"] = dict(m.pnl_by_symbol)
+            self.learner.save(self.cfg.state_dir, extra={"norm": self.features.norm.state(), "metrics": metrics})
         except Exception as e:  # noqa: BLE001
             log.warning("checkpoint failed: %s", e)
 
