@@ -35,7 +35,7 @@ button.active { background: var(--blue); border-color: var(--blue); color: #fff;
 .brand { font-weight: 700; font-size: 18px; letter-spacing: 0.04em; }
 .brand .sub { font-weight: 400; font-size: 12px; color: var(--muted); margin-left: 8px; letter-spacing: 0; }
 .status { display: flex; align-items: center; gap: 12px; flex: 1; flex-wrap: wrap; }
-.pill { padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--ink-2); font-size: 12px; font-family: var(--mono); }
+.pill { padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--ink-2); font-size: 12px; font-family: var(--mono); white-space: nowrap; }
 .pill.live { border-color: var(--good); color: var(--good); }
 .pill.warn { border-color: var(--warning); color: var(--warning); }
 .pill.err { border-color: var(--critical); color: var(--critical); }
@@ -44,7 +44,9 @@ button.active { background: var(--blue); border-color: var(--blue); color: #fff;
 .kv label { color: var(--muted); font-size: 12px; margin-right: 4px; }
 .kv b { font-family: var(--mono); font-weight: 500; }
 .conn { color: var(--critical); }
-.conn.ok { color: var(--good); }
+.conn.ok { color: var(--good); animation: connpulse 1.8s ease-in-out infinite; }
+@keyframes connpulse { 0%,100% { opacity: 1; text-shadow: 0 0 3px rgba(12,163,12,.5); } 50% { opacity: .45; text-shadow: 0 0 9px rgba(12,163,12,.9); } }
+@media (prefers-reduced-motion: reduce) { .conn.ok { animation: none; } }
 .tabs { display: flex; gap: 6px; align-items: center; }
 .market-nav { margin-right: 6px; font-size: 12px; }
 @font-face { font-family: "DSEG7"; src: url("fonts/dseg7.woff2") format("woff2"); font-display: swap; }
@@ -530,3 +532,20 @@ ul.headlines li.new a { color: #fff; } ul.headlines li:not(.new) a { color: var(
 .res-toggle { position: absolute; top: 4px; right: 6px; display: flex; gap: 2px; background: rgba(12,12,11,0.6); border-radius: 6px; padding: 2px; }
 .res-toggle button { font-size: 10px; padding: 1px 7px; border: none; background: none; color: var(--muted); border-radius: 4px; cursor: pointer; font-family: var(--mono); }
 .res-toggle button.on { background: var(--blue); color: #fff; }
+
+
+/* mobile pass */
+@media (max-width: 700px) {
+  .top { gap: 8px 10px; padding: 9px 13px; }
+  .brand { font-size: 17px; }
+  .brand .sub { display: none; }
+  .status { gap: 8px; font-size: 12.5px; width: 100%; order: 2; }
+  .tabs { flex-wrap: wrap; gap: 6px; width: 100%; order: 3; }
+  .tabs button { padding: 6px 12px; font-size: 13px; }
+  .et-clock { margin-left: auto; }
+  .view { padding: 12px 12px 40px; }
+  .card { padding: 12px; }
+  #inject-fab { right: 16px; bottom: 16px; padding: 11px 18px; }
+  #inject-pop { right: 12px; left: 12px; width: auto; bottom: 74px; }
+  .onb-card { padding: 20px 18px; }
+}
