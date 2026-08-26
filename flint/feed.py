@@ -30,6 +30,7 @@ class Tick:
     taker_buy: bool | None     # aggressor side; None when unknown
     bid: float | None = None
     ask: float | None = None
+    quote: bool = False      # True for quote/heartbeat updates (no real trade) -- update price, not candles
     o: float | None = None   # set when this tick is a pre-aggregated OHLC bar (history feeds)
     h: float | None = None
     l: float | None = None

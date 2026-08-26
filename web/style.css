@@ -45,7 +45,10 @@ button.active { background: var(--blue); border-color: var(--blue); color: #fff;
 .kv b { font-family: var(--mono); font-weight: 500; }
 .conn { color: var(--critical); }
 .conn.ok { color: var(--good); }
-.tabs { display: flex; gap: 6px; }
+.tabs { display: flex; gap: 6px; align-items: center; }
+.market-nav { margin-right: 6px; font-size: 12px; }
+.market-nav.live { border-color: var(--good); color: var(--good); }
+.market-nav.closed { border-color: var(--border); color: var(--muted); }
 
 .view { display: none; padding: 16px 18px 40px; }
 body[data-view="dashboard"] #dashboard, body[data-view="consoles"] #consoles, body[data-view="brief"] #brief, body[data-view="console"] #console { display: block; }

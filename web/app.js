@@ -435,9 +435,9 @@ function renderStatus() {
     let fresh = 0;
     for (const v of Object.values(state.prices || {})) if (v && v.ts) fresh = Math.max(fresh, v.ts);
     const age = fresh ? (Date.now() / 1000 - fresh) : Infinity;
-    if (age < 90) { mk.textContent = "market open"; mk.className = "pill live"; }
-    else if (fresh) { mk.textContent = "market closed · last " + fmtTime(fresh); mk.className = "pill closed"; }
-    else { mk.textContent = "market —"; mk.className = "pill closed"; }
+    if (age < 90) { mk.textContent = "● market open"; mk.className = "pill market-nav live"; mk.title = "live trades arriving"; }
+    else if (fresh) { mk.textContent = "● market closed"; mk.className = "pill market-nav closed"; mk.title = "no live trades — last at " + fmtTime(fresh); }
+    else { mk.textContent = "● market —"; mk.className = "pill market-nav closed"; mk.title = "no data yet"; }
   }
   updateLoading();
 }

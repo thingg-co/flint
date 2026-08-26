@@ -262,7 +262,7 @@ class YahooSource(Source):
             n += 1
         price = meta.get("regularMarketPrice")
         if price and n == 0:
-            self._emit(emit, Tick(sym, time.time(), float(price), 0.0, None))
+            self._emit(emit, Tick(sym, time.time(), float(price), 0.0, None, quote=True))
         return n
 
     def _bars_from(self, sym, resp, lo, cap=170):
@@ -362,7 +362,7 @@ class AlphaVantageQuoteSource(Source):
                 q = d.get("Global Quote", {})
                 price = q.get("05. price")
                 if price:
-                    self._emit(emit, Tick(sym, time.time(), float(price), float(q.get("06. volume") or 0.0), None))
+                    self._emit(emit, Tick(sym, time.time(), float(price), float(q.get("06. volume") or 0.0), None, quote=True))
                     self.note = f"{sym} {q.get('07. latest trading day', '')} (delayed)"
             except AlphaVantageLimited as e:
                 self.note = str(e)[:90]
@@ -444,7 +444,7 @@ class FMPSource(Source):
                     if r.status_code == 200 and r.json():
                         d = r.json()[0]
                         if d.get("price"):
-                            self._emit(emit, Tick(sym, time.time(), float(d["price"]), float(d.get("volume") or 0.0), None))
+                            self._emit(emit, Tick(sym, time.time(), float(d["price"]), float(d.get("volume") or 0.0), None, quote=True))
                             n += 1
                     elif r.status_code in (401, 402, 403):
                         self.note = f"quote {r.status_code} (plan?)"
@@ -541,7 +541,7 @@ class SchwabSource(Source):
                 bid = q.get("bidPrice") or None
                 ask = q.get("askPrice") or None
                 self._emit(emit, Tick(sym, ts, float(price), float(q.get("totalVolume") or 0.0), None,
-                                      float(bid) if bid else None, float(ask) if ask else None))
+                                      float(bid) if bid else None, float(ask) if ask else None, quote=True))
                 n += 1
         self.note = f"real-time quotes for {n} symbols"
 
@@ -605,7 +605,7 @@ class FinnhubSource(Source):
                             # close to a stale price and corrupt the candles. Real trades still arrive on the ws.
                             if c0 and c0 != last.get(sym):
                                 last[sym] = c0
-                                self._emit(emit, Tick(sym, float(d.get("t") or time.time()), float(c0), 0.0, None))
+                                self._emit(emit, Tick(sym, float(d.get("t") or time.time()), float(c0), 0.0, None, quote=True))
                         elif r.status_code in (401, 403):
                             self.note = f"quote unauthorized ({r.status_code}); check API key"
                         await asyncio.sleep(0.25)
@@ -703,7 +703,7 @@ class EODHDSource(Source):
         for row in rows:
             sym = str(row.get("code", "")).split(".")[0]
             if sym in self.symbols and row.get("close") not in (None, "NA"):
-                self._emit(emit, Tick(sym, float(row.get("timestamp") or time.time()), float(row["close"]), 0.0, None))
+                self._emit(emit, Tick(sym, float(row.get("timestamp") or time.time()), float(row["close"]), 0.0, None, quote=True))
                 n += 1
         self.note = f"delayed quotes for {n} symbols"
 
@@ -755,7 +755,7 @@ class GoldApiSource(Source):
                 try:
                     px = await self._price(c, sym)
                     if px:
-                        self._emit(emit, Tick(sym, time.time(), float(px), 0.0, None))
+                        self._emit(emit, Tick(sym, time.time(), float(px), 0.0, None, quote=True))
                     await asyncio.sleep(0.15)
                 except Exception as e:  # noqa: BLE001
                     self.note = f"{sym}: {type(e).__name__}"

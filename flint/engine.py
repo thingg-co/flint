@@ -587,9 +587,12 @@ class Engine:
     # Live loops -------------------------------------------------------------------------
 
     def _on_live_tick(self, tick: Tick) -> None:
-        """Called by the source manager with the active provider's tick for a symbol."""
-        self.builder.add(tick)
-        self.fine_builder.add(tick)
+        """Called by the source manager with the active provider's tick for a symbol.
+        Quote/heartbeat ticks update the live price but never build candles -- otherwise a
+        market-closed feed echoing the last quote would fabricate flat bars from stale data."""
+        if not tick.quote:
+            self.builder.add(tick)
+            self.fine_builder.add(tick)
         self._on_tick(tick, live=True)
 
     def _on_provider_change(self, sym: str, prev, active) -> None:
@@ -779,16 +782,16 @@ class Engine:
         conviction = abs(2 * p - 1)
         reasons = []
         if abs(score) < cfg.score_threshold:
-            reasons.append(f"|q50/IQR| {abs(score):.2f} below {cfg.score_threshold:.2f}")
+            reasons.append("the expected move is small next to its uncertainty")
         if conviction < 2 * cfg.prob_margin:
-            reasons.append(f"P(up) {p:.2f} within {cfg.prob_margin:.2f} of coin flip")
+            reasons.append(f"direction is near a coin flip ({p * 100:.0f}% up)")
         if edge <= 0:
-            reasons.append(f"|q50| {abs(q50):.1f} bps does not cover cost {cfg.cost_bps:.1f} bps")
+            reasons.append("the expected move does not cover trading cost")
         if (score > 0) != (p > 0.5):
-            reasons.append("median and direction head disagree")
+            reasons.append("its trend and direction signals disagree")
         side = 0 if reasons else (1 if score > 0 else -1)
         size = cfg.max_size * min(1.0, max(0.0, (conviction - 2 * cfg.prob_margin) / 0.5)) if side else 0.0
-        why = "; ".join(reasons) if reasons else f"q50 {q50:+.1f} bps over IQR {iqr:.1f} (score {score:+.2f}), P(up) {p:.2f}"
+        why = "holding: " + "; ".join(reasons) if reasons else f"leaning in: {q50:+.0f} bps expected, {p * 100:.0f}% odds up"
         base_side, base_size = side, size
         muted = s in self.muted
         if muted:
