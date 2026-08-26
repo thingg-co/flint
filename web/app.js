@@ -1106,7 +1106,7 @@ function renderBrief() {
   const sectorPanel = m.sectors && m.sectors.length ? `<div class="bpanel"><h3>Sector rotation</h3><div class="sector-heat">` +
     m.sectors.map(sc => { const t = Math.max(-1, Math.min(1, sc.chg / 2));
       const bg = t >= 0 ? `rgba(12,163,12,${0.25 + 0.55 * t})` : `rgba(208,59,59,${0.25 + 0.55 * -t})`;
-      return `<div class="sc" style="background:${bg}" title="${esc(sc.name)}"><span>${esc(sc.etf)}</span><b>${sc.chg >= 0 ? "+" : ""}${sc.chg.toFixed(1)}</b></div>`; }).join("") + `</div></div>` : "";
+      return `<div class="sc" data-etf="${esc(sc.etf)}" data-chg="${sc.chg}" style="background:${bg}" title="${esc(sc.name)}"><span>${esc(sc.etf)}</span><b>${sc.chg >= 0 ? "+" : ""}${sc.chg.toFixed(1)}</b></div>`; }).join("") + `</div></div>` : "";
 
   box.innerHTML = hero + gaugeRow + `<div class="brief-grid">` +
     callPanel + moverPanel("Top gainers", mv.gainers, true) + moverPanel("Top losers", mv.losers, false) +
@@ -1114,6 +1114,35 @@ function renderBrief() {
 }
 
 function gauge_card(svg, sub) { return `<div class="gcard">${svg}<div class="gsub">${esc(sub)}</div></div>`; }
+
+const SECTOR_INFO = {
+  XLK: "Technology \u2014 software, semiconductors, hardware. Cyclical and growth-heavy; the market's biggest weight. NVDA, AAPL, MSFT.",
+  XLF: "Financials \u2014 banks, insurers, payments, exchanges. Cyclical and rate-sensitive. JPM, BRK.B, V.",
+  XLE: "Energy \u2014 oil & gas producers and services. Driven by crude prices; an inflation hedge. XOM, CVX.",
+  XLV: "Health Care \u2014 pharma, biotech, devices, insurers. Defensive; holds up in downturns. LLY, UNH, JNJ.",
+  XLY: "Consumer Discretionary \u2014 retail, autos, travel, restaurants. Cyclical; tracks consumer confidence. AMZN, TSLA, HD.",
+  XLI: "Industrials \u2014 machinery, aerospace, defense, transports. Cyclical; a read on capex and the economy. GE, CAT, UBER.",
+  XLC: "Communication Services \u2014 internet, media, telecom. Growth-tilted. GOOGL, META, NFLX.",
+  XLP: "Consumer Staples \u2014 food, drinks, household goods. Defensive and steady; a safe-haven when risk-off. PG, KO, WMT, COST.",
+  XLU: "Utilities \u2014 electric, gas, water. Defensive, yield-oriented, rate-sensitive. NEE, DUK.",
+  XLB: "Materials \u2014 chemicals, metals, mining, packaging. Cyclical and commodity-linked. LIN, SHW.",
+  XLRE: "Real Estate \u2014 REITs across property types. Rate-sensitive and income-focused. AMT, PLD.",
+};
+let _sectorTip = false;
+document.addEventListener("mousemove", e => {
+  const sc = e.target.closest && e.target.closest("[data-etf]");
+  if (sc) {
+    _sectorTip = true;
+    const etf = sc.dataset.etf, chg = parseFloat(sc.dataset.chg);
+    const secs = ((state.signals || {}).market || {}).sectors || [];
+    const i = secs.findIndex(x => x.etf === etf);
+    const rank = i === 0 ? "leading today" : (i === secs.length - 1 && secs.length > 1) ? "lagging today" : (i >= 0 ? `#${i + 1} of ${secs.length} today` : "");
+    const pct = isNaN(chg) ? "" : `\n\n${chg >= 0 ? "+" : ""}${chg.toFixed(2)}% today${rank ? " \u00b7 " + rank : ""}`;
+    showTooltip(e.clientX, e.clientY, (SECTOR_INFO[etf] || etf) + pct);
+  } else if (_sectorTip) {
+    _sectorTip = false; hideTooltip();
+  }
+});
 
 function renderMarket() {
   const m = state.signals && state.signals.market;
@@ -1133,7 +1162,7 @@ function renderMarket() {
   $("#market-stats").innerHTML = stats.join("");
   const heatColor = c => { const t = Math.max(-1, Math.min(1, c / 2)); return t >= 0 ? `rgba(12,163,12,${0.25 + 0.55 * t})` : `rgba(208,59,59,${0.25 + 0.55 * -t})`; };
   $("#sector-heat").innerHTML = (m.sectors || []).map(sc =>
-    `<div class="sc" style="background:${heatColor(sc.chg)}" title="${esc(sc.name)}"><span>${esc(sc.etf)}</span><b>${sc.chg >= 0 ? "+" : ""}${sc.chg.toFixed(1)}</b></div>`).join("");
+    `<div class="sc" data-etf="${esc(sc.etf)}" data-chg="${sc.chg}" title="${esc(sc.name)}"><span>${esc(sc.etf)}</span><b>${sc.chg >= 0 ? "+" : ""}${sc.chg.toFixed(1)}</b></div>`).join("");
   const mv = m.movers || {};
   const col = (title, rows) => `<div class="mov"><h5>${title}</h5>` +
     (rows || []).slice(0, 6).map(r => `<div class="row"><span class="t">${esc(r.symbol || "")}</span><span class="c ${r.chg >= 0 ? "up" : "down"}">${r.chg >= 0 ? "+" : ""}${(r.chg || 0).toFixed(1)}%</span></div>`).join("") + "</div>";
