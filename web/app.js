@@ -296,7 +296,7 @@ function buildCards() {
     el.innerHTML = `<header><span class="sym">${esc(sym)}</span><span class="spread num"></span><span class="price num">·</span></header>
       <div class="via" title="active data source for this symbol"></div>
       <div class="signal"><span class="badge hold">■ HOLD</span><span class="size num"></span><span class="warm" hidden>warming up</span></div>
-      <div class="chart-wrap"><canvas class="chart"></canvas><span class="res-toggle"><button data-res="5m" class="on">5m</button><button data-res="1m">1m</button></span></div>
+      <div class="chart-wrap"><canvas class="chart"></canvas></div>
       <div class="stats"><div><label>median</label><b class="q50">·</b></div><div><label>10-90 band</label><b class="band">·</b></div>
         <div><label>P(up)</label><b class="pup">·</b></div><div><label>score</label><b class="score">·</b></div></div>
       <div class="pmeter" title="P(up): fill right of centre is up, left is down"><i></i></div>
@@ -308,11 +308,6 @@ function buildCards() {
     const card = cards[sym] = { sym, el, canvas: $("canvas", el), hoverX: null, res: "5m" };
     card.canvas.dataset.sym = sym;
     if (chartRO) chartRO.observe(card.canvas);
-    $$(".res-toggle button", el).forEach(btn => btn.onclick = () => {
-      card.res = btn.dataset.res;
-      $$(".res-toggle button", el).forEach(b => b.classList.toggle("on", b === btn));
-      drawChart(card);
-    });
     card.canvas.addEventListener("mousemove", e => { card.hoverX = e.offsetX; card.tipX = e.clientX; card.tipY = e.clientY; drawChart(card); });
     card.canvas.addEventListener("mouseleave", () => { card.hoverX = null; hideTooltip(); drawChart(card); });
   });
