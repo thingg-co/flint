@@ -205,8 +205,6 @@ class Config:
     port: int = _env("PORT", 8000)
     tick_hz: float = _env("TICK_HZ", 2.0)
     chart_bars: int = _env("CHART_BARS", 160)   # ~13h of trading at 5-min bars
-    fine_seconds: float = _env("FINE_SECONDS", 60.0)   # display-only fine bars from the live tick feed (recent high-res)
-    fine_bars: int = _env("FINE_BARS", 240)            # fine bars kept (240 x 60s = 4h of 1-min detail)
     paper_start: float = _env("PAPER_START", 100000.0)  # starting cash for the paper-trading book
     log_size: int = 60
 

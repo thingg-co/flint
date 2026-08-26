@@ -25,7 +25,7 @@ const CONTROL_FIELDS = [
 ];
 
 const state = { config: null, status: {}, controls: {}, prices: {}, bars: {}, latest: {}, gate: [], outcomes: {},
-  metrics: {}, history: { loss: [], hit: [], coverage: [], pnl: [] }, log: [], news: null, bars_fine: {},
+  metrics: {}, history: { loss: [], hit: [], coverage: [], pnl: [] }, log: [], news: null,
   sources: [], news_sources: [], providers: {}, classes: {},
   signals: null, signal_providers: [], brief: null, paper: null, burry: { enabled: true }, keys: [], muted: [], classes: {}, universe: [] };
 const cards = {};
@@ -110,10 +110,7 @@ function ema(a, p) { const k = 2 / (p + 1); let e; return a.map((v, i) => (e = i
 
 function drawChart(card) {
   const sym = card.sym;
-  const fine = card.res === "1m";
-  const src = fine ? (state.bars_fine[sym] || []) : (state.bars[sym] || []);
-  const cap = fine ? ((state.config && state.config.fine_bars) || 240) : ((state.config && state.config.chart_bars) || 160);
-  const bars = src.slice(-cap);
+  const bars = (state.bars[sym] || []).slice(-((state.config && state.config.chart_bars) || 160));
   const { ctx, w, h } = ctx2d(card.canvas);
   ctx.font = "10px system-ui, sans-serif";
   if (bars.length < 2) { ctx.fillStyle = C.muted; ctx.fillText("waiting for bars", 10, 20); return; }
@@ -121,7 +118,7 @@ function drawChart(card) {
   const padL = 8, padR = 8, padT = 10, padB = 16;
   const n = bars.length;
   const plotW = w - padL - padR;
-  const fanW = fine ? 8 : Math.max(0.2 * plotW, 64);
+  const fanW = Math.max(0.2 * plotW, 64);
   const dx = (plotW - fanW) / (n - 1);
   const xs = i => Math.min(padL + i * dx, padL + plotW);
   const closes = bars.map(b => b.c);
@@ -137,7 +134,7 @@ function drawChart(card) {
   let lo = Math.min(...bars.map(b => b.l)), hi = Math.max(...bars.map(b => b.h));
   if (live && marketLive) { lo = Math.min(lo, live); hi = Math.max(hi, live); }
   let fan = null;
-  if (!fine && L && L.q) { fan = L.q.map(q => L.price * Math.exp(q / 1e4)); }   // fan drawn but clipped; wide model bands must not crush the candles
+  if (L && L.q) { fan = L.q.map(q => L.price * Math.exp(q / 1e4)); }   // fan drawn but clipped; wide model bands must not crush the candles
   const span = (hi - lo) || closes[n - 1] * 1e-4;
   lo -= span * 0.06; hi += span * 0.06;
   const ys = v => pT + (hi - v) / (hi - lo) * (pB - pT);
@@ -235,7 +232,7 @@ function drawChart(card) {
   ctx.textAlign = "left"; ctx.fillText(fmtAxis(bars[0].t), padL, h - 4);
   ctx.textAlign = "center"; ctx.fillText(fmtAxis(bars[mid].t), xs(mid), h - 4);
   ctx.textAlign = "right"; ctx.fillText(fmtAxis(bars[n - 1].t), xLast, h - 4);
-  if (!fine) ctx.fillText(`+${Math.round(H * cfg.bar_seconds / 60)}m`, xEnd, h - 4); ctx.textAlign = "left";
+  ctx.fillText(`+${Math.round(H * cfg.bar_seconds / 60)}m`, xEnd, h - 4); ctx.textAlign = "left";
   ctx.strokeStyle = C.axis; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(Math.round(xLast) + 0.5, pT); ctx.lineTo(Math.round(xLast) + 0.5, mB); ctx.stroke(); ctx.setLineDash([]);
 
   card.geom = { padL, dx, n, bars };
@@ -305,7 +302,7 @@ function buildCards() {
       <div class="strategy"></div>
       <div class="fundamentals"></div>`;
     root.appendChild(el);
-    const card = cards[sym] = { sym, el, canvas: $("canvas", el), hoverX: null, res: "5m" };
+    const card = cards[sym] = { sym, el, canvas: $("canvas", el), hoverX: null };
     card.canvas.dataset.sym = sym;
     if (chartRO) chartRO.observe(card.canvas);
     card.canvas.addEventListener("mousemove", e => { card.hoverX = e.offsetX; card.tipX = e.clientX; card.tipY = e.clientY; drawChart(card); });
@@ -1410,7 +1407,7 @@ function handle(msg) {
   switch (msg.type) {
     case "snapshot":
       Object.assign(state, { config: msg.config, status: msg.status, controls: msg.controls, prices: msg.prices, bars: msg.bars,
-        latest: msg.latest, gate: msg.gate, outcomes: msg.outcomes, metrics: msg.metrics, history: msg.history, log: msg.log, news: msg.news, bars_fine: msg.bars_fine || {},
+        latest: msg.latest, gate: msg.gate, outcomes: msg.outcomes, metrics: msg.metrics, history: msg.history, log: msg.log, news: msg.news,
         sources: msg.sources || [], news_sources: msg.news_sources || [], providers: (msg.status && msg.status.providers) || {}, classes: msg.classes || {},
         signals: msg.signals || null, signal_providers: msg.signal_providers || [], brief: msg.brief || null, paper: msg.paper || null, burry: msg.burry || { enabled: true }, keys: msg.keys || [], muted: msg.muted || [], universe: msg.universe || (msg.config ? msg.config.symbols : []) });
       buildCards(); buildConsoles(); buildControls(); applyMuted();
@@ -1449,12 +1446,6 @@ function handle(msg) {
     case "muted": state.muted = msg.muted; applyMuted(); renderUniverse(); break;
     case "trace": appendTrace(msg.ev); appendTerm(msg.ev); break;
     case "brief": state.brief = msg.brief; if (document.body.dataset.view === "brief") renderBrief(); if (document.body.dataset.view === "consoles") renderBriefCtl(); break;
-    case "fine": {
-      const cap = (state.config && state.config.fine_bars) || 240;
-      Object.entries(msg.bars).forEach(([sy, b]) => { (state.bars_fine[sy] ||= []).push(b); while (state.bars_fine[sy].length > cap) state.bars_fine[sy].shift(); });
-      if (document.body.dataset.view === "dashboard") Object.values(cards).forEach(c => { if (c.res === "1m") drawChart(c); });
-      break;
-    }
     case "news": state.news = msg.news; renderNews(); break;
     case "status": state.status = msg.status; state.providers = msg.status.providers || state.providers; renderStatus(); if (document.body.dataset.view === "dashboard") state.config.symbols.forEach(updateVia); break;
     case "controls": state.controls = msg.controls; state.metrics = msg.metrics; if (msg.sources) state.sources = msg.sources; if (msg.news_sources) state.news_sources = msg.news_sources; if (msg.signal_providers) state.signal_providers = msg.signal_providers; if (msg.controls && "burry" in msg.controls) state.burry.enabled = msg.controls.burry; syncControls(); renderSources(); renderSignals(); if (document.body.dataset.view === "dashboard") renderTiles(); break;

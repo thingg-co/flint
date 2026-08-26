@@ -197,8 +197,6 @@ class Engine:
         self.prices = {s: {"price": None, "bid": None, "ask": None, "ts": None} for s in self.symbols}
         self.tick_counts = {s: 0 for s in self.symbols}
         self.bars: dict[str, deque[Bar]] = {s: deque(maxlen=cfg.chart_bars) for s in self.symbols}
-        self.fine_builder = BarBuilder(self.symbols, cfg.fine_seconds)                       # display-only high-res
-        self.fine_bars: dict[str, deque[Bar]] = {s: deque(maxlen=cfg.fine_bars) for s in self.symbols}
         self.paper = PaperBook(cfg.paper_start, cfg.cost_bps)   # $100k paper book for this run
         self.bar_index = 0
         self.pending: deque[Pending] = deque()
@@ -461,7 +459,6 @@ class Engine:
             "universe": self.all_symbols,
             "prices": self.prices,
             "bars": {s: [b.to_json() for b in self.bars[s]] for s in self.symbols},
-            "bars_fine": {s: [b.to_json() for b in self.fine_bars[s]] for s in self.symbols},
             "latest": self.latest,
             "gate": self.gate,
             "outcomes": {s: list(self.outcomes[s]) for s in self.symbols},
@@ -612,7 +609,6 @@ class Engine:
         market-closed feed echoing the last quote would fabricate flat bars from stale data."""
         if not tick.quote:
             self.builder.add(tick)
-            self.fine_builder.add(tick)
         self._on_tick(tick, live=True)
 
     def _on_provider_change(self, sym: str, prev, active) -> None:
@@ -638,16 +634,8 @@ class Engine:
     async def _clock(self) -> None:
         while True:
             await asyncio.sleep(0.25)
-            now = time.time()
-            for row in self.builder.roll(now):
+            for row in self.builder.roll(time.time()):
                 await self._process_row(row)
-            upd = {}
-            for row in self.fine_builder.roll(now):
-                for s in self.symbols:
-                    self.fine_bars[s].append(row[s])
-                    upd[s] = row[s].to_json()
-            if upd:
-                self._publish({"type": "fine", "bars": upd})
 
     async def _ticker(self) -> None:
         period = 1.0 / max(self.cfg.tick_hz, 0.2)
