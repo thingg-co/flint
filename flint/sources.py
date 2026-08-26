@@ -591,6 +591,7 @@ class FinnhubSource(Source):
         await asyncio.gather(self._ws(emit), self._poll(emit))
 
     async def _poll(self, emit):
+        last = {}
         while True:
             try:
                 async with httpx.AsyncClient(timeout=15) as c:
@@ -598,8 +599,13 @@ class FinnhubSource(Source):
                         r = await c.get(f"{self.REST}/quote", params={"symbol": sym, "token": self.key})
                         if r.status_code == 200:
                             d = r.json()
-                            if d.get("c"):
-                                self._emit(emit, Tick(sym, float(d.get("t") or time.time()), float(d["c"]), 0.0, None))
+                            c0 = d.get("c")
+                            # Only emit when the quote actually moves. Finnhub's quote "c" is frozen at the
+                            # regular-session close outside market hours; re-emitting it would pin every bar's
+                            # close to a stale price and corrupt the candles. Real trades still arrive on the ws.
+                            if c0 and c0 != last.get(sym):
+                                last[sym] = c0
+                                self._emit(emit, Tick(sym, float(d.get("t") or time.time()), float(c0), 0.0, None))
                         elif r.status_code in (401, 403):
                             self.note = f"quote unauthorized ({r.status_code}); check API key"
                         await asyncio.sleep(0.25)
