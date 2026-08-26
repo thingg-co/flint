@@ -123,6 +123,7 @@ function drawChart(card) {
   const xs = i => Math.min(padL + i * dx, padL + plotW);
   const closes = bars.map(b => b.c);
   const upC = "#26a269", downC = "#e0574b";
+  const cw = Math.max(1, Math.min(dx * 0.68, 9));
 
   // panes: price on top, MACD below, shared x axis
   const macdH = 46, gap = 8, axisY = h - padB;
@@ -147,6 +148,20 @@ function drawChart(card) {
     ctx.fillStyle = C.muted; ctx.fillText(label, padL + 2, y - 7);
   }
 
+  // volume histogram along the bottom of the price pane (drawn behind the fan/candles)
+  const maxVol = bars.reduce((mx, b) => Math.max(mx, b.v || 0), 0);
+  if (maxVol > 0) {
+    const volH = (pB - pT) * 0.2;
+    bars.forEach((b, i) => {
+      const v = b.v || 0; if (v <= 0) return;
+      const vh = (v / maxVol) * volH;
+      ctx.fillStyle = b.c >= b.o ? "rgba(38,160,105,0.22)" : "rgba(224,87,75,0.22)";
+      ctx.fillRect(xs(i) - cw / 2, pB - vh, cw, vh);
+    });
+    ctx.fillStyle = C.muted; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
+    ctx.fillText("vol", padL + 1, pB - 2);
+  }
+
   // forecast fan
   const xLast = xs(n - 1), xEnd = padL + plotW;
   const anchor = L ? L.price : closes[n - 1];
@@ -167,7 +182,6 @@ function drawChart(card) {
   // bars are flat (o=h=l=c) and would render as meaningless dashes; fall back to a close line there.
   const flat = bars.reduce((k, b) => k + (b.o === b.h && b.h === b.l && b.l === b.c ? 1 : 0), 0);
   if (flat < bars.length * 0.5) {
-    const cw = Math.max(1, Math.min(dx * 0.68, 9));
     bars.forEach((b, i) => {
       const x = xs(i), col = b.c >= b.o ? upC : downC;
       ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1;
