@@ -23,7 +23,7 @@
   <nav class="tabs">
     <span class="pill market-nav" id="market" title="live trading vs frozen (market closed)">market ?</span>
     <span class="et-clock" id="et-clock" title="New York time"><span class="seg" id="et-seg">--:--</span> ET</span>
-    <button data-tab="brief">Brief</button>
+    <button data-tab="brief" hidden>Brief</button>
     <button data-tab="dashboard" class="active">Dashboard</button>
     <button data-tab="paper">Paper</button>
     <button data-tab="console">Console</button>
@@ -145,7 +145,7 @@
       <div class="gurus" id="guru-list"></div>
     </div>
   </section>
-  <section class="panel brief-ctl">
+  <section class="panel brief-ctl" hidden>
     <div class="sources-head">
       <h3>Narrative brief <small>written on-device by local models via Ollama — nothing leaves the machine</small></h3>
       <label class="overlay-toggle" id="brief-toggle-wrap">auto-write</label>

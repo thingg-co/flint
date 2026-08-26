@@ -29,6 +29,9 @@ const state = { config: null, status: {}, controls: {}, prices: {}, bars: {}, la
   sources: [], news_sources: [], providers: {}, classes: {},
   signals: null, signal_providers: [], brief: null, paper: null, burry: { enabled: true }, keys: [], muted: [], classes: {}, universe: [] };
 const cards = {};
+const chartRO = ("ResizeObserver" in window) ? new ResizeObserver(entries => {
+  for (const e of entries) { const c = cards[e.target.dataset.sym]; if (c && e.target.clientWidth > 0) drawChart(c); }
+}) : null;
 const consoles = {};
 const lastPrices = {};
 let ws, retry = 1000, drawQueued = false;
@@ -286,6 +289,7 @@ function hideTooltip() { tooltip.style.display = "none"; }
 
 function buildCards() {
   const root = $("#cards"); root.innerHTML = "";
+  if (chartRO) chartRO.disconnect();
   for (const k of Object.keys(cards)) delete cards[k];
   state.config.symbols.forEach(sym => {
     const el = document.createElement("section"); el.className = "card"; el.dataset.sym = sym;
@@ -302,6 +306,8 @@ function buildCards() {
       <div class="fundamentals"></div>`;
     root.appendChild(el);
     const card = cards[sym] = { sym, el, canvas: $("canvas", el), hoverX: null, res: "5m" };
+    card.canvas.dataset.sym = sym;
+    if (chartRO) chartRO.observe(card.canvas);
     $$(".res-toggle button", el).forEach(btn => btn.onclick = () => {
       card.res = btn.dataset.res;
       $$(".res-toggle button", el).forEach(b => b.classList.toggle("on", b === btn));
@@ -1418,6 +1424,7 @@ function handle(msg) {
       Object.values(msg.trace || {}).flat().sort((a, b) => (a.seq || a.t) - (b.seq || b.t)).forEach(appendTerm);
       { const t = $("#term"); if (t) t.scrollTop = t.scrollHeight; }
       renderAll();
+      requestAnimationFrame(() => { if (document.body.dataset.view === "dashboard") Object.values(cards).forEach(drawChart); });
       onboardStart();
       break;
     case "tick":
