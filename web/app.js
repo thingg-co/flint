@@ -130,8 +130,9 @@ function drawChart(card) {
   const mB = axisY, mT = mB - macdH, pT = padT, pB = mT - gap;
 
   const live = state.prices[sym] && state.prices[sym].price;
+  const marketLive = marketState().cls === "live";   // only trust the live price during the regular session
   let lo = Math.min(...bars.map(b => b.l)), hi = Math.max(...bars.map(b => b.h));
-  if (live) { lo = Math.min(lo, live); hi = Math.max(hi, live); }
+  if (live && marketLive) { lo = Math.min(lo, live); hi = Math.max(hi, live); }
   let fan = null;
   if (!fine && L && L.q) { fan = L.q.map(q => L.price * Math.exp(q / 1e4)); }   // fan drawn but clipped; wide model bands must not crush the candles
   const span = (hi - lo) || closes[n - 1] * 1e-4;
@@ -194,8 +195,8 @@ function drawChart(card) {
     ctx.strokeStyle = C.blue; ctx.lineWidth = 2; ctx.lineJoin = "round";
     ctx.beginPath(); bars.forEach((b, i) => (i ? ctx.lineTo(xs(i), ys(b.c)) : ctx.moveTo(xs(i), ys(b.c)))); ctx.stroke();
   }
-  if (live) {
-    ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(xLast, ys(live), 4, 0, Math.PI * 2); ctx.fill();
+  if (live && marketLive) {   // the live-price dot only makes sense while the session is open;
+    ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(xLast, ys(live), 4, 0, Math.PI * 2); ctx.fill();  // otherwise it floats away from the frozen candles
     ctx.strokeStyle = C.surface; ctx.lineWidth = 2; ctx.stroke();
   }
 
