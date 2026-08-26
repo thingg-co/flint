@@ -27,7 +27,7 @@ const CONTROL_FIELDS = [
 const state = { config: null, status: {}, controls: {}, prices: {}, bars: {}, latest: {}, gate: [], outcomes: {},
   metrics: {}, history: { loss: [], hit: [], coverage: [], pnl: [] }, log: [], news: null, bars_fine: {},
   sources: [], news_sources: [], providers: {}, classes: {},
-  signals: null, signal_providers: [], brief: null, burry: { enabled: true }, keys: [], muted: [], classes: {}, universe: [] };
+  signals: null, signal_providers: [], brief: null, paper: null, burry: { enabled: true }, keys: [], muted: [], classes: {}, universe: [] };
 const cards = {};
 const consoles = {};
 const lastPrices = {};
@@ -534,6 +534,7 @@ function renderAll() {
   renderNews();
   if (document.body.dataset.view === "consoles") { renderUniverse(); renderKeys(); renderSources(); renderSignals(); renderRadar(); renderBriefCtl(); }
   if (document.body.dataset.view === "brief") renderBrief();
+  if (document.body.dataset.view === "paper") renderPaper();
 }
 
 function scheduleDraw() {
@@ -1184,6 +1185,65 @@ document.addEventListener("mousemove", e => {
   }
 });
 
+function fmtUSD(v) { const n = Math.abs(Math.round(v)); return (v < 0 ? "-$" : "$") + n.toLocaleString(); }
+
+function paintPaperEquity() {
+  const p = state.paper; if (!p) return;
+  const eqEl = $("#p-equity"); if (eqEl) eqEl.textContent = fmtUSD(p.equity);
+  const ret = (p.equity / p.start - 1) * 100, rEl = $("#p-return");
+  if (rEl) { rEl.textContent = (ret >= 0 ? "+" : "") + ret.toFixed(2) + "%"; rEl.className = "peq-ret " + (ret >= 0 ? "up" : "down"); }
+}
+
+function renderPaper() {
+  const p = state.paper; if (!p || !$("#paper")) return;
+  paintPaperEquity();
+  $("#p-stats").innerHTML = [
+    ["cash", fmtUSD(p.cash)], ["gross exposure", fmtUSD(p.gross)], ["net", fmtUSD(p.net_exposure)],
+    ["realized", fmtUSD(p.realized)], ["unrealized", fmtUSD(p.unrealized)], ["fees", fmtUSD(p.fees)], ["trades", p.n_trades],
+  ].map(([k, v]) => `<div class="pstat"><label>${esc(k)}</label><b>${esc(String(v))}</b></div>`).join("");
+  const pos = p.positions || [];
+  $("#p-pos-meta").textContent = pos.length ? `${pos.length} open` : "";
+  $("#p-positions").innerHTML = pos.length
+    ? `<div class="prow phead"><span>sym</span><span>side</span><span>weight</span><span>value</span><span>unreal</span></div>` +
+      pos.map(x => `<div class="prow"><span class="psym">${esc(base(x.sym))}</span>` +
+        `<span class="${x.shares >= 0 ? "up" : "down"}">${x.shares >= 0 ? "long" : "short"}</span>` +
+        `<span>${(x.weight * 100).toFixed(1)}%</span><span>${fmtUSD(x.value)}</span>` +
+        `<span class="${x.upnl >= 0 ? "up" : "down"}">${x.upnl >= 0 ? "+" : ""}${fmtUSD(x.upnl)}</span></div>`).join("")
+    : `<div class="why">no open positions — all cash${state.metrics && !state.metrics.trusted ? " (model still warming up)" : ""}</div>`;
+  const tr = p.trades || [];
+  $("#p-tr-meta").textContent = p.n_trades ? `${p.n_trades} total` : "";
+  $("#p-trades").innerHTML = tr.length
+    ? tr.slice(0, 40).map(t => `<div class="prow"><span>${fmtTime(t.t)}</span>` +
+        `<span class="${t.side === "buy" ? "up" : "down"}">${t.side}</span>` +
+        `<span class="psym">${esc(base(t.sym))}</span><span>${t.shares}</span><span>@ ${fmtPrice(t.price)}</span></div>`).join("")
+    : `<div class="why">no trades yet${state.metrics && !state.metrics.trusted ? " — the model is still warming up" : ""}</div>`;
+  drawEquityCurve(p);
+}
+
+function drawEquityCurve(p) {
+  const cv = $("#p-curve"); if (!cv) return;
+  const { ctx, w, h } = ctx2d(cv);
+  const pts = p.curve || [];
+  ctx.font = "10px ui-monospace, monospace";
+  if (pts.length < 2) { ctx.fillStyle = C.muted; ctx.font = "12px system-ui"; ctx.fillText("building equity curve…", 12, 24); return; }
+  const padL = 58, padR = 12, padT = 12, padB = 22;
+  const eqs = pts.map(x => x.eq);
+  let lo = Math.min(...eqs, p.start), hi = Math.max(...eqs, p.start);
+  const sp = (hi - lo) || p.start * 0.001; lo -= sp * 0.08; hi += sp * 0.08;
+  const xs = i => padL + i / (pts.length - 1) * (w - padL - padR);
+  const ys = v => padT + (hi - v) / (hi - lo) * (h - padT - padB);
+  ctx.strokeStyle = C.grid; ctx.fillStyle = C.muted; ctx.lineWidth = 1; ctx.textBaseline = "middle";
+  for (let k = 0; k < 3; k++) { const v = lo + (hi - lo) * (0.12 + 0.38 * k), y = Math.round(ys(v)) + 0.5;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke(); ctx.fillText(fmtUSD(v), 6, y); }
+  const y0 = ys(p.start); ctx.setLineDash([4, 3]); ctx.strokeStyle = C.muted;
+  ctx.beginPath(); ctx.moveTo(padL, y0); ctx.lineTo(w - padR, y0); ctx.stroke(); ctx.setLineDash([]);
+  const up = eqs[eqs.length - 1] >= p.start;
+  ctx.strokeStyle = up ? "#26a269" : "#e0574b"; ctx.lineWidth = 2; ctx.lineJoin = "round";
+  ctx.beginPath(); pts.forEach((x, i) => i ? ctx.lineTo(xs(i), ys(x.eq)) : ctx.moveTo(xs(i), ys(x.eq))); ctx.stroke();
+  ctx.lineTo(xs(pts.length - 1), ys(lo)); ctx.lineTo(xs(0), ys(lo)); ctx.closePath();
+  ctx.fillStyle = up ? "rgba(38,160,105,0.10)" : "rgba(224,87,75,0.10)"; ctx.fill();
+}
+
 function renderMarket() {
   const m = state.signals && state.signals.market;
   const meta = $("#market-meta");
@@ -1351,7 +1411,7 @@ function handle(msg) {
       Object.assign(state, { config: msg.config, status: msg.status, controls: msg.controls, prices: msg.prices, bars: msg.bars,
         latest: msg.latest, gate: msg.gate, outcomes: msg.outcomes, metrics: msg.metrics, history: msg.history, log: msg.log, news: msg.news, bars_fine: msg.bars_fine || {},
         sources: msg.sources || [], news_sources: msg.news_sources || [], providers: (msg.status && msg.status.providers) || {}, classes: msg.classes || {},
-        signals: msg.signals || null, signal_providers: msg.signal_providers || [], brief: msg.brief || null, burry: msg.burry || { enabled: true }, keys: msg.keys || [], muted: msg.muted || [], universe: msg.universe || (msg.config ? msg.config.symbols : []) });
+        signals: msg.signals || null, signal_providers: msg.signal_providers || [], brief: msg.brief || null, paper: msg.paper || null, burry: msg.burry || { enabled: true }, keys: msg.keys || [], muted: msg.muted || [], universe: msg.universe || (msg.config ? msg.config.symbols : []) });
       buildCards(); buildConsoles(); buildControls(); applyMuted();
       Object.values(msg.trace || {}).forEach(evs => evs.forEach(ev => appendTrace(ev, false)));
       Object.values(consoles).forEach(c => { c.body.scrollTop = c.body.scrollHeight; });
@@ -1362,12 +1422,13 @@ function handle(msg) {
       break;
     case "tick":
       state.prices = msg.prices; state.status = msg.status; state.providers = msg.status.providers || state.providers; renderStatus();
+      if (msg.paper_eq != null && state.paper) { state.paper.equity = msg.paper_eq; if (document.body.dataset.view === "paper") paintPaperEquity(); }
       if (document.body.dataset.view === "dashboard") { state.config.symbols.forEach(updatePrice); scheduleDraw(); }
       break;
     case "bar":
       state.status = msg.status;
       Object.entries(msg.bars).forEach(([s, b]) => { (state.bars[s] ||= []).push(b); if (state.bars[s].length > 240) state.bars[s].shift(); });
-      state.latest = msg.latest; state.gate = msg.gate; state.metrics = msg.metrics; state.outcomes = msg.outcomes; state.log = msg.log;
+      state.latest = msg.latest; state.gate = msg.gate; state.metrics = msg.metrics; state.outcomes = msg.outcomes; state.log = msg.log; if (msg.paper) state.paper = msg.paper;
       state.providers = (msg.status && msg.status.providers) || state.providers;
       absorbHistory(msg.history);
       renderAll();

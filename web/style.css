@@ -58,7 +58,7 @@ button.active { background: var(--blue); border-color: var(--blue); color: #fff;
 .market-nav.ext { border-color: var(--warning); color: var(--warning); }
 
 .view { display: none; padding: 16px 18px 40px; }
-body[data-view="dashboard"] #dashboard, body[data-view="consoles"] #consoles, body[data-view="brief"] #brief, body[data-view="console"] #console { display: block; }
+body[data-view="dashboard"] #dashboard, body[data-view="consoles"] #consoles, body[data-view="brief"] #brief, body[data-view="console"] #console, body[data-view="paper"] #paper { display: block; }
 
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; margin-bottom: 16px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
@@ -549,3 +549,22 @@ ul.headlines li.new a { color: #fff; } ul.headlines li:not(.new) a { color: var(
   #inject-pop { right: 12px; left: 12px; width: auto; bottom: 74px; }
   .onb-card { padding: 20px 18px; }
 }
+
+
+/* paper */
+#paper .paper-head { display: flex; align-items: flex-start; gap: 28px; flex-wrap: wrap; margin-bottom: 18px; }
+.peq { display: flex; flex-direction: column; }
+.peq-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.peq-val { font-size: 34px; font-weight: 700; font-family: var(--mono); color: var(--ink); line-height: 1.15; }
+.peq-ret { font-size: 16px; font-family: var(--mono); }
+.peq-ret.up { color: var(--good); } .peq-ret.down { color: var(--serious); }
+.pstats { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; padding-top: 4px; }
+.pstat { display: flex; flex-direction: column; }
+.pstat label { font-size: 11px; color: var(--muted); }
+.pstat b { font-family: var(--mono); font-size: 15px; color: var(--ink-2); }
+.pcurve { width: 100%; height: 220px; display: block; }
+.ptable { font-family: var(--mono); font-size: 12.5px; }
+.prow { display: grid; grid-template-columns: 1.1fr .8fr .9fr 1fr 1fr; gap: 8px; padding: 5px 2px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.prow.phead { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--ink-2); }
+.prow .psym { font-weight: 700; color: var(--ink); }
+.prow .up { color: var(--good); } .prow .down { color: var(--serious); }

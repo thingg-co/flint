@@ -19,6 +19,7 @@ from .features import FEATURES, N_FEATURES, FeatureBuilder
 from .feed import Tick
 from .learner import OnlineLearner, Prediction
 from .news import NewsHub
+from .paper import PaperBook
 from .schwab import SchwabAuth
 from .signals import SignalHub
 from .sources import AlphaVantage, SourceManager, asset_class
@@ -198,6 +199,7 @@ class Engine:
         self.bars: dict[str, deque[Bar]] = {s: deque(maxlen=cfg.chart_bars) for s in self.symbols}
         self.fine_builder = BarBuilder(self.symbols, cfg.fine_seconds)                       # display-only high-res
         self.fine_bars: dict[str, deque[Bar]] = {s: deque(maxlen=cfg.fine_bars) for s in self.symbols}
+        self.paper = PaperBook(cfg.paper_start, cfg.cost_bps)   # $100k paper book for this run
         self.bar_index = 0
         self.pending: deque[Pending] = deque()
         self.latest: dict[str, dict] = {}
@@ -347,6 +349,9 @@ class Engine:
         return {"notes": list(self.operator_notes)[-20:],
                 "bias": {s: {"sent": o["sent"], "text": o["text"], "t": o["t"]} for s, o in self.operator.items()}}
 
+    def _live_prices(self) -> dict:
+        return {s: self.prices[s]["price"] for s in self.symbols if self.prices.get(s) and self.prices[s].get("price")}
+
     def status_dict(self) -> dict:
         providers = self.sources.provider_map()
         active = sorted({p for p in providers.values() if p})
@@ -467,6 +472,7 @@ class Engine:
             "operator": self.operator_state(),
             "news": self.news,
             "brief": self.brief,
+            "paper": self.paper.snapshot(self._live_prices()),
         }
 
     def snapshot_json(self) -> str:
@@ -647,7 +653,8 @@ class Engine:
         period = 1.0 / max(self.cfg.tick_hz, 0.2)
         while True:
             await asyncio.sleep(period)
-            self._publish({"type": "tick", "prices": self.prices, "status": self.status_dict()})
+            self._publish({"type": "tick", "prices": self.prices, "status": self.status_dict(),
+                           "paper_eq": round(self.paper.equity(self._live_prices()), 2)})
 
     async def _checkpoints(self) -> None:
         while True:
@@ -742,6 +749,8 @@ class Engine:
             self.latest = {}
             for i, s in enumerate(self.symbols):
                 self.latest[s] = {**sugg[s], "price": float(closes[i]), "ts": ts, "attn": [float(a) for a in pred.attn[i]]}
+            self.paper.rebalance({s: self.latest[s]["side"] * self.latest[s]["size"] for s in self.symbols},
+                                 {s: float(closes[i]) for i, s in enumerate(self.symbols)}, ts)
             self.trace.emit("model", f"bar #{self.bar_index}: regime gate " + " ".join(
                 f"E{k + 1}={g:.2f}" for k, g in enumerate(self.gate)) +
                 f" | band scale x{self.metrics.band_scale:.2f}, P(up) temper {self.metrics.p_scale:.2f}")
@@ -762,7 +771,7 @@ class Engine:
             "latest": self.latest, "gate": self.gate, "metrics": self.metrics.as_dict(),
             "history": self._drain_history(),
             "outcomes": {s: list(self.outcomes[s]) for s in self.symbols}, "log": list(self.log),
-            "status": self.status_dict(),
+            "status": self.status_dict(), "paper": self.paper.snapshot(self._live_prices()),
         })
 
     def _mature(self, closes: np.ndarray) -> int:
