@@ -10,3 +10,6 @@ finnhub.json
 eodhd.json
 fmp.json
 anthropic.json
+
+# macOS
+.DS_Store
