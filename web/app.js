@@ -421,6 +421,19 @@ function renderLog() {
     || `<li><span>no resolved suggestions yet</span></li>`;
 }
 
+function marketState() {
+  // US equity session in Eastern time (ignores holidays); tick freshness is unreliable
+  // off-hours because quote heartbeats keep updating the price.
+  const et = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+  const day = et.getDay();
+  if (day === 0 || day === 6) return { label: "market closed", cls: "closed" };
+  const m = et.getHours() * 60 + et.getMinutes();
+  if (m >= 570 && m < 960) return { label: "market open", cls: "live" };      // 9:30-16:00
+  if (m >= 240 && m < 570) return { label: "pre-market", cls: "closed" };     // 4:00-9:30
+  if (m >= 960 && m < 1200) return { label: "after-hours", cls: "closed" };   // 16:00-20:00
+  return { label: "market closed", cls: "closed" };
+}
+
 function renderStatus() {
   const s = state.status || {};
   const phase = $("#phase");
@@ -432,12 +445,12 @@ function renderStatus() {
   $("#learning").classList.toggle("off", s.learning === false);
   const mk = $("#market");
   if (mk) {
+    const ms = marketState();
     let fresh = 0;
     for (const v of Object.values(state.prices || {})) if (v && v.ts) fresh = Math.max(fresh, v.ts);
-    const age = fresh ? (Date.now() / 1000 - fresh) : Infinity;
-    if (age < 90) { mk.textContent = "● market open"; mk.className = "pill market-nav live"; mk.title = "live trades arriving"; }
-    else if (fresh) { mk.textContent = "● market closed"; mk.className = "pill market-nav closed"; mk.title = "no live trades — last at " + fmtTime(fresh); }
-    else { mk.textContent = "● market —"; mk.className = "pill market-nav closed"; mk.title = "no data yet"; }
+    mk.textContent = "● " + ms.label;
+    mk.className = "pill market-nav " + ms.cls;
+    mk.title = ms.cls === "live" ? "US regular session (9:30–16:00 ET)" : (fresh ? "last trade " + fmtTime(fresh) : ms.label);
   }
   updateLoading();
 }
