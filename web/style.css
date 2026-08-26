@@ -47,6 +47,7 @@ button.active { background: var(--blue); border-color: var(--blue); color: #fff;
 .conn.ok { color: var(--good); }
 .tabs { display: flex; gap: 6px; align-items: center; }
 .market-nav { margin-right: 6px; font-size: 12px; }
+.et-clock { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-right: 8px; }
 .market-nav.live { border-color: var(--good); color: var(--good); }
 .market-nav.closed { border-color: var(--border); color: var(--muted); }
 

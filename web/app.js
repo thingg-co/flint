@@ -435,6 +435,11 @@ function renderLog() {
     || `<li><span>no resolved suggestions yet</span></li>`;
 }
 
+function updateETClock() {
+  const el = $("#et-clock"); if (!el) return;
+  el.textContent = new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }) + " ET";
+}
+
 function marketState() {
   // Prefer Finnhub's holiday-aware status; fall back to the Eastern clock if it hasn't loaded.
   const ms = (state.status || {}).market_status;
@@ -1427,6 +1432,7 @@ document.addEventListener("click", e => { if (e.target.closest && (e.target.clos
 window.addEventListener("resize", () => renderAll());
 setInterval(() => {
   if (state.status && state.status.started) $("#uptime").textContent = fmtDur(Date.now() / 1000 - state.status.started);
+  updateETClock();
   const now = Date.now() / 1000;
   Object.values(consoles).forEach(c => { while (c.times.length && c.times[0] < now - 60) c.times.shift(); c.rate.textContent = `${c.times.length}/min`; });
 }, 1000);
