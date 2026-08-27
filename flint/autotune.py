@@ -154,6 +154,9 @@ def autotune(cfg, n_features: int, say=None) -> dict:
                 ("  <- fits" if ms <= budget else "  (over budget)"))
             if ms <= budget:
                 chosen, chosen_ms, chosen_n = preset, ms, n
+                if ms > budget * 0.85:        # near the ceiling: the next preset is bigger and will be over --
+                    say(f"{preset[0]} is near budget; skipping larger presets")   # skip it (a thrashing over-budget benchmark can take minutes + spike swap)
+                    break
             else:
                 break
         name, d, dil, exp, heads, win = chosen
