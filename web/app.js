@@ -1248,7 +1248,7 @@ function renderMarket() {
     `<div class="sc" data-etf="${esc(sc.etf)}" data-chg="${sc.chg}" title="${esc(sc.name)}"><span>${esc(sc.etf)}</span><b>${sc.chg >= 0 ? "+" : ""}${sc.chg.toFixed(1)}</b></div>`).join("");
   const mv = m.movers || {};
   const col = (title, rows) => `<div class="mov"><h5>${title}</h5>` +
-    (rows || []).slice(0, 6).map(r => `<div class="row"><span class="t">${esc(r.symbol || "")}</span><span class="c ${r.chg >= 0 ? "up" : "down"}">${r.chg >= 0 ? "+" : ""}${(r.chg || 0).toFixed(1)}%</span></div>`).join("") + "</div>";
+    (rows || []).slice(0, 10).map(r => `<div class="row"><span class="t">${esc(r.symbol || "")}</span><span class="c ${r.chg >= 0 ? "up" : "down"}">${r.chg >= 0 ? "+" : ""}${(r.chg || 0).toFixed(1)}%</span></div>`).join("") + "</div>";
   $("#market-movers").innerHTML = col("Most active", mv.actives) + col("Gainers", mv.gainers) + col("Losers", mv.losers);
 }
 

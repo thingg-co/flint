@@ -75,11 +75,11 @@ class MarketScanner:
     async def _movers(self, c, scr):
         try:
             r = await c.get("https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved",
-                            params={"scrIds": scr, "count": 8}, headers={"User-Agent": UA})
+                            params={"scrIds": scr, "count": 12}, headers={"User-Agent": UA})
             if r.status_code == 200:
                 q = r.json().get("finance", {}).get("result", [{}])[0].get("quotes", [])
                 return [{"symbol": x.get("symbol"), "chg": round(x.get("regularMarketChangePercent") or 0, 2),
-                         "price": x.get("regularMarketPrice")} for x in q[:8]]
+                         "price": x.get("regularMarketPrice")} for x in q[:12]]
         except Exception:  # noqa: BLE001
             pass
         return []
