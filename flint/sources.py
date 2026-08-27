@@ -489,27 +489,34 @@ class SchwabSource(Source):
         syms = [s for s in symbols if self.supports(s)]
         if not syms or not self.auth.authenticated:
             return []
-        ticks = []
-        async with httpx.AsyncClient(timeout=25) as c:
-            for sym in syms:
+        headers = await self._headers()
+        sem = asyncio.Semaphore(10)          # paid tier, no rate-limit worry: fetch the whole universe in parallel
+
+        async def _fetch(c, sym):
+            async with sem:
                 try:
-                    r = await c.get(f"{self.BASE}/pricehistory", headers=await self._headers(),
+                    r = await c.get(f"{self.BASE}/pricehistory", headers=headers,
                                     params={"symbol": sym, "periodType": "day", "period": "10",
                                             "frequencyType": "minute", "frequency": "5", "needExtendedHoursData": "true"})
                     if r.status_code != 200:
                         self.note = f"pricehistory {r.status_code}"
-                        continue
+                        return []
+                    out = []
                     for k in r.json().get("candles", []):
                         c0 = k.get("close")
                         kt = k.get("datetime", 0) / 1000.0
-                        if c0 and kt >= cutoff:                       # respect backfill_seconds; Schwab over-fetches to cover weekends
+                        if c0 and kt >= cutoff:                   # respect backfill_seconds; Schwab over-fetches to cover weekends
                             c0 = float(c0)
-                            ticks.append(Tick(sym, kt, c0, float(k.get("volume") or 0.0), None,
-                                              o=float(k.get("open") or c0), h=float(k.get("high") or c0), l=float(k.get("low") or c0)))
-                    await asyncio.sleep(0.2)
+                            out.append(Tick(sym, kt, c0, float(k.get("volume") or 0.0), None,
+                                            o=float(k.get("open") or c0), h=float(k.get("high") or c0), l=float(k.get("low") or c0)))
+                    return out
                 except Exception as e:  # noqa: BLE001
                     self.note = f"{sym}: {type(e).__name__}"
-        return ticks
+                    return []
+
+        async with httpx.AsyncClient(timeout=25) as c:
+            groups = await asyncio.gather(*[_fetch(c, sym) for sym in syms])
+        return [t for g in groups for t in g]
 
     async def run(self, emit):
         if not self.symbols:
