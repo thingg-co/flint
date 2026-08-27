@@ -494,16 +494,17 @@ class SchwabSource(Source):
             for sym in syms:
                 try:
                     r = await c.get(f"{self.BASE}/pricehistory", headers=await self._headers(),
-                                    params={"symbol": sym, "periodType": "day", "period": "1",
-                                            "frequencyType": "minute", "frequency": "1", "needExtendedHoursData": "false"})
+                                    params={"symbol": sym, "periodType": "day", "period": "10",
+                                            "frequencyType": "minute", "frequency": "5", "needExtendedHoursData": "true"})
                     if r.status_code != 200:
                         self.note = f"pricehistory {r.status_code}"
                         continue
                     for k in r.json().get("candles", []):
                         c0 = k.get("close")
-                        if c0:
+                        kt = k.get("datetime", 0) / 1000.0
+                        if c0 and kt >= cutoff:                       # respect backfill_seconds; Schwab over-fetches to cover weekends
                             c0 = float(c0)
-                            ticks.append(Tick(sym, k["datetime"] / 1000.0, c0, float(k.get("volume") or 0.0), None,
+                            ticks.append(Tick(sym, kt, c0, float(k.get("volume") or 0.0), None,
                                               o=float(k.get("open") or c0), h=float(k.get("high") or c0), l=float(k.get("low") or c0)))
                     await asyncio.sleep(0.2)
                 except Exception as e:  # noqa: BLE001
