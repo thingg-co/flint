@@ -398,26 +398,6 @@ function renderGate() {
     : `<span class="why">no forecast yet</span>`;
 }
 
-function attnColor(v) {
-  const t = Math.max(0, Math.min(1, v));
-  const mix = (a, b, k) => a.map((x, i) => Math.round(x + (b[i] - x) * k));
-  const c = t < 0.5 ? mix([34, 34, 32], [37, 106, 191], t * 2) : mix([37, 106, 191], [158, 197, 244], (t - 0.5) * 2);
-  return `rgb(${c.join(",")})`;
-}
-
-function renderAttn() {
-  const syms = state.config.symbols, el = $("#attn");
-  let cells = `<div class="c h"></div>` + syms.map(s => `<div class="c h">${esc(base(s))}</div>`).join("");
-  syms.forEach(s => {
-    const L = state.latest[s];
-    cells += `<div class="c h">${esc(base(s))}</div>` + syms.map((_, j) => {
-      const v = (L && L.attn && L.attn[j]) || 0;
-      return `<div class="c" style="background:${attnColor(v)}">${v.toFixed(2)}</div>`;
-    }).join("");
-  });
-  el.innerHTML = `<div class="attn-grid" style="grid-template-columns:34px repeat(${syms.length}, minmax(30px,1fr))">${cells}</div>`;
-}
-
 function renderArch() {
   const c = state.config, m = c.model;
   $("#arch").innerHTML = `FlintNet, <b>${m.params.toLocaleString()}</b> parameters<br>` +
@@ -527,7 +507,7 @@ function renderAll() {
   syncControls();
   if (document.body.dataset.view === "dashboard") {
     state.config.symbols.forEach(updateCard);
-    renderTiles(); renderSparks(); renderGate(); renderAttn(); renderArch(); renderLog(); renderMarket(); renderWatch(); reorderCards(true);
+    renderTiles(); renderSparks(); renderGate(); renderArch(); renderLog(); renderMarket(); renderWatch(); reorderCards(true);
   }
   renderNews();
   if (document.body.dataset.view === "consoles") { renderUniverse(); renderKeys(); renderSources(); renderSignals(); renderRadar(); renderBriefCtl(); }

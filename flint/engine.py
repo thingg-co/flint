@@ -561,6 +561,12 @@ class Engine:
         first: dict[str, float] = {}
         for t in ticks:
             first.setdefault(t.symbol, t.price)
+        blind = [s for s in self.symbols if s not in first]
+        if blind:                                    # a symbol with zero history would block EVERY joint row -> no bars at all
+            self.trace.emit("feed", f"no backfill history for {', '.join(self.base[s] for s in blind)}; "
+                                    f"flat-seeding so they don't stall the rest of the universe", "warn")
+            for s in blind:
+                first[s] = 1.0                       # neutral placeholder: a data-less symbol contributes a flat, zero-return series
         for sym, px in first.items():
             self.builder.last_close.setdefault(sym, px)
         rows = self.builder.roll(time.time())
@@ -689,7 +695,7 @@ class Engine:
         self.gate = [float(g) for g in pred.gate]
         self.latest = {}
         for i, s in enumerate(self.symbols):
-            self.latest[s] = {**sugg[s], "price": float(closes[i]), "ts": ts, "attn": [float(a) for a in pred.attn[i]]}
+            self.latest[s] = {**sugg[s], "price": float(closes[i]), "ts": ts}
         self._publish({"type": "bar", "index": self.bar_index,
                        "bars": {s: self.bars[s][-1].to_json() for s in self.symbols if self.bars[s]},
                        "latest": self.latest, "gate": self.gate, "metrics": self.metrics.as_dict(),
@@ -739,7 +745,7 @@ class Engine:
             self.gate = [float(g) for g in pred.gate]
             self.latest = {}
             for i, s in enumerate(self.symbols):
-                self.latest[s] = {**sugg[s], "price": float(closes[i]), "ts": ts, "attn": [float(a) for a in pred.attn[i]]}
+                self.latest[s] = {**sugg[s], "price": float(closes[i]), "ts": ts}
             self.paper.rebalance({s: self.latest[s]["side"] * self.latest[s]["size"] for s in self.symbols},
                                  {s: float(closes[i]) for i, s in enumerate(self.symbols)}, ts,
                                  quotes={s: {"bid": self.prices[s].get("bid"), "ask": self.prices[s].get("ask")}
