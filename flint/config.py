@@ -15,7 +15,7 @@ def _env(name: str, default, cast=None):
 
 
 def _symbols() -> list[str]:
-    return [s.strip().upper() for s in _env("SYMBOLS", "NVDA,AAPL,MSFT,GOOGL,AMZN,META,TSLA,AVGO,AMD,QCOM,MU,ORCL,CRM,PLTR,MSTR,COIN,SMCI,NFLX,DIS,UBER,INTC,JPM,BAC,AXP,V,MA,KO,WMT,COST,LLY,CVX,XOM,SPY,QQQ").split(",") if s.strip()]
+    return [s.strip().upper() for s in _env("SYMBOLS", "NVDA,AAPL,MSFT,GOOGL,AMZN,META,TSLA,AVGO,ORCL,NFLX,AMD,QCOM,MU,INTC,TXN,AMAT,ARM,SMCI,TSM,CSCO,CRM,ADBE,NOW,PANW,PLTR,UBER,IBM,JPM,BAC,WFC,GS,MS,AXP,V,MA,SCHW,LLY,UNH,JNJ,ABBV,MRK,PFE,TMO,ABT,WMT,COST,KO,PEP,PG,MCD,NKE,HD,DIS,CVX,XOM,COP,BA,CAT,HON,GE,MSTR,COIN,HOOD,F,SPY,QQQ,IWM,SMH,XLF").split(",") if s.strip()]
 
 
 def _eodhd_key() -> str:
@@ -188,7 +188,7 @@ class Config:
     signals_minutes: float = _env("SIGNALS_MINUTES", 5.0)   # how often to refresh exogenous signals
     operator_half_life: float = _env("OPERATOR_HALF_LIFE", 1800.0)  # decay of an injected human note (seconds)
     radar_top: int = _env("RADAR_TOP", 250)                 # how many market-wide movers to watch
-    max_universe: int = _env("MAX_UNIVERSE", 64)            # cap on modeled symbols (cross-attention + data-rate limit)
+    max_universe: int = _env("MAX_UNIVERSE", 128)            # cap on modeled symbols (cross-attention + data-rate limit)
     burry_enabled: bool = _env("BURRY", "1") not in ("0", "false", "no")
     burry_aggr: float = _env("BURRY_AGGR", 0.7)         # 0..1: how hard the contrarian overlay fades crowded trades
     burry_fade_at: float = _env("BURRY_FADE_AT", 0.45)  # crowding magnitude above which aligned trades get faded

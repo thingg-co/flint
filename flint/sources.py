@@ -1033,31 +1033,37 @@ class SourceManager:
 
     async def backfill(self, cutoff: float) -> tuple[list[Tick], dict[str, str]]:
         """Backfill each symbol from the highest-priority enabled source that returns data."""
-        chosen: dict[str, str] = {}
-        collected: dict[str, list[Tick]] = {s: [] for s in self.symbols}
-        for src in self.ordered():
-            if not self.enabled.get(src.id):
-                continue
+        active = [src for src in self.ordered()
+                  if self.enabled.get(src.id) and any(src.supports(s) for s in self.symbols)]
+
+        async def _one(src):
             want = [s for s in self.symbols if src.supports(s)]
-            if not want:
-                continue
             try:
-                ticks = await asyncio.wait_for(src.backfill(want, cutoff), timeout=90)
+                return src.id, await asyncio.wait_for(src.backfill(want, cutoff), timeout=90)
             except Exception as e:  # noqa: BLE001
                 if self.trace:
                     self.trace.emit("feed", f"{src.name} backfill failed: {type(e).__name__}: {str(e)[:80]}", "warn")
+                return src.id, []
+
+        # query every source concurrently, then merge in priority order so startup stays fast as the universe grows
+        results = dict(await asyncio.gather(*[_one(src) for src in active]))
+        chosen: dict[str, str] = {}
+        collected: dict[str, list[Tick]] = {s: [] for s in self.symbols}
+        for src in self.ordered():
+            ticks = results.get(src.id)
+            if not ticks:
                 continue
             by_sym: dict[str, list[Tick]] = {}
             for t in ticks:
                 by_sym.setdefault(t.symbol, []).append(t)
             # keep the source with the RICHEST history per symbol (real bars beat a single seed)
-            for s in want:
+            for s in self.symbols:
                 if len(by_sym.get(s, [])) > len(collected[s]):
                     collected[s] = by_sym[s]
                     chosen[s] = src.id
                     self.seen[s][src.id] = time.time()
-            if ticks and self.trace:
-                self.trace.emit("feed", f"{src.name}: {len(ticks)} ticks for {len({t.symbol for t in ticks})} symbols")
+            if self.trace:
+                self.trace.emit("feed", f"{src.name}: {len(ticks)} ticks for {len(by_sym)} symbols")
         merged: list[Tick] = []
         for s in self.symbols:
             merged.extend(collected[s])

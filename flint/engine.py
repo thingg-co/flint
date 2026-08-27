@@ -741,7 +741,9 @@ class Engine:
             for i, s in enumerate(self.symbols):
                 self.latest[s] = {**sugg[s], "price": float(closes[i]), "ts": ts, "attn": [float(a) for a in pred.attn[i]]}
             self.paper.rebalance({s: self.latest[s]["side"] * self.latest[s]["size"] for s in self.symbols},
-                                 {s: float(closes[i]) for i, s in enumerate(self.symbols)}, ts)
+                                 {s: float(closes[i]) for i, s in enumerate(self.symbols)}, ts,
+                                 quotes={s: {"bid": self.prices[s].get("bid"), "ask": self.prices[s].get("ask")}
+                                         for s in self.symbols})
             self.trace.emit("model", f"bar #{self.bar_index}: regime gate " + " ".join(
                 f"E{k + 1}={g:.2f}" for k, g in enumerate(self.gate)) +
                 f" | band scale x{self.metrics.band_scale:.2f}, P(up) temper {self.metrics.p_scale:.2f}")

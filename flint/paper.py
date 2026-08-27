@@ -21,6 +21,7 @@ class PaperBook:
         self.realized = 0.0
         self.fees = 0.0
         self.n_trades = 0
+        self.spread_cost = 0.0        # half-spread paid crossing bid/ask, cumulative (reporting only)
         self.trades: deque = deque(maxlen=250)
         self.curve: deque = deque(maxlen=3000)   # {t, eq}
         self.last: dict[str, float] = {}         # last seen price per symbol
@@ -37,8 +38,11 @@ class PaperBook:
                 v += sh * p
         return v
 
-    def rebalance(self, targets: dict, prices: dict, ts: float) -> None:
-        """targets: symbol -> desired signed weight (side * size, in [-1, 1])."""
+    def rebalance(self, targets: dict, prices: dict, ts: float, quotes: dict | None = None) -> None:
+        """targets: symbol -> desired signed weight (side * size, in [-1, 1]).
+        quotes: optional {symbol: {"bid": float, "ask": float}} -- when present, buys fill at the
+        ask and sells at the bid so the book pays the real spread; equity still marks to mid."""
+        quotes = quotes or {}
         for s, p in prices.items():
             if p:
                 self.last[s] = p
@@ -50,16 +54,26 @@ class PaperBook:
         scale = (1.0 / gross) if gross > 1 else 1.0        # no leverage
         min_notional = max(200.0, eq * self.min_trade_frac)
         for s, w in tw.items():
-            p = self._px(s, prices)
-            if not p or p <= 0:
+            ref = self._px(s, prices)
+            if not ref or ref <= 0:
                 continue
-            desired = eq * w * scale / p
+            desired = eq * w * scale / ref
             cur = self.pos.get(s, 0.0)
             delta = desired - cur
-            if abs(delta * p) < min_notional:
+            if abs(delta * ref) < min_notional:
                 continue
-            self._fill(s, cur, delta, p, ts)
+            self._fill(s, cur, delta, self._exec_price(s, delta, ref, quotes), ts)
         self.curve.append({"t": ts, "eq": round(self.equity(prices), 2)})
+
+    def _exec_price(self, s, delta, ref, quotes) -> float:
+        """Fill a buy at the ask and a sell at the bid; fall back to the reference (mid/last)
+        price when no quote is available. Accrues the half-spread paid, for reporting."""
+        q = quotes.get(s) or {}
+        bid, ask = q.get("bid"), q.get("ask")
+        if bid and ask and ask > bid > 0:
+            self.spread_cost += abs(delta) * (ask - bid) / 2.0
+            return ask if delta > 0 else bid
+        return ref
 
     def _fill(self, s, cur, delta, p, ts) -> None:
         notional = delta * p
@@ -89,6 +103,7 @@ class PaperBook:
         return {"cash": self.cash, "pos": dict(self.pos), "avg": dict(self.avg),
                 "realized": self.realized, "fees": self.fees, "n_trades": self.n_trades,
                 "start": self.start, "started": self.started, "last": dict(self.last),
+                "spread_cost": self.spread_cost,
                 "trades": list(self.trades), "curve": list(self.curve)}
 
     def load_state(self, d: dict, symbols=None) -> None:
@@ -98,6 +113,7 @@ class PaperBook:
         self.realized = float(d.get("realized", 0.0))
         self.fees = float(d.get("fees", 0.0))
         self.n_trades = int(d.get("n_trades", 0))
+        self.spread_cost = float(d.get("spread_cost", 0.0))
         self.start = float(d.get("start", self.start))
         self.started = d.get("started")
         self.last = dict(d.get("last") or {})
@@ -122,6 +138,7 @@ class PaperBook:
         return {"start": self.start, "equity": round(eq, 2), "cash": round(self.cash, 2),
                 "gross": round(gross, 2), "net_exposure": round(net, 2),
                 "realized": round(self.realized, 2), "unrealized": round(upnl, 2), "fees": round(self.fees, 2),
+                "spread_cost": round(self.spread_cost, 2),
                 "pnl": round(eq - self.start, 2), "return_pct": round((eq / self.start - 1) * 100, 3),
                 "n_trades": self.n_trades, "started": self.started,
                 "positions": positions, "trades": list(self.trades)[:50], "curve": list(self.curve)}
