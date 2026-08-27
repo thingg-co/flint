@@ -21,6 +21,7 @@ from .learner import OnlineLearner, Prediction
 from .news import NewsHub
 from .paper import PaperBook
 from .schwab import SchwabAuth
+from .etrade import ETradeAuth
 from .signals import SignalHub
 from .sources import AlphaVantage, SourceManager, asset_class
 from .trace import Trace
@@ -75,6 +76,18 @@ KEY_SERVICES = [
      "url": "https://developer.schwab.com",
      "note": "Market data via OAuth. After saving, run  flint schwab-auth  to log in.",
      "fields": [{"id": "app_key", "label": "App key"}, {"id": "app_secret", "label": "App secret"}]},
+    {"id": "alpaca", "name": "Alpaca", "file": "alpaca.json", "kind": "json_multi",
+     "url": "https://alpaca.markets/",
+     "note": "Free API keys: real-time IEX quotes + bars (full SIP on a paid plan). No brokerage account needed.",
+     "fields": [{"id": "key_id", "label": "API key ID"}, {"id": "secret_key", "label": "Secret key"}]},
+    {"id": "tradier", "name": "Tradier", "file": "tradier.json", "kind": "json_multi",
+     "url": "https://documentation.tradier.com/",
+     "note": "Brokerage access token: real-time quotes with bid/ask + 5-min history.",
+     "fields": [{"id": "token", "label": "Access token"}]},
+    {"id": "etrade", "name": "E*TRADE", "file": "etrade.json", "kind": "json_multi",
+     "url": "https://developer.etrade.com/",
+     "note": "Market data via OAuth. After saving, run  flint etrade-auth  to log in (tokens renew daily).",
+     "fields": [{"id": "consumer_key", "label": "Consumer key"}, {"id": "consumer_secret", "label": "Consumer secret"}]},
 ]
 
 
@@ -145,6 +158,8 @@ class Engine:
         ak, asec, acb = cfg.schwab_creds
         token_file = cfg.schwab_token_file or os.path.join(cfg.state_dir, "schwab_tokens.json")
         self.schwab_auth = SchwabAuth(ak, asec, acb, token_file)
+        et_ck, et_cs = cfg.etrade_creds
+        self.etrade_auth = ETradeAuth(et_ck, et_cs, cfg.etrade_token_file or os.path.join(cfg.state_dir, "etrade_tokens.json"))
         self.log: deque[dict] = deque(maxlen=cfg.log_size)
         self.operator: dict[str, dict] = {}                 # per-symbol human bias {sent, attn, t, text}
         self.operator_notes: deque[dict] = deque(maxlen=50)  # raw injected notes, for display
@@ -191,7 +206,7 @@ class Engine:
         self.learner = OnlineLearner(cfg, N_FEATURES)
         self.sources = SourceManager(cfg, self.symbols, self.av, on_tick=self._on_live_tick,
                                      on_provider_change=self._on_provider_change, trace=self.trace,
-                                     schwab=self.schwab_auth, on_quote=self._on_quote)
+                                     schwab=self.schwab_auth, on_quote=self._on_quote, etrade=self.etrade_auth)
         self.news_hub = NewsHub(cfg, self.symbols, self.av)
         self.signals = SignalHub(cfg, self.symbols)
         self.prices = {s: {"price": None, "bid": None, "ask": None, "ts": None} for s in self.symbols}
@@ -399,7 +414,8 @@ class Engine:
                 except (OSError, ValueError):
                     pass
                 existing.update({k: v for k, v in vals.items() if v})
-                existing.setdefault("callback", "https://127.0.0.1")
+                if service == "schwab":
+                    existing.setdefault("callback", "https://127.0.0.1")
                 path.write_text(_json.dumps(existing))
             try:
                 path.chmod(0o600)
@@ -431,6 +447,25 @@ class Engine:
             asec = vals.get("app_secret") or self.schwab_auth.app_secret
             cfg.schwab_creds = (ak, asec, self.schwab_auth.callback)
             self.schwab_auth.app_key, self.schwab_auth.app_secret = ak, asec
+        elif service == "alpaca":
+            cfg.alpaca_creds = (vals.get("key_id", ""), vals.get("secret_key", ""))
+            src = self.sources.sources.get("alpaca")
+            if src:
+                src.kid, src.sec = cfg.alpaca_creds
+                if src.kid and src.sec:
+                    self.sources.toggle("alpaca", True)
+        elif service == "tradier":
+            cfg.tradier_token = vals.get("token", "")
+            src = self.sources.sources.get("tradier")
+            if src:
+                src.token = cfg.tradier_token
+                if src.token:
+                    self.sources.toggle("tradier", True)
+        elif service == "etrade":
+            ck = vals.get("consumer_key") or self.etrade_auth.ck
+            cs = vals.get("consumer_secret") or self.etrade_auth.cs
+            cfg.etrade_creds = (ck, cs)
+            self.etrade_auth.ck, self.etrade_auth.cs = ck, cs
 
     def snapshot(self) -> dict:
         cfg = self.cfg

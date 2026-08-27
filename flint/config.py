@@ -88,6 +88,45 @@ def _schwab() -> tuple[str, str, str]:
     return key, secret, callback
 
 
+def _alpaca() -> tuple[str, str]:
+    kid = _env("ALPACA_KEY_ID", ""); sec = _env("ALPACA_SECRET_KEY", "")
+    if not (kid and sec):
+        for path in ("alpaca.json", ".alpaca.json"):
+            try:
+                import json
+                d = json.loads(open(path).read())
+                kid = kid or d.get("key_id", ""); sec = sec or d.get("secret_key", ""); break
+            except (OSError, ValueError):
+                pass
+    return kid, sec
+
+
+def _tradier() -> str:
+    tok = _env("TRADIER_TOKEN", "")
+    if tok:
+        return tok
+    for path in ("tradier.json", ".tradier.json"):
+        try:
+            import json
+            return json.loads(open(path).read()).get("token", "")
+        except (OSError, ValueError):
+            pass
+    return ""
+
+
+def _etrade() -> tuple[str, str]:
+    ck = _env("ETRADE_CONSUMER_KEY", ""); cs = _env("ETRADE_CONSUMER_SECRET", "")
+    if not (ck and cs):
+        for path in ("etrade.json", ".etrade.json"):
+            try:
+                import json
+                d = json.loads(open(path).read())
+                ck = ck or d.get("consumer_key", ""); cs = cs or d.get("consumer_secret", ""); break
+            except (OSError, ValueError):
+                pass
+    return ck, cs
+
+
 def _av_key() -> str:
     key = _env("AV_KEY", "")
     if key:
@@ -116,6 +155,14 @@ class Config:
     schwab_creds: tuple = field(default_factory=_schwab)       # (app_key, app_secret, callback) from env or schwab.json
     schwab_token_file: str = _env("SCHWAB_TOKEN_FILE", "")     # defaults to <state_dir>/schwab_tokens.json
     schwab_seconds: float = _env("SCHWAB_SECONDS", 5.0)        # seconds between real-time quote polls
+    alpaca_creds: tuple = field(default_factory=_alpaca)       # (key_id, secret_key) from env or alpaca.json
+    alpaca_feed: str = _env("ALPACA_FEED", "iex")             # iex (free) or sip (paid)
+    alpaca_seconds: float = _env("ALPACA_SECONDS", 6.0)
+    tradier_token: str = field(default_factory=_tradier)       # brokerage access token from env or tradier.json
+    tradier_seconds: float = _env("TRADIER_SECONDS", 6.0)
+    etrade_creds: tuple = field(default_factory=_etrade)       # (consumer_key, consumer_secret) from env or etrade.json
+    etrade_token_file: str = _env("ETRADE_TOKEN_FILE", "")     # defaults to <state_dir>/etrade_tokens.json
+    etrade_seconds: float = _env("ETRADE_SECONDS", 6.0)
     finnhub_key: str = field(default_factory=_finnhub_key)     # Finnhub API key (env FLINT_FINNHUB_KEY or finnhub.json)
     finnhub_seconds: float = _env("FINNHUB_SECONDS", 15.0)     # seconds between Finnhub quote heartbeats
     eodhd_key: str = field(default_factory=_eodhd_key)         # EODHD API token (env FLINT_EODHD_KEY or eodhd.json)

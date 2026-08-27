@@ -958,18 +958,253 @@ class IBKRSource(Source):
                 pass
 
 
-REGISTRY = [IBKRSource, SchwabSource, FMPSource, FinnhubSource, EODHDSource, GoldApiSource, YahooSource, AlphaVantageQuoteSource]
+class AlpacaSource(Source):
+    """Alpaca market data: real-time quotes (bid/ask) + 5-min bars. Free API keys give the
+    IEX feed; a paid plan gives full SIP. Market data only -- no trading endpoints used."""
+
+    id = "alpaca"
+    name = "Alpaca"
+    kind = "equity"
+    mechanism = "poll"
+    priority = 29               # brokerage-grade quotes; below Finnhub trades, above Schwab poll
+    classes = ("equity",)
+    fresh_after = 120.0
+    DATA = "https://data.alpaca.markets/v2"
+
+    def __init__(self, cfg, symbols):
+        super().__init__(cfg, symbols)
+        self.kid, self.sec = cfg.alpaca_creds
+        self.feed = getattr(cfg, "alpaca_feed", "iex")
+        self.poll_interval = max(2.0, cfg.alpaca_seconds)
+        if not (self.kid and self.sec):
+            self.note = "no API keys (set alpaca.json or FLINT_ALPACA_KEY_ID / _SECRET_KEY)"
+
+    def _headers(self):
+        return {"APCA-API-KEY-ID": self.kid, "APCA-API-SECRET-KEY": self.sec}
+
+    async def backfill(self, symbols, cutoff):
+        syms = [s for s in symbols if self.supports(s)]
+        if not syms or not (self.kid and self.sec):
+            return []
+        from datetime import datetime, timezone
+        start = datetime.fromtimestamp(cutoff, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ticks, page = [], None
+        async with httpx.AsyncClient(timeout=30) as c:
+            for _ in range(20):                         # paginate the batched bars endpoint
+                params = {"symbols": ",".join(syms), "timeframe": "5Min", "start": start,
+                          "limit": 10000, "feed": self.feed, "adjustment": "raw"}
+                if page:
+                    params["page_token"] = page
+                r = await c.get(f"{self.DATA}/stocks/bars", headers=self._headers(), params=params)
+                if r.status_code != 200:
+                    self.note = f"bars {r.status_code}"
+                    break
+                d = r.json()
+                for sym, arr in (d.get("bars") or {}).items():
+                    for b in arr:
+                        try:
+                            ts = datetime.strptime(b["t"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp() + self.cfg.bar_seconds
+                        except (ValueError, KeyError):
+                            continue
+                        c0 = float(b.get("c") or 0)
+                        if c0:
+                            ticks.append(Tick(sym, ts, c0, float(b.get("v") or 0.0), None,
+                                              o=float(b.get("o") or c0), h=float(b.get("h") or c0), l=float(b.get("l") or c0)))
+                page = d.get("next_page_token")
+                if not page:
+                    break
+        return ticks
+
+    async def run(self, emit):
+        if not (self.kid and self.sec) or not self.symbols:
+            return
+        await self._poll_loop(emit)
+
+    async def poll_once(self, emit):
+        if not self.symbols or not (self.kid and self.sec):
+            return
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(f"{self.DATA}/stocks/quotes/latest", headers=self._headers(),
+                            params={"symbols": ",".join(self.symbols), "feed": self.feed})
+            if r.status_code != 200:
+                self.note = f"quotes {r.status_code}" + (" (plan?)" if r.status_code in (401, 403) else "")
+                return
+            quotes = r.json().get("quotes") or {}
+        n = 0
+        for sym, d in quotes.items():
+            bid = d.get("bp") or None
+            ask = d.get("ap") or None
+            price = (float(bid) + float(ask)) / 2 if (bid and ask) else (bid or ask)
+            if price:
+                self._emit(emit, Tick(sym, time.time(), float(price), 0.0, None,
+                                      float(bid) if bid else None, float(ask) if ask else None, quote=True))
+                n += 1
+        self.note = f"real-time quotes ({self.feed}) for {n} symbols"
+
+
+class TradierSource(Source):
+    """Tradier market data: real-time quotes (bid/ask) + 5-min history. Uses a brokerage
+    access token (Bearer). Market data only -- no trading endpoints used."""
+
+    id = "tradier"
+    name = "Tradier"
+    kind = "equity"
+    mechanism = "poll"
+    priority = 31
+    classes = ("equity",)
+    fresh_after = 120.0
+    REST = "https://api.tradier.com/v1"
+
+    def __init__(self, cfg, symbols):
+        super().__init__(cfg, symbols)
+        self.token = cfg.tradier_token
+        self.poll_interval = max(2.0, cfg.tradier_seconds)
+        if not self.token:
+            self.note = "no token (set tradier.json or FLINT_TRADIER_TOKEN)"
+
+    def _headers(self):
+        return {"Authorization": f"Bearer {self.token}", "Accept": "application/json"}
+
+    async def backfill(self, symbols, cutoff):
+        syms = [s for s in symbols if self.supports(s)]
+        if not syms or not self.token:
+            return []
+        from datetime import datetime
+        start = datetime.fromtimestamp(cutoff).strftime("%Y-%m-%d %H:%M")
+        ticks = []
+        async with httpx.AsyncClient(timeout=25) as c:
+            for sym in syms:
+                try:
+                    r = await c.get(f"{self.REST}/markets/timesales", headers=self._headers(),
+                                    params={"symbol": sym, "interval": "5min", "start": start, "session_filter": "open"})
+                    if r.status_code != 200:
+                        self.note = f"history {r.status_code}"
+                        continue
+                    data = (r.json().get("series") or {}).get("data") or []
+                    if isinstance(data, dict):
+                        data = [data]
+                    for b in data:
+                        ts = float(b.get("timestamp") or 0) + self.cfg.bar_seconds
+                        c0 = b.get("close")
+                        if ts and c0:
+                            c0 = float(c0)
+                            ticks.append(Tick(sym, ts, c0, float(b.get("volume") or 0.0), None,
+                                              o=float(b.get("open") or c0), h=float(b.get("high") or c0), l=float(b.get("low") or c0)))
+                    await asyncio.sleep(0.06)
+                except Exception as e:  # noqa: BLE001
+                    self.note = f"{sym}: {type(e).__name__}"
+        return ticks
+
+    async def run(self, emit):
+        if not self.token or not self.symbols:
+            return
+        await self._poll_loop(emit)
+
+    async def poll_once(self, emit):
+        if not self.symbols or not self.token:
+            return
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(f"{self.REST}/markets/quotes", headers=self._headers(),
+                            params={"symbols": ",".join(self.symbols)})
+            if r.status_code != 200:
+                self.note = f"quotes {r.status_code}" + (" (token?)" if r.status_code in (401, 403) else "")
+                return
+            q = ((r.json().get("quotes") or {}).get("quote")) or []
+        if isinstance(q, dict):
+            q = [q]
+        n = 0
+        for d in q:
+            sym = d.get("symbol")
+            price = d.get("last") or d.get("close")
+            bid = d.get("bid") or None
+            ask = d.get("ask") or None
+            if sym and price:
+                self._emit(emit, Tick(sym, time.time(), float(price), float(d.get("volume") or 0.0), None,
+                                      float(bid) if bid else None, float(ask) if ask else None, quote=True))
+                n += 1
+        self.note = f"real-time quotes for {n} symbols"
+
+
+class ETradeSource(Source):
+    """E*TRADE market data: real-time quotes (bid/ask) via signed OAuth 1.0a. Quote-only
+    (no historical-bars endpoint) so it relies on another source for backfill. Market data
+    only -- no trading endpoints used."""
+
+    id = "etrade"
+    name = "E*TRADE"
+    kind = "equity"
+    mechanism = "poll"
+    priority = 32
+    classes = ("equity",)
+    fresh_after = 120.0
+    QUOTE = "https://api.etrade.com/v1/market/quote"
+
+    def __init__(self, cfg, symbols, auth):
+        super().__init__(cfg, symbols)
+        self.auth = auth
+        self.poll_interval = max(3.0, cfg.etrade_seconds)
+        if not auth.has_creds:
+            self.note = "no consumer key (set etrade.json or FLINT_ETRADE_CONSUMER_KEY/SECRET)"
+        elif not auth.authenticated:
+            self.note = "consumer key set; run `flint etrade-auth` to log in"
+
+    async def run(self, emit):
+        if not self.symbols:
+            return
+        if not self.auth.authenticated:
+            self.note = ("no consumer key; add etrade.json" if not self.auth.has_creds
+                         else "not logged in; run `flint etrade-auth`")
+            return
+        await self._poll_loop(emit)
+
+    async def poll_once(self, emit):
+        if not self.symbols or not self.auth.authenticated:
+            return
+        n = 0
+        async with httpx.AsyncClient(timeout=15) as c:
+            for i in range(0, len(self.symbols), 25):        # E*TRADE allows up to 25 symbols per quote call
+                batch = self.symbols[i:i + 25]
+                url = f"{self.QUOTE}/{','.join(batch)}.json"
+                try:
+                    r = await c.get(url, headers=self.auth.signed_headers("GET", url))
+                except Exception as e:  # noqa: BLE001
+                    self.note = f"{type(e).__name__}"
+                    return
+                if r.status_code == 401:
+                    ok = await self.auth.renew()
+                    self.note = "reauthorized; retrying next poll" if ok else "unauthorized; re-run `flint etrade-auth`"
+                    return
+                if r.status_code != 200:
+                    self.note = f"quote {r.status_code}"
+                    return
+                for q in ((r.json().get("QuoteResponse") or {}).get("QuoteData") or []):
+                    prod = q.get("Product") or {}
+                    a = q.get("All") or {}
+                    sym = prod.get("symbol")
+                    price = a.get("lastTrade") or a.get("bid") or a.get("ask")
+                    bid = a.get("bid") or None
+                    ask = a.get("ask") or None
+                    if sym and price:
+                        self._emit(emit, Tick(sym, time.time(), float(price), float(a.get("totalVolume") or 0.0), None,
+                                              float(bid) if bid else None, float(ask) if ask else None, quote=True))
+                        n += 1
+                await asyncio.sleep(0.05)
+        self.note = f"real-time quotes for {n} symbols"
+
+
+REGISTRY = [IBKRSource, SchwabSource, AlpacaSource, TradierSource, ETradeSource, FMPSource, FinnhubSource, EODHDSource, GoldApiSource, YahooSource, AlphaVantageQuoteSource]
 
 
 class SourceManager:
     """Owns every source, routes ticks to the active provider per symbol, and
     lets sources be toggled at runtime."""
 
-    def __init__(self, cfg, symbols: list[str], av: AlphaVantage, on_tick, on_provider_change=None, trace=None, schwab: SchwabAuth = None, on_quote=None):
+    def __init__(self, cfg, symbols: list[str], av: AlphaVantage, on_tick, on_provider_change=None, trace=None, schwab: SchwabAuth = None, on_quote=None, etrade=None):
         self.cfg = cfg
         self.symbols = symbols
         self.av = av
         self.schwab = schwab
+        self.etrade = etrade
         self.on_tick = on_tick
         self.on_quote = on_quote
         self.on_provider_change = on_provider_change
@@ -984,6 +1219,8 @@ class SourceManager:
                 src = cls(cfg, symbols, av)
             elif cls is SchwabSource:
                 src = cls(cfg, symbols, schwab)
+            elif cls is ETradeSource:
+                src = cls(cfg, symbols, etrade)
             else:
                 src = cls(cfg, symbols)
             self.sources[src.id] = src

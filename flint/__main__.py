@@ -54,10 +54,61 @@ def _schwab_auth() -> None:
     print("The Charles Schwab source is now enabled for equity symbols. Start flint normally: `uv run flint`.")
 
 
+def _etrade_auth() -> None:
+    """Interactive one-time E*TRADE OAuth 1.0a login (out-of-band verifier code)."""
+    import asyncio
+    import os
+    import webbrowser
+
+    from .config import Config
+    from .etrade import ETradeAuth
+
+    cfg = Config()
+    ck, cs = cfg.etrade_creds
+    if not (ck and cs):
+        print("No E*TRADE app credentials found.\n"
+              "Create etrade.json in this directory:\n"
+              '  {"consumer_key": "YOUR_CONSUMER_KEY", "consumer_secret": "YOUR_CONSUMER_SECRET"}\n'
+              "or set FLINT_ETRADE_CONSUMER_KEY and FLINT_ETRADE_CONSUMER_SECRET, then run `flint etrade-auth` again.")
+        return
+    token_file = cfg.etrade_token_file or os.path.join(cfg.state_dir, "etrade_tokens.json")
+    auth = ETradeAuth(ck, cs, token_file)
+    try:
+        asyncio.run(auth.request_token())
+    except Exception as e:  # noqa: BLE001
+        print(f"Could not get a request token: {type(e).__name__}: {e}")
+        return
+    url = auth.authorize_url()
+    print("\nE*TRADE login")
+    print("1. Open this URL, log in, and approve the app:\n")
+    print("   " + url + "\n")
+    print("2. E*TRADE shows a short verification code on the page after you approve.")
+    print("3. Paste that code below.\n")
+    try:
+        webbrowser.open(url)
+    except Exception:  # noqa: BLE001
+        pass
+    code = input("Paste the verification code: ").strip()
+    if not code:
+        print("No code entered. Try again.")
+        return
+    try:
+        asyncio.run(auth.exchange_code(code))
+    except Exception as e:  # noqa: BLE001
+        print(f"Token exchange failed: {type(e).__name__}: {e}")
+        return
+    print(f"\nAuthenticated. Tokens saved to {token_file}.")
+    print("Note: E*TRADE access tokens expire at midnight ET -- re-run `flint etrade-auth` when that happens.")
+    print("The E*TRADE source is now enabled for equity symbols. Start flint normally: `uv run flint`.")
+
+
 def main() -> None:
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "schwab-auth":
         _schwab_auth()
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "etrade-auth":
+        _etrade_auth()
         return
     ap = argparse.ArgumentParser(prog="flint", description="continuously learning market model with a live dashboard")
     ap.add_argument("--feed", choices=["auto", "coinbase", "sim"], help="market data source (default: auto)")
