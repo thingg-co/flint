@@ -494,10 +494,10 @@ class Engine:
             "muted": sorted(self.muted),
             "universe": self.all_symbols,
             "prices": self.prices,
-            "bars": {s: [b.to_json() for b in self.bars[s]] for s in self.symbols},
+            "bars": {s: [b.to_json() for b in self.bars.get(s, ())] for s in self.symbols},
             "latest": self.latest,
             "gate": self.gate,
-            "outcomes": {s: list(self.outcomes[s]) for s in self.symbols},
+            "outcomes": {s: list(self.outcomes.get(s, ())) for s in self.symbols},
             "metrics": self.metrics.as_dict(),
             "history": {k: list(v) for k, v in self.history.items()},
             "log": list(self.log),
@@ -620,7 +620,7 @@ class Engine:
     def _history_row(self, row: dict[str, Bar]) -> None:
         self.bar_index += 1
         for s in self.symbols:
-            self.bars[s].append(row[s])
+            self.bars.setdefault(s, deque(maxlen=self.cfg.chart_bars)).append(row[s])
         closes = np.array([row[s].close for s in self.symbols], dtype=np.float32)
         self._mature(closes)
         x = self.features.push(row)
@@ -731,7 +731,7 @@ class Engine:
             x, closes, ts = pp.x, pp.closes, pp.ts
         else:                                        # not enough bars for a full window yet
             x = self.features.peek_window()
-            if x is None or not all(self.bars[s] for s in self.symbols):
+            if x is None or not all(self.bars.get(s) for s in self.symbols):
                 return
             closes = np.array([self.bars[s][-1].close for s in self.symbols], dtype=np.float32)
             ts = self.bars[self.symbols[0]][-1].ts
@@ -742,16 +742,16 @@ class Engine:
         for i, s in enumerate(self.symbols):
             self.latest[s] = {**sugg[s], "price": float(closes[i]), "ts": ts}
         self._publish({"type": "bar", "index": self.bar_index,
-                       "bars": {s: self.bars[s][-1].to_json() for s in self.symbols if self.bars[s]},
+                       "bars": {s: self.bars.get(s)[-1].to_json() for s in self.symbols if self.bars.get(s)},
                        "latest": self.latest, "gate": self.gate, "metrics": self.metrics.as_dict(),
-                       "history": {}, "outcomes": {s: list(self.outcomes[s]) for s in self.symbols},
+                       "history": {}, "outcomes": {s: list(self.outcomes.get(s, ())) for s in self.symbols},
                        "log": list(self.log), "status": self.status_dict()})
 
     async def _process_row(self, row: dict[str, Bar]) -> None:
         cfg = self.cfg
         self.bar_index += 1
         for s in self.symbols:
-            self.bars[s].append(row[s])
+            self.bars.setdefault(s, deque(maxlen=self.cfg.chart_bars)).append(row[s])
         closes = np.array([row[s].close for s in self.symbols], dtype=np.float32)
         ts = row[self.symbols[0]].ts
 
@@ -826,7 +826,7 @@ class Engine:
             "type": "bar", "index": self.bar_index, "bars": {s: row[s].to_json() for s in self.symbols},
             "latest": self.latest, "gate": self.gate, "metrics": self.metrics.as_dict(),
             "history": self._drain_history(),
-            "outcomes": {s: list(self.outcomes[s]) for s in self.symbols}, "log": list(self.log),
+            "outcomes": {s: list(self.outcomes.get(s, ())) for s in self.symbols}, "log": list(self.log),
             "status": self.status_dict(), "paper": self.paper.snapshot(self._live_prices()),
         })
 
@@ -1032,7 +1032,7 @@ class Engine:
                 m.suggestion_wins += int(pnl > 0)
                 self._log(f"{s} {sug['action']} x{sug['size']:.2f} resolved {yi:+.1f} bps, paper {pnl:+.2f} bps",
                           "win" if pnl > 0 else "loss")
-            self.outcomes[s].append({"t": pp.ts, "y": yi, "q50": q50, "hit": hit, "inside": inside,
+            self.outcomes.setdefault(s, deque(maxlen=40)).append({"t": pp.ts, "y": yi, "q50": q50, "hit": hit, "inside": inside,
                                      "side": sug["side"], "pnl": pnl, "pin": pin})
             mark = "hit" if hit else "miss" if hit is False else "flat"
             parts.append(f"{self.base[s]} {yi:+.1f} vs q50 {q50:+.1f} {mark}" + ("" if inside else " (outside band)"))
@@ -1257,7 +1257,8 @@ class Engine:
                 self.portfolio = await fetch_schwab_positions(self.schwab_auth)
                 self._publish({"type": "portfolio", "portfolio": self.portfolio})
                 held = {p["symbol"] for a in self.portfolio.get("accounts", []) for p in a.get("positions", [])
-                        if p.get("asset_type") in ("EQUITY", "ETF", "COLLECTIVE_INVESTMENT") and "." not in (p.get("symbol") or "X")}
+                        if p.get("asset_type") in ("EQUITY", "ETF", "COLLECTIVE_INVESTMENT")
+                        and (p.get("symbol") or "").isalpha() and 1 <= len(p.get("symbol") or "") <= 5}
                 room = self.cfg.max_universe - len(self.all_symbols)
                 new = [s for s in sorted(held) if s not in self.all_symbols][:max(0, room)]
                 if new:                                    # model your holdings too, so the Portfolio tab shows real calls
