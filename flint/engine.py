@@ -543,7 +543,7 @@ class Engine:
         await self._warmup()
         self._seed_forecast()
         self.status = "live"
-        self._publish({"type": "status", "status": self.status_dict()})
+        self._publish(self.snapshot())   # full resync: clients that connected during backfill/warmup now get the built bars (no reload needed)
         self.trace.emit("system", "live: streaming ticks, forecasting every bar, learning as labels mature")
         self.sources.start()
         self._tasks = [asyncio.create_task(c) for c in

@@ -1398,6 +1398,7 @@ function handle(msg) {
       buildCards(); buildConsoles(); buildControls(); applyMuted();
       Object.values(msg.trace || {}).forEach(evs => evs.forEach(ev => appendTrace(ev, false)));
       Object.values(consoles).forEach(c => { c.body.scrollTop = c.body.scrollHeight; });
+      { const t = $("#term"); if (t) t.innerHTML = ""; }
       Object.values(msg.trace || {}).flat().sort((a, b) => (a.seq || a.t) - (b.seq || b.t)).forEach(appendTerm);
       { const t = $("#term"); if (t) t.scrollTop = t.scrollHeight; }
       renderAll();
