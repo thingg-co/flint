@@ -965,12 +965,13 @@ class SourceManager:
     """Owns every source, routes ticks to the active provider per symbol, and
     lets sources be toggled at runtime."""
 
-    def __init__(self, cfg, symbols: list[str], av: AlphaVantage, on_tick, on_provider_change=None, trace=None, schwab: SchwabAuth = None):
+    def __init__(self, cfg, symbols: list[str], av: AlphaVantage, on_tick, on_provider_change=None, trace=None, schwab: SchwabAuth = None, on_quote=None):
         self.cfg = cfg
         self.symbols = symbols
         self.av = av
         self.schwab = schwab
         self.on_tick = on_tick
+        self.on_quote = on_quote
         self.on_provider_change = on_provider_change
         self.trace = trace
         default_off = {s.strip() for s in cfg.sources_off.split(",") if s.strip()}
@@ -1035,6 +1036,8 @@ class SourceManager:
                 self.on_provider_change(sym, prev, active)
         if src_id == active:
             self.on_tick(tick)
+        elif self.on_quote and tick.bid and tick.ask:
+            self.on_quote(tick.symbol, tick.bid, tick.ask)   # keep the spread fresh even when a trade feed owns the price
 
     def _emitter(self, src_id: str):
         return lambda tick: self._route(src_id, tick)

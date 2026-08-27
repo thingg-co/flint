@@ -191,7 +191,7 @@ class Engine:
         self.learner = OnlineLearner(cfg, N_FEATURES)
         self.sources = SourceManager(cfg, self.symbols, self.av, on_tick=self._on_live_tick,
                                      on_provider_change=self._on_provider_change, trace=self.trace,
-                                     schwab=self.schwab_auth)
+                                     schwab=self.schwab_auth, on_quote=self._on_quote)
         self.news_hub = NewsHub(cfg, self.symbols, self.av)
         self.signals = SignalHub(cfg, self.symbols)
         self.prices = {s: {"price": None, "bid": None, "ask": None, "ts": None} for s in self.symbols}
@@ -626,6 +626,13 @@ class Engine:
         lvl = "warn" if active is None or active == "sim" else "act"
         self.trace.emit("feed", f"{self.base[sym]} provider: {pn} -> {an}", lvl)
         self._publish({"type": "status", "status": self.status_dict()})
+
+    def _on_quote(self, sym: str, bid: float, ask: float) -> None:
+        """Bid/ask update from a non-active quote source (keeps the paper-book spread current)."""
+        p = self.prices.get(sym)
+        if p:
+            p["bid"] = bid
+            p["ask"] = ask
 
     def _on_tick(self, t: Tick, live: bool) -> None:
         p = self.prices.get(t.symbol)
