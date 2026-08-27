@@ -126,9 +126,11 @@ function drawChart(card) {
   const upC = "#26a269", downC = "#e0574b";
   const cw = Math.max(1, Math.min(dx * 0.68, 9));
 
-  // panes: price on top, MACD below, shared x axis
-  const macdH = 46, gap = 8, axisY = h - padB;
-  const mB = axisY, mT = mB - macdH, pT = padT, pB = mT - gap;
+  // panes: price on top, a volume strip, then MACD below (shared x axis, no overlap)
+  const macdH = 46, volPaneH = 26, gap = 8, axisY = h - padB;
+  const mB = axisY, mT = mB - macdH;
+  const vB = mT - gap, vT = vB - volPaneH;
+  const pT = padT, pB = vT - gap;
 
   const live = state.prices[sym] && state.prices[sym].price;
   const marketLive = marketState().cls === "live";   // only trust the live price during the regular session
@@ -150,18 +152,19 @@ function drawChart(card) {
     ctx.fillStyle = C.muted; ctx.fillText(label, padL + 2, y - 7);
   }
 
-  // volume histogram along the bottom of the price pane (drawn behind the fan/candles)
+  // volume pane (its own strip between price and MACD, so it never overlaps the candles)
   const maxVol = bars.reduce((mx, b) => Math.max(mx, b.v || 0), 0);
   if (maxVol > 0) {
-    const volH = (pB - pT) * 0.28;
     bars.forEach((b, i) => {
       const v = b.v || 0; if (v <= 0) return;
-      const vh = (v / maxVol) * volH;
-      ctx.fillStyle = b.c >= b.o ? "rgba(38,160,105,0.45)" : "rgba(224,87,75,0.45)";
-      ctx.fillRect(xs(i) - cw / 2, pB - vh, cw, vh);
+      const vh = (v / maxVol) * volPaneH;
+      ctx.fillStyle = b.c >= b.o ? "rgba(38,160,105,0.65)" : "rgba(224,87,75,0.65)";
+      ctx.fillRect(xs(i) - cw / 2, vB - vh, cw, Math.max(1, vh));
     });
+    ctx.strokeStyle = C.grid; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, vB + 0.5); ctx.lineTo(xLast, vB + 0.5); ctx.stroke();
     ctx.fillStyle = C.muted; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
-    ctx.fillText("vol", padL + 1, pB - 2);
+    ctx.fillText("vol", padL + 1, vT + 8);
   }
 
   // forecast fan

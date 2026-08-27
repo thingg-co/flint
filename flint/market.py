@@ -111,22 +111,30 @@ class MarketScanner:
 
     async def scan(self, say=None, light=False) -> dict:
         say = say or (lambda *a, **k: None)
+        prev = self.state or {}
         async with httpx.AsyncClient(timeout=20, follow_redirects=True) as c:
-            idx = await self._finnhub_quotes(c, list(INDEX_ETFS)) if self.finnhub_key else {}
-            sect = await self._finnhub_quotes(c, list(SECTOR_ETFS)) if self.finnhub_key else {}
+            # index/sector quotes are Finnhub-heavy and slow-moving -- only fetch them on a full scan
+            idx = (await self._finnhub_quotes(c, list(INDEX_ETFS)) if self.finnhub_key else {}) if not light else {}
+            sect = (await self._finnhub_quotes(c, list(SECTOR_ETFS)) if self.finnhub_key else {}) if not light else {}
             vix = await self._vix(c)
             crypto = None   # crypto removed from flint; equities only
             actives = await self._movers(c, "most_actives")
             gainers = await self._movers(c, "day_gainers")
             losers = await self._movers(c, "day_losers")
-            radar = (self.state or {}).get("radar", []) if light else await self._radar(c)   # light refresh keeps the last radar
+            radar = prev.get("radar", []) if light else await self._radar(c)   # light refresh keeps the last radar
 
+        # preserve slow-moving sectors/indices/breadth when this scan skipped them or a fetch returned empty,
+        # so the whole-market panel never flickers to empty between full scans
         allq = {**idx, **sect}
-        up = sum(1 for v in allq.values() if v["chg"] > 0)
-        n = len(allq)
-        breadth = up / n if n else 0.5
-        sectors = sorted(({"etf": k, "name": SECTOR_ETFS[k], **v} for k, v in sect.items()), key=lambda x: -x["chg"])
-        indices = [{"etf": k, "name": INDEX_ETFS[k], **v} for k, v in idx.items()]
+        if allq:
+            up = sum(1 for v in allq.values() if v["chg"] > 0)
+            n = len(allq)
+            breadth = up / n
+        else:
+            breadth, up, n = prev.get("breadth", 0.5), prev.get("breadth_up", 0), prev.get("breadth_n", 0)
+        sectors = sorted(({"etf": k, "name": SECTOR_ETFS[k], **v} for k, v in sect.items()), key=lambda x: -x["chg"]) if sect else prev.get("sectors", [])
+        indices = [{"etf": k, "name": INDEX_ETFS[k], **v} for k, v in idx.items()] if idx else prev.get("indices", [])
+        vix = vix if vix else prev.get("vix")
 
         # market-wide model features
         breadth_norm = round(clip(2 * breadth - 1), 3)
