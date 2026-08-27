@@ -47,7 +47,9 @@ change actually requires it.
   failover per symbol).
 - `flint/market.py`, `flint/signals.py` — whole-market scan (movers/sectors/breadth/VIX)
   and the exogenous signals (WSB, gurus, 13F, fear & greed).
-- `flint/paper.py` — the paper-trading book: spread-aware, persisted inside the checkpoint.
+- `flint/paper.py` — the paper-trading book: spread-aware, shorts as long puts (bounded loss), persisted in the checkpoint.
+- `flint/options.py` — Black-Scholes marking + Schwab option-chain selection (put for a short; ATM IV / skew as model features).
+- `flint/portfolio.py` — read-only Schwab account positions for the Portfolio tab (GET /trader/v1/accounts only, never orders).
 - `flint/schwab.py`, `flint/etrade.py` — brokerage OAuth.
 - `flint/server.py` — FastAPI routes and the `/ws` websocket.
 - `flint/config.py` — every knob, each reading a `FLINT_*` env var or a json file, with a
@@ -74,6 +76,10 @@ change actually requires it.
   it appear as a skippable setup step with no frontend code.
 - The narrative brief runs on local Ollama. Never route it to a cloud API.
 - User-facing text capitalizes "Flint" as a proper noun.
+- FlintNet returns five tensors (quantiles, up-logit, down-logit, gate, attention). If you change the head, update `flint_loss` AND `autotune._bench` together -- an arity mismatch only surfaces on a re-benchmark (a feature/symbol-count change), not on a cached start.
+- Changing the feature set or the symbol list reshapes the model, so it resets once (guarded; the old checkpoint is backed up to model.pt.bak).
+- Paper shorts are long puts (loss capped at the premium) -- never naked shorts; longs are stock. Paper only trades once the model is `trusted`.
+- The Portfolio tab and account access are strictly read-only; Flint never places, changes, or cancels an order on any provider.
 
 ## Working on it
 
