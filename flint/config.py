@@ -115,7 +115,7 @@ class Config:
     av_news_minutes: float = _env("AV_NEWS_MINUTES", 30.0)     # min minutes between Alpha Vantage news pulls
     schwab_creds: tuple = field(default_factory=_schwab)       # (app_key, app_secret, callback) from env or schwab.json
     schwab_token_file: str = _env("SCHWAB_TOKEN_FILE", "")     # defaults to <state_dir>/schwab_tokens.json
-    schwab_seconds: float = _env("SCHWAB_SECONDS", 10.0)       # seconds between real-time quote polls
+    schwab_seconds: float = _env("SCHWAB_SECONDS", 5.0)        # seconds between real-time quote polls
     finnhub_key: str = field(default_factory=_finnhub_key)     # Finnhub API key (env FLINT_FINNHUB_KEY or finnhub.json)
     finnhub_seconds: float = _env("FINNHUB_SECONDS", 15.0)     # seconds between Finnhub quote heartbeats
     eodhd_key: str = field(default_factory=_eodhd_key)         # EODHD API token (env FLINT_EODHD_KEY or eodhd.json)
@@ -185,7 +185,8 @@ class Config:
     # Signals + Burry overlay
     muted_symbols: str = _env("MUTED", "")           # symbols to watch-but-not-suggest (comma list)
     signals_off: str = _env("SIGNALS_OFF", "")          # signal providers off by default: wsb, feargreed, derivatives, scion
-    signals_minutes: float = _env("SIGNALS_MINUTES", 5.0)   # how often to refresh exogenous signals
+    signals_minutes: float = _env("SIGNALS_MINUTES", 5.0)   # how often to refresh exogenous signals (heavy: WSB/gurus/13F)
+    market_scan_seconds: float = _env("MARKET_SCAN_SECONDS", 45.0)  # tight loop for movers/sectors/breadth (skips the heavy radar)
     operator_half_life: float = _env("OPERATOR_HALF_LIFE", 1800.0)  # decay of an injected human note (seconds)
     radar_top: int = _env("RADAR_TOP", 250)                 # how many market-wide movers to watch
     max_universe: int = _env("MAX_UNIVERSE", 256)            # cap on modeled symbols (cross-attention + data-rate limit)

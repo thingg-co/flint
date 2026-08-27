@@ -109,7 +109,7 @@ class MarketScanner:
         rows = sorted(seen.values(), key=lambda r: -abs(r["chg"]))
         return rows[:self.radar_top]
 
-    async def scan(self, say=None) -> dict:
+    async def scan(self, say=None, light=False) -> dict:
         say = say or (lambda *a, **k: None)
         async with httpx.AsyncClient(timeout=20, follow_redirects=True) as c:
             idx = await self._finnhub_quotes(c, list(INDEX_ETFS)) if self.finnhub_key else {}
@@ -119,7 +119,7 @@ class MarketScanner:
             actives = await self._movers(c, "most_actives")
             gainers = await self._movers(c, "day_gainers")
             losers = await self._movers(c, "day_losers")
-            radar = await self._radar(c)
+            radar = (self.state or {}).get("radar", []) if light else await self._radar(c)   # light refresh keeps the last radar
 
         allq = {**idx, **sect}
         up = sum(1 for v in allq.values() if v["chg"] > 0)

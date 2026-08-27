@@ -547,7 +547,7 @@ class Engine:
         self.trace.emit("system", "live: streaming ticks, forecasting every bar, learning as labels mature")
         self.sources.start()
         self._tasks = [asyncio.create_task(c) for c in
-                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop(), self._brief_loop(), self._market_status_loop())]
+                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop(), self._market_loop(), self._brief_loop(), self._market_status_loop())]
         await asyncio.gather(*self._tasks)
 
     def _ingest_history(self, ticks: list[Tick]) -> None:
@@ -993,6 +993,23 @@ class Engine:
         while True:
             await self.gather_signals()
             await asyncio.sleep(max(1.0, self.cfg.signals_minutes) * 60)
+
+    async def _market_loop(self) -> None:
+        """Refresh whole-market movers/sectors/breadth on a tight loop; the heavier radar stays on the signals cadence."""
+        if not self.signals.enabled.get("market"):
+            return
+        await asyncio.sleep(12)
+        while True:
+            if not self._gathering:                        # don't collide with the full signals gather
+                try:
+                    await asyncio.wait_for(self.signals.market.scan(light=True), timeout=45)
+                    if isinstance(self.signals_state, dict):
+                        self.signals_state["market"] = self.signals.market.state
+                        self._publish({"type": "signals", "signals": self.signals_state,
+                                       "signal_providers": self.signals.status()})
+                except Exception as e:  # noqa: BLE001
+                    self.trace.emit("signals", f"market refresh failed: {type(e).__name__}", "warn")
+            await asyncio.sleep(max(20.0, self.cfg.market_scan_seconds))
 
     async def gather_signals(self) -> None:
         if self._gathering:
