@@ -153,11 +153,11 @@ function drawChart(card) {
   // volume histogram along the bottom of the price pane (drawn behind the fan/candles)
   const maxVol = bars.reduce((mx, b) => Math.max(mx, b.v || 0), 0);
   if (maxVol > 0) {
-    const volH = (pB - pT) * 0.2;
+    const volH = (pB - pT) * 0.28;
     bars.forEach((b, i) => {
       const v = b.v || 0; if (v <= 0) return;
       const vh = (v / maxVol) * volH;
-      ctx.fillStyle = b.c >= b.o ? "rgba(38,160,105,0.22)" : "rgba(224,87,75,0.22)";
+      ctx.fillStyle = b.c >= b.o ? "rgba(38,160,105,0.45)" : "rgba(224,87,75,0.45)";
       ctx.fillRect(xs(i) - cw / 2, pB - vh, cw, vh);
     });
     ctx.fillStyle = C.muted; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
