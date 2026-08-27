@@ -13,3 +13,9 @@ anthropic.json
 
 # macOS
 .DS_Store
+
+# provider credentials for the newer sources (never commit)
+alpaca.json
+tradier.json
+etrade.json
+etrade_tokens.json
