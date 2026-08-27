@@ -58,8 +58,8 @@ def _bench(device: str, preset, n_assets: int, n_features: int, batch: int, n_qu
     y = torch.randn(batch, n_assets, device=dev)
 
     def step():
-        q, l, g, _ = m(x)
-        loss, _ = flint_loss(q, l, g, y, quant)
+        q, up, down, g, _ = m(x)
+        loss, _ = flint_loss(q, up, down, g, y, quant)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
