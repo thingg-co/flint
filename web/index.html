@@ -26,6 +26,7 @@
     <button data-tab="brief" hidden>Brief</button>
     <button data-tab="dashboard" class="active">Dashboard</button>
     <button data-tab="paper">Paper</button>
+    <button data-tab="portfolio">Portfolio</button>
     <button data-tab="console">Console</button>
     <button data-tab="consoles">Control panel</button>
   </nav>
@@ -185,6 +186,13 @@
     <div class="block"><h3>Recent trades <small id="p-tr-meta"></small></h3><div class="ptable" id="p-trades"></div></div>
   </div>
   <div class="why">Simulated. The model runs a $100k long/short book, rebalancing to its own suggestions with no leverage and a small cost per trade. It compounds continuously and persists across restarts. These are not real orders.</div>
+</main>
+<main id="portfolio" class="view">
+  <div class="paper-head">
+    <div class="peq"><span class="peq-label">portfolio value</span><span class="peq-val" id="pf-total">—</span><span class="peq-ret" id="pf-pnl"></span></div>
+    <div class="pstats"><small id="pf-meta">connecting to Schwab…</small></div>
+  </div>
+  <div id="pf-accounts"></div>
 </main>
 <main id="console" class="view">
   <div class="term-head">

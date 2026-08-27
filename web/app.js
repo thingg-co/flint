@@ -24,7 +24,7 @@ const CONTROL_FIELDS = [
   ["min_labels", "labels before trusted", 1], ["news_minutes", "news every (min)", 1],
 ];
 
-const state = { config: null, status: {}, controls: {}, prices: {}, bars: {}, latest: {}, gate: [], outcomes: {},
+const state = { config: null, status: {}, controls: {}, prices: {}, bars: {}, latest: {}, gate: [], outcomes: {}, portfolio: null,
   metrics: {}, history: { loss: [], hit: [], coverage: [], pnl: [] }, log: [], news: null,
   sources: [], news_sources: [], providers: {}, classes: {},
   signals: null, signal_providers: [], brief: null, paper: null, burry: { enabled: true }, keys: [], muted: [], classes: {}, universe: [] };
@@ -514,6 +514,7 @@ function renderAll() {
   if (document.body.dataset.view === "consoles") { renderUniverse(); renderKeys(); renderSources(); renderSignals(); renderRadar(); renderBriefCtl(); }
   if (document.body.dataset.view === "brief") renderBrief();
   if (document.body.dataset.view === "paper") renderPaper();
+  if (document.body.dataset.view === "portfolio") renderPortfolio();
 }
 
 function scheduleDraw() {
@@ -1177,6 +1178,44 @@ function paintPaperEquity() {
   if (rEl) { rEl.textContent = (ret >= 0 ? "+" : "") + ret.toFixed(2) + "%"; rEl.className = "peq-ret " + (ret >= 0 ? "up" : "down"); }
 }
 
+function renderPortfolio() {
+  const root = $("#pf-accounts"); if (!root) return;
+  const pf = state.portfolio, meta = $("#pf-meta");
+  if (!pf || !pf.accounts) {
+    root.innerHTML = "";
+    $("#pf-total").textContent = "—"; $("#pf-pnl").textContent = "";
+    if (meta) meta.textContent = pf && pf.error ? pf.error : "connecting to Schwab…";
+    return;
+  }
+  let total = 0, pnl = 0;
+  pf.accounts.forEach(a => { total += a.liquidation || 0; (a.positions || []).forEach(p => pnl += p.pnl || 0); });
+  $("#pf-total").textContent = fmtUSD(total);
+  const pe = $("#pf-pnl"); pe.textContent = (pnl >= 0 ? "+" : "") + fmtUSD(pnl); pe.className = "peq-ret " + (pnl >= 0 ? "up" : "down");
+  if (meta) meta.textContent = pf.t ? "updated " + fmtTime(pf.t) + " · read-only, no trading" : "";
+  root.innerHTML = pf.accounts.map(a => {
+    const head = `<div class="pf-acct"><span class="pf-name">${esc(a.name)}</span><span class="pf-id">${esc(a.id)}</span><span class="pf-liq">${fmtUSD(a.liquidation)}</span></div>`;
+    const rows = (a.positions || []).map(p => {
+      const L = state.latest[p.symbol];
+      let sig = `<span class="nm">not modeled</span>`;
+      if (L) {
+        const act = L.action || "HOLD";
+        const pu = L.p_up != null ? Math.round(L.p_up * 100) : "·";
+        const pd = L.p_down != null ? Math.round(L.p_down * 100) : "·";
+        const q50 = L.q ? fmtBps(L.q[2]) : "·";
+        const bull = (L.p_up || 0) > (L.p_down || 0);
+        const align = act === "HOLD" ? "" : ((p.qty >= 0) === bull ? `<span class="al ok">aligned</span>` : `<span class="al warn">counter</span>`);
+        sig = `<span class="badge ${act.toLowerCase()}">${act}</span> <span class="up">${pu}%↑</span> <span class="down">${pd}%↓</span> <span class="q">${q50}bps</span> ${align}`;
+      }
+      return `<div class="pf-row"><span class="psym">${esc(base(p.symbol))}</span>` +
+        `<span class="${p.qty >= 0 ? "" : "down"}">${p.qty >= 0 ? "" : "short "}${Math.abs(p.qty)}</span>` +
+        `<span>${fmtUSD(p.value)}</span>` +
+        `<span class="${p.pnl >= 0 ? "up" : "down"}">${p.pnl >= 0 ? "+" : ""}${fmtUSD(p.pnl)} <small>${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%</small></span>` +
+        `<span class="pf-sig">${sig}</span></div>`;
+    }).join("");
+    return `<div class="block pf-block">${head}<div class="pf-rows"><div class="pf-row phead"><span>sym</span><span>qty</span><span>value</span><span>P/L</span><span>Flint</span></div>${rows}</div></div>`;
+  }).join("");
+}
+
 function renderPaper() {
   const p = state.paper; if (!p || !$("#paper")) return;
   paintPaperEquity();
@@ -1394,7 +1433,7 @@ function handle(msg) {
       Object.assign(state, { config: msg.config, status: msg.status, controls: msg.controls, prices: msg.prices, bars: msg.bars,
         latest: msg.latest, gate: msg.gate, outcomes: msg.outcomes, metrics: msg.metrics, history: msg.history, log: msg.log, news: msg.news,
         sources: msg.sources || [], news_sources: msg.news_sources || [], providers: (msg.status && msg.status.providers) || {}, classes: msg.classes || {},
-        signals: msg.signals || null, signal_providers: msg.signal_providers || [], brief: msg.brief || null, paper: msg.paper || null, burry: msg.burry || { enabled: true }, keys: msg.keys || [], muted: msg.muted || [], universe: msg.universe || (msg.config ? msg.config.symbols : []) });
+        signals: msg.signals || null, signal_providers: msg.signal_providers || [], brief: msg.brief || null, paper: msg.paper || null, portfolio: msg.portfolio || null, burry: msg.burry || { enabled: true }, keys: msg.keys || [], muted: msg.muted || [], universe: msg.universe || (msg.config ? msg.config.symbols : []) });
       buildCards(); buildConsoles(); buildControls(); applyMuted();
       Object.values(msg.trace || {}).forEach(evs => evs.forEach(ev => appendTrace(ev, false)));
       Object.values(consoles).forEach(c => { c.body.scrollTop = c.body.scrollHeight; });
@@ -1404,6 +1443,10 @@ function handle(msg) {
       renderAll();
       requestAnimationFrame(() => requestAnimationFrame(redrawCharts));
       onboardStart();
+      break;
+    case "portfolio":
+      state.portfolio = msg.portfolio;
+      if (document.body.dataset.view === "portfolio") renderPortfolio();
       break;
     case "tick":
       state.prices = msg.prices; state.status = msg.status; state.providers = msg.status.providers || state.providers; renderStatus();

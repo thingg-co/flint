@@ -235,6 +235,7 @@ class Config:
     signals_off: str = _env("SIGNALS_OFF", "")          # signal providers off by default: wsb, feargreed, derivatives, scion
     signals_minutes: float = _env("SIGNALS_MINUTES", 5.0)   # how often to refresh exogenous signals (heavy: WSB/gurus/13F)
     market_scan_seconds: float = _env("MARKET_SCAN_SECONDS", 45.0)  # tight loop for movers/sectors/breadth (skips the heavy radar)
+    portfolio_seconds: float = _env("PORTFOLIO_SECONDS", 60.0)      # how often to poll Schwab account positions (read-only)
     operator_half_life: float = _env("OPERATOR_HALF_LIFE", 1800.0)  # decay of an injected human note (seconds)
     radar_top: int = _env("RADAR_TOP", 250)                 # how many market-wide movers to watch
     max_universe: int = _env("MAX_UNIVERSE", 256)            # cap on modeled symbols (cross-attention + data-rate limit)

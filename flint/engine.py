@@ -213,6 +213,7 @@ class Engine:
         self.tick_counts = {s: 0 for s in self.symbols}
         self.bars: dict[str, deque[Bar]] = {s: deque(maxlen=cfg.chart_bars) for s in self.symbols}
         self.paper = PaperBook(cfg.paper_start, cfg.cost_bps)   # $100k paper book for this run
+        self.portfolio: dict = {}                               # Schwab account positions (read-only), for the Portfolio tab
         self.bar_index = 0
         self.pending: deque[Pending] = deque()
         self.latest: dict[str, dict] = {}
@@ -505,6 +506,7 @@ class Engine:
             "news": self.news,
             "brief": self.brief,
             "paper": self.paper.snapshot(self._live_prices()),
+            "portfolio": self.portfolio,
         }
 
     def snapshot_json(self) -> str:
@@ -582,7 +584,7 @@ class Engine:
         self.trace.emit("system", "live: streaming ticks, forecasting every bar, learning as labels mature")
         self.sources.start()
         self._tasks = [asyncio.create_task(c) for c in
-                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop(), self._market_loop(), self._brief_loop(), self._market_status_loop())]
+                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop(), self._market_loop(), self._brief_loop(), self._market_status_loop(), self._portfolio_loop())]
         await asyncio.gather(*self._tasks)
 
     def _ingest_history(self, ticks: list[Tick]) -> None:
@@ -1200,6 +1202,28 @@ class Engine:
             self.brief = {**self.brief, "generating": False, "error": f"{type(ex).__name__}: {str(ex)[:120]}"}
             self.trace.emit("system", "brief failed: " + str(ex)[:120], "error")
         self._publish({"type": "brief", "brief": self.brief})
+
+    async def _portfolio_loop(self) -> None:
+        """Poll Schwab account positions (read-only) for the Portfolio tab. Never trades."""
+        if not self.schwab_auth.authenticated:
+            return
+        import httpx as _httpx
+        from .portfolio import fetch_schwab_positions
+        await asyncio.sleep(9)
+        while True:
+            try:
+                self.portfolio = await fetch_schwab_positions(self.schwab_auth)
+                self._publish({"type": "portfolio", "portfolio": self.portfolio})
+            except _httpx.HTTPStatusError as e:
+                if e.response.status_code in (401, 403):
+                    self.portfolio = {"error": "Schwab account access not enabled -- add the Accounts product and re-run flint schwab-auth"}
+                    self._publish({"type": "portfolio", "portfolio": self.portfolio})
+                    self.trace.emit("system", "Portfolio: Schwab account access not enabled", "warn")
+                    return
+                self.trace.emit("system", f"portfolio: HTTP {e.response.status_code}", "warn")
+            except Exception as e:  # noqa: BLE001
+                self.trace.emit("system", f"portfolio: {type(e).__name__}", "warn")
+            await asyncio.sleep(max(20.0, self.cfg.portfolio_seconds))
 
     async def _market_status_loop(self) -> None:
         """Poll Finnhub for the holiday-aware US market status (open/pre/post/closed)."""
