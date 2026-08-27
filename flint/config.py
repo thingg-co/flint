@@ -15,7 +15,7 @@ def _env(name: str, default, cast=None):
 
 
 def _symbols() -> list[str]:
-    return [s.strip().upper() for s in _env("SYMBOLS", "NVDA,AAPL,MSFT,GOOGL,AMZN,META,TSLA,AVGO,ORCL,NFLX,AMD,QCOM,MU,INTC,TXN,AMAT,ARM,SMCI,TSM,CSCO,CRM,ADBE,NOW,PANW,PLTR,UBER,IBM,JPM,BAC,WFC,GS,MS,AXP,V,MA,SCHW,LLY,UNH,JNJ,ABBV,MRK,PFE,TMO,ABT,WMT,COST,KO,PEP,PG,MCD,NKE,HD,DIS,CVX,XOM,COP,BA,CAT,HON,GE,MSTR,COIN,HOOD,F,SPY,QQQ,IWM,SMH,XLF").split(",") if s.strip()]
+    return [s.strip().upper() for s in _env("SYMBOLS", "NVDA,AAPL,MSFT,GOOGL,AMZN,META,TSLA,AVGO,ORCL,NFLX,AMD,QCOM,MU,INTC,TXN,AMAT,ARM,SMCI,TSM,CSCO,CRM,ADBE,NOW,PANW,PLTR,UBER,IBM,JPM,BAC,WFC,GS,MS,AXP,V,MA,SCHW,LLY,UNH,JNJ,ABBV,MRK,PFE,TMO,ABT,WMT,COST,KO,PEP,PG,MCD,NKE,HD,DIS,CVX,XOM,COP,BA,CAT,HON,GE,MSTR,COIN,HOOD,F,SPY,QQQ,IWM,SMH,XLF,LRCX,KLAC,ADI,MRVL,MCHP,NXPI,ON,ANET,DELL,HPQ,HPE,WDC,GLW,TEL,APH,MPWR,INTU,ADSK,FTNT,CRWD,ZS,SNOW,DDOG,NET,MDB,TEAM,WDAY,SNPS,CDNS,SHOP,SPOT,ABNB,DASH,RBLX,PINS,SNAP,RDDT,EA,TTWO,ROKU,U,APP,DOCU,OKTA,HUBS,T,VZ,TMUS,CMCSA,CHTR,WBD,C,USB,PNC,TFC,COF,BLK,SPGI,CME,ICE,MCO,AON,PGR,TRV,ALL,MET,PRU,AIG,SYF,CB,BX,KKR,APO,AJG,DHR,BMY,AMGN,GILD,VRTX,REGN,ISRG,MDT,SYK,BSX,CI,CVS,HCA,ELV,ZTS,BDX,MCK,IDXX,DXCM,EW,SBUX,CMG,TGT,LOW,TJX,ROST,DG,DLTR,YUM,BKNG,MAR,HLT,RCL,CCL,GM,LULU,ULTA").split(",") if s.strip()]
 
 
 def _eodhd_key() -> str:
@@ -151,7 +151,7 @@ class Config:
     device: str = _env("DEVICE", "auto")               # auto | cpu | cuda | mps
     auto_size: bool = _env("AUTO_SIZE", "1") not in ("0", "false", "no")
     autotune_util: float = _env("AUTOTUNE_UTIL", 0.7)  # fraction of the bar interval training may use
-    max_warmup_seconds: float = _env("MAX_WARMUP_SECONDS", 180.0)  # go-live warmup ceiling; caps auto model size
+    max_warmup_seconds: float = _env("MAX_WARMUP_SECONDS", 300.0)  # go-live warmup ceiling; caps auto model size
 
     # Model (overridden by auto-sizing unless auto_size is off)
     d_model: int = _env("D_MODEL", 48)
@@ -188,7 +188,9 @@ class Config:
     signals_minutes: float = _env("SIGNALS_MINUTES", 5.0)   # how often to refresh exogenous signals
     operator_half_life: float = _env("OPERATOR_HALF_LIFE", 1800.0)  # decay of an injected human note (seconds)
     radar_top: int = _env("RADAR_TOP", 250)                 # how many market-wide movers to watch
-    max_universe: int = _env("MAX_UNIVERSE", 128)            # cap on modeled symbols (cross-attention + data-rate limit)
+    max_universe: int = _env("MAX_UNIVERSE", 256)            # cap on modeled symbols (cross-attention + data-rate limit)
+    radar_top: int = _env("RADAR_TOP", 750)                  # movers watchlist size (display + breadth); Yahoo supply ~1000
+    radar_count: int = _env("RADAR_COUNT", 250)              # per-screener fetch (Yahoo hard cap is 250)
     burry_enabled: bool = _env("BURRY", "1") not in ("0", "false", "no")
     burry_aggr: float = _env("BURRY_AGGR", 0.7)         # 0..1: how hard the contrarian overlay fades crowded trades
     burry_fade_at: float = _env("BURRY_FADE_AT", 0.45)  # crowding magnitude above which aligned trades get faded

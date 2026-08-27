@@ -28,9 +28,10 @@ def clip(x, lo=-1.0, hi=1.0):
 
 
 class MarketScanner:
-    def __init__(self, finnhub_key: str = "", radar_top: int = 250):
+    def __init__(self, finnhub_key: str = "", radar_top: int = 250, radar_count: int = 100):
         self.finnhub_key = finnhub_key
         self.radar_top = radar_top
+        self.radar_count = radar_count
         self.state: dict = {}
         self.status = ""
 
@@ -87,10 +88,12 @@ class MarketScanner:
         """Merge the three big predefined screeners into one ranked movers watchlist."""
         seen = {}
         for scr, cat in (("most_actives", "active"), ("day_gainers", "gainer"), ("day_losers", "loser"),
-                         ("small_cap_gainers", "smallcap"), ("aggressive_small_caps", "smallcap")):  # include penny/small-cap movers
+                         ("small_cap_gainers", "smallcap"), ("aggressive_small_caps", "smallcap"),
+                         ("undervalued_large_caps", "value"), ("growth_technology_stocks", "growth"),
+                         ("undervalued_growth_stocks", "growth"), ("most_shorted_stocks", "shorted")):  # broad supply for a large radar
             try:
                 r = await c.get("https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved",
-                                params={"scrIds": scr, "count": 100}, headers={"User-Agent": UA})
+                                params={"scrIds": scr, "count": self.radar_count}, headers={"User-Agent": UA})
                 if r.status_code != 200:
                     continue
                 for x in r.json().get("finance", {}).get("result", [{}])[0].get("quotes", []):
