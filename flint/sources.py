@@ -497,7 +497,7 @@ class SchwabSource(Source):
                 try:
                     r = await c.get(f"{self.BASE}/pricehistory", headers=headers,
                                     params={"symbol": sym, "periodType": "day", "period": "10",
-                                            "frequencyType": "minute", "frequency": "5", "needExtendedHoursData": "true"})
+                                            "frequencyType": "minute", "frequency": "5", "needExtendedHoursData": "false"})
                     if r.status_code != 200:
                         self.note = f"pricehistory {r.status_code}"
                         return []
