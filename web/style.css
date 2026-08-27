@@ -79,7 +79,9 @@ body[data-view="dashboard"] #dashboard, body[data-view="consoles"] #consoles, bo
 .stats b { font-family: var(--mono); font-weight: 500; font-size: 13px; }
 .pmeter { position: relative; height: 6px; background: var(--grid); border-radius: 3px; overflow: hidden; }
 .pmeter i { position: absolute; top: 0; bottom: 0; background: var(--blue); }
-.pmeter:after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--ink-2); }
+.pmeter i.up { left: 50%; background: var(--good); }
+.pmeter i.dn { right: 50%; background: var(--serious); }
+.pmeter:after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--ink-2); z-index: 1; }
 .outcomes { display: flex; gap: 3px; flex-wrap: wrap; min-height: 10px; }
 .outcomes i { width: 9px; height: 9px; border-radius: 2px; background: var(--axis); display: block; }
 .outcomes i.hit { background: var(--good); } .outcomes i.miss { background: var(--critical); } .outcomes i.acted { outline: 1px solid var(--ink); }

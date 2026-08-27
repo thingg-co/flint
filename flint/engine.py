@@ -802,7 +802,7 @@ class Engine:
                 sg = sugg[s]
                 self.trace.emit("model", f"{self.base[s]} raw q10 {q[0]:+.1f} q25 {q[1]:+.1f} q50 {q[2]:+.1f} q75 {q[3]:+.1f} "
                                          f"q90 {q[4]:+.1f} bps, P(up) {pred.p_up[i]:.2f} | calibrated band {sg['q'][0]:+.1f} to "
-                                         f"{sg['q'][4]:+.1f}, P(up) {sg['p_up']:.2f} | attends " +
+                                         f"{sg['q'][4]:+.1f}, P(up) {sg['p_up']:.2f} P(down) {sg['p_down']:.2f} | attends " +
                                 " ".join(f"{n} {a:.2f}" for a, n in att[:3]))
                 self.trace.emit("policy", f"{self.base[s]} {sg['action']}" + (f" size {sg['size']:.2f}" if sg['side'] else "") +
                                 f": {sg['why']}" + ("" if sg["trusted"] else " [warming up, not counted]"),
@@ -833,20 +833,26 @@ class Engine:
         m = self.metrics
         m.loss, m.pinball, m.bce, m.steps = res["loss"], res["pinball"], res["bce"], res["steps"]
 
+    def _temper(self, p_raw: float) -> float:
+        """Apply the online P(up)/P(down) temperature (p_scale)."""
+        p_raw = min(max(p_raw, 1e-6), 1 - 1e-6)
+        z = max(-6.0, min(6.0, math.log(p_raw / (1 - p_raw))))
+        return 1.0 / (1.0 + math.exp(-self.metrics.p_scale * z))
+
     def _calibrate(self, q, p_raw: float) -> tuple[list[float], float]:
         """Apply the online conformal band scale and the P(up) temperature."""
         m = self.metrics
         q50 = float(q[2])
         qc = [q50 + m.band_scale * (float(v) - q50) for v in q]
-        p_raw = min(max(p_raw, 1e-6), 1 - 1e-6)
-        z = max(-6.0, min(6.0, math.log(p_raw / (1 - p_raw))))
-        return qc, 1.0 / (1.0 + math.exp(-m.p_scale * z))
+        return qc, self._temper(p_raw)
 
     def _suggest(self, i: int, s: str, pred: Prediction) -> dict:
         cfg = self.cfg
         m = self.metrics
         p_raw = float(pred.p_up[i])
+        p_down_raw = float(pred.p_down[i])
         qc, p = self._calibrate(pred.q[i], p_raw)
+        p_down = self._temper(p_down_raw)
         q10, q25, q50, q75, q90 = qc
         iqr = max(q75 - q25, 1e-3)
         score = q50 / iqr
@@ -863,7 +869,9 @@ class Engine:
             reasons.append("its trend and direction signals disagree")
         side = 0 if reasons else (1 if score > 0 else -1)
         size = cfg.max_size * min(1.0, max(0.0, (conviction - 2 * cfg.prob_margin) / 0.5)) if side else 0.0
-        why = "holding: " + "; ".join(reasons) if reasons else f"leaning in: {q50:+.0f} bps expected, {p * 100:.0f}% odds up"
+        why = "holding: " + "; ".join(reasons) if reasons else f"leaning in: {q50:+.0f} bps expected, {p * 100:.0f}% up / {p_down * 100:.0f}% down"
+        if p > 0.5 and p_down > 0.5:
+            why += "  |  both tails fat — expect a big move, direction unclear"
         base_side, base_size = side, size
         muted = s in self.muted
         if muted:
@@ -875,7 +883,7 @@ class Engine:
             if overlay["notes"]:
                 why = why + "  |  Burry overlay: " + "; ".join(overlay["notes"])
         return {"symbol": s, "action": "BUY" if side > 0 else "SELL" if side < 0 else "HOLD", "side": side,
-                "size": round(size, 3), "score": score, "p_up": p, "p_raw": p_raw, "q": qc,
+                "size": round(size, 3), "score": score, "p_up": p, "p_raw": p_raw, "p_down": p_down, "p_down_raw": p_down_raw, "q": qc,
                 "q_raw": [float(v) for v in pred.q[i]], "iqr": iqr, "band_scale": m.band_scale, "p_scale": m.p_scale,
                 "trusted": m.trusted, "why": why,
                 "crowding": round(self.crowding.get(s, 0.0), 3), "guru_tilt": round(self.guru_tilt.get(s, 0.0), 3),

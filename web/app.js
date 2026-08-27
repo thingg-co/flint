@@ -296,8 +296,8 @@ function buildCards() {
       <div class="signal"><span class="badge hold">■ HOLD</span><span class="size num"></span><span class="warm" hidden>warming up</span></div>
       <div class="chart-wrap"><canvas class="chart"></canvas></div>
       <div class="stats"><div><label>median</label><b class="q50">·</b></div><div><label>10-90 band</label><b class="band">·</b></div>
-        <div><label>P(up)</label><b class="pup">·</b></div><div><label>score</label><b class="score">·</b></div></div>
-      <div class="pmeter" title="P(up): fill right of centre is up, left is down"><i></i></div>
+        <div><label>P(up)</label><b class="pup">·</b></div><div><label>P(down)</label><b class="pdown">·</b></div></div>
+      <div class="pmeter" title="right = P(up), left = P(down); the gap between is P(flat)"><i class="up"></i><i class="dn"></i></div>
       <div class="outcomes" title="matured forecasts, newest right: green hit, red miss, outlined = acted on"></div>
       <div class="why"></div>
       <div class="strategy"></div>
@@ -344,10 +344,10 @@ function updateCard(sym) {
     $(".q50", card.el).textContent = `${fmtBps(L.q[2])} bps`;
     $(".band", card.el).textContent = `${fmtBps(L.q[0])} to ${fmtBps(L.q[4])}`;
     $(".pup", card.el).textContent = L.p_up.toFixed(2);
-    $(".score", card.el).textContent = (L.score >= 0 ? "+" : "") + L.score.toFixed(2);
-    const m = $(".pmeter i", card.el), pu = L.p_up;
-    if (pu >= 0.5) { m.style.left = "50%"; m.style.width = `${(pu - 0.5) * 100}%`; m.style.background = C.good; }
-    else { m.style.left = `${pu * 100}%`; m.style.width = `${(0.5 - pu) * 100}%`; m.style.background = C.critical; }
+    $(".pdown", card.el).textContent = (L.p_down != null ? L.p_down.toFixed(2) : "·");
+    const up = $(".pmeter i.up", card.el), dn = $(".pmeter i.dn", card.el);
+    if (up) up.style.width = `${Math.max(0, Math.min(1, L.p_up)) * 50}%`;
+    if (dn) dn.style.width = `${Math.max(0, Math.min(1, L.p_down || 0)) * 50}%`;
     $(".why", card.el).textContent = L.why;
     const strat = $(".strategy", card.el);
     if (L.crowding != null) {

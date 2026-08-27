@@ -210,7 +210,8 @@ class Config:
     # Online learning
     lr: float = _env("LR", 5e-4)
     weight_decay: float = _env("WEIGHT_DECAY", 1e-2)
-    label_smoothing: float = _env("LABEL_SMOOTHING", 0.1)   # softens the P(up) target so the net cannot claim ~99% certainty
+    label_smoothing: float = _env("LABEL_SMOOTHING", 0.1)   # softens the P(up)/P(down) targets so the net cannot claim ~99% certainty
+    direction_threshold_bps: float = _env("DIRECTION_THRESHOLD_BPS", 10.0)  # deadband: P(up)=P(ret>+t), P(down)=P(ret<-t); the gap is P(flat)
     batch_size: int = _env("BATCH_SIZE", 16)   # smaller batch: half the activation memory (this Mac is memory-tight at a big universe)
     steps_per_label: int = _env("STEPS_PER_LABEL", 2)
     replay_size: int = _env("REPLAY_SIZE", 4096)

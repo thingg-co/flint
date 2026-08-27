@@ -21,7 +21,8 @@ log = logging.getLogger(__name__)
 @dataclass(slots=True)
 class Prediction:
     q: np.ndarray      # (assets, quantiles) forecast of the forward return, bps
-    p_up: np.ndarray   # (assets,) probability the forward return is positive
+    p_up: np.ndarray   # (assets,) probability the forward return exceeds +threshold
+    p_down: np.ndarray # (assets,) probability the forward return is below -threshold
     gate: np.ndarray   # (experts,) regime mixture weights
     attn: np.ndarray   # (assets, assets) cross-asset attention
 
@@ -69,9 +70,9 @@ class OnlineLearner:
     def predict(self, x: np.ndarray) -> Prediction:
         with self.lock, torch.no_grad():
             self.model.eval()
-            q, logit, gate, attn = self.model(torch.from_numpy(x)[None].to(self.device))
-        return Prediction(q[0].cpu().numpy(), torch.sigmoid(logit[0]).cpu().numpy(),
-                          gate[0].cpu().numpy(), attn[0].cpu().numpy())
+            q, up_logit, down_logit, gate, attn = self.model(torch.from_numpy(x)[None].to(self.device))
+        return Prediction(q[0].cpu().numpy(), torch.sigmoid(up_logit[0]).cpu().numpy(),
+                          torch.sigmoid(down_logit[0]).cpu().numpy(), gate[0].cpu().numpy(), attn[0].cpu().numpy())
 
     def add(self, x: np.ndarray, y: np.ndarray) -> None:
         self.rx[self.ptr] = x
@@ -103,9 +104,10 @@ class OnlineLearner:
                 y = y.to(self.device)
                 if self.cfg.input_noise > 0:
                     x = x + self.cfg.input_noise * torch.randn_like(x)
-                q, logit, gate, _ = self.model(x)
-                loss, parts = flint_loss(q, logit, gate, y, self.cfg.quantiles,
-                                         label_smoothing=self.cfg.label_smoothing)
+                q, up_logit, down_logit, gate, _ = self.model(x)
+                loss, parts = flint_loss(q, up_logit, down_logit, gate, y, self.cfg.quantiles,
+                                         label_smoothing=self.cfg.label_smoothing,
+                                         threshold=self.cfg.direction_threshold_bps)
                 self.opt.zero_grad(set_to_none=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)

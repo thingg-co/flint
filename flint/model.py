@@ -64,7 +64,7 @@ class FlintNet(nn.Module):
         self.ff = nn.Sequential(nn.Linear(d_model, 2 * d_model), nn.GELU(), nn.Dropout(dropout), nn.Linear(2 * d_model, d_model))
         self.gate = nn.Sequential(nn.Linear(2 * d_model, d_model), nn.GELU(), nn.Linear(d_model, n_experts))
         self.experts = nn.ModuleList([
-            nn.Sequential(nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, n_quantiles + 1))
+            nn.Sequential(nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, n_quantiles + 2))
             for _ in range(n_experts)
         ])
         self.gate_noise = 0.5
@@ -92,8 +92,8 @@ class FlintNet(nn.Module):
         gate = torch.softmax(logits, dim=-1)
         outs = torch.stack([e(z) for e in self.experts], dim=1)          # (B, K, N, Q+1)
         out = (gate[:, :, None, None] * outs).sum(1)                      # (B, N, Q+1)
-        q = self._monotone(out[..., :-1])
-        return q, out[..., -1], gate, w
+        q = self._monotone(out[..., :-2])
+        return q, out[..., -2], out[..., -1], gate, w
 
     def _monotone(self, raw: torch.Tensor) -> torch.Tensor:
         """Median plus positive increments outward, so quantiles never cross."""
@@ -104,15 +104,19 @@ class FlintNet(nn.Module):
         return torch.cat([down, m, up], dim=-1)
 
 
-def flint_loss(q: torch.Tensor, logit: torch.Tensor, gate: torch.Tensor, y: torch.Tensor,
-               quantiles: tuple[float, ...], balance: float = 0.3, label_smoothing: float = 0.0):
+def flint_loss(q: torch.Tensor, up_logit: torch.Tensor, down_logit: torch.Tensor, gate: torch.Tensor,
+               y: torch.Tensor, quantiles: tuple[float, ...], balance: float = 0.3,
+               label_smoothing: float = 0.0, threshold: float = 0.0):
     taus = torch.tensor(quantiles, dtype=q.dtype, device=q.device)
     diff = y[..., None] - q
     pinball = torch.maximum(taus * diff, (taus - 1) * diff).mean()
-    up = (y > 0).to(q.dtype)
-    if label_smoothing > 0:            # keep P(up) off the 0/1 rails so it can't saturate into false confidence
+    up = (y > threshold).to(q.dtype)        # independent tails around a deadband, so they need not sum to 1
+    down = (y < -threshold).to(q.dtype)
+    if label_smoothing > 0:                  # keep the heads off the 0/1 rails
         up = up * (1 - label_smoothing) + 0.5 * label_smoothing
-    bce = F.binary_cross_entropy_with_logits(logit, up)
+        down = down * (1 - label_smoothing) + 0.5 * label_smoothing
+    bce = 0.5 * (F.binary_cross_entropy_with_logits(up_logit, up)
+                 + F.binary_cross_entropy_with_logits(down_logit, down))
     usage = gate.mean(0)
     # KL(usage || uniform): keeps the gate from collapsing onto one expert early on.
     bal = (usage * torch.log(usage * gate.shape[1] + 1e-8)).sum()
