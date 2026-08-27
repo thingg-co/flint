@@ -109,6 +109,7 @@ function ctx2d(canvas) {
 function ema(a, p) { const k = 2 / (p + 1); let e; return a.map((v, i) => (e = i ? v * k + e * (1 - k) : v)); }
 
 function drawChart(card) {
+  if (!card.canvas.clientWidth) return;   // not laid out yet (cold first paint / hidden tab) -- a later redraw handles it
   const sym = card.sym;
   const bars = (state.bars[sym] || []).slice(-((state.config && state.config.chart_bars) || 160));
   const { ctx, w, h } = ctx2d(card.canvas);
@@ -519,6 +520,10 @@ function scheduleDraw() {
   if (drawQueued || document.body.dataset.view !== "dashboard") return;
   drawQueued = true;
   requestAnimationFrame(() => { drawQueued = false; Object.values(cards).forEach(drawChart); });
+}
+
+function redrawCharts() {
+  if (document.body.dataset.view === "dashboard") Object.values(cards).forEach(drawChart);
 }
 
 // Consoles + controls ----------------------------------------------------------------
@@ -1396,7 +1401,7 @@ function handle(msg) {
       Object.values(msg.trace || {}).flat().sort((a, b) => (a.seq || a.t) - (b.seq || b.t)).forEach(appendTerm);
       { const t = $("#term"); if (t) t.scrollTop = t.scrollHeight; }
       renderAll();
-      requestAnimationFrame(() => { if (document.body.dataset.view === "dashboard") Object.values(cards).forEach(drawChart); });
+      requestAnimationFrame(() => requestAnimationFrame(redrawCharts));
       onboardStart();
       break;
     case "tick":
@@ -1492,5 +1497,7 @@ if (soundBtn) {
     paint();
   };
 }
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(redrawCharts).catch(() => {});
+window.addEventListener("load", redrawCharts);
 connect();
 })();
