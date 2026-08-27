@@ -566,7 +566,8 @@ class Engine:
             self.trace.emit("feed", f"no backfill history for {', '.join(self.base[s] for s in blind)}; "
                                     f"flat-seeding so they don't stall the rest of the universe", "warn")
             for s in blind:
-                first[s] = 1.0                       # neutral placeholder: a data-less symbol contributes a flat, zero-return series
+                first[s] = 0.0                       # zero seed: flat bars read as all-zero neutral features, and the first real
+                                                     # bar has prev==0 so its return is 0 (no fake spike when the symbol recovers)
         for sym, px in first.items():
             self.builder.last_close.setdefault(sym, px)
         rows = self.builder.roll(time.time())
