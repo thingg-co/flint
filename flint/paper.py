@@ -1,6 +1,7 @@
-"""Paper-trading simulator: follows the model's live suggestions with a $100k book for
-the duration of the run. Long/short, no leverage (gross exposure capped at the book's
-equity), per-name weight capped, marked to market on live prices. It resets each run.
+"""Paper-trading simulator: follows the model's live suggestions with a $100k book that
+runs continuously and compounds. Long/short, no leverage (gross exposure capped at the
+book's equity), per-name weight capped, marked to market on live prices. Its state is
+persisted in the checkpoint, so positions, cash, and P&L survive restarts.
 """
 from __future__ import annotations
 
@@ -83,6 +84,25 @@ class PaperBook:
         self.trades.appendleft({"t": ts, "sym": s, "side": "buy" if delta > 0 else "sell",
                                 "shares": round(abs(delta), 2), "price": round(p, 4),
                                 "notional": round(abs(notional), 2)})
+
+    def to_state(self) -> dict:
+        return {"cash": self.cash, "pos": dict(self.pos), "avg": dict(self.avg),
+                "realized": self.realized, "fees": self.fees, "n_trades": self.n_trades,
+                "start": self.start, "started": self.started, "last": dict(self.last),
+                "trades": list(self.trades), "curve": list(self.curve)}
+
+    def load_state(self, d: dict, symbols=None) -> None:
+        self.cash = float(d.get("cash", self.cash))
+        self.pos = {k: float(v) for k, v in (d.get("pos") or {}).items() if symbols is None or k in symbols}
+        self.avg = {k: float(v) for k, v in (d.get("avg") or {}).items() if k in self.pos}
+        self.realized = float(d.get("realized", 0.0))
+        self.fees = float(d.get("fees", 0.0))
+        self.n_trades = int(d.get("n_trades", 0))
+        self.start = float(d.get("start", self.start))
+        self.started = d.get("started")
+        self.last = dict(d.get("last") or {})
+        self.trades = deque(d.get("trades") or [], maxlen=self.trades.maxlen)
+        self.curve = deque(d.get("curve") or [], maxlen=self.curve.maxlen)
 
     def snapshot(self, prices: dict) -> dict:
         eq = self.equity(prices)

@@ -511,6 +511,8 @@ class Engine:
                 if sym in m.pnl_by_symbol:
                     m.pnl_by_symbol[sym] = v
             m.trusted = m.live_labels >= cfg.min_labels
+            if extra.get("paper"):
+                self.paper.load_state(extra["paper"], set(self.symbols))
             self.trace.emit("system", f"restored checkpoint from {cfg.state_dir}: {self.learner.steps} steps, "
                                       f"{self.learner.labels} labels, {m.live_labels}/{cfg.min_labels} live labels, "
                                       f"{self.learner.size} windows in replay")
@@ -660,7 +662,8 @@ class Engine:
             m = self.metrics
             metrics = {k: getattr(m, k) for k in self._PERSIST_METRICS}
             metrics["pnl_by_symbol"] = dict(m.pnl_by_symbol)
-            self.learner.save(self.cfg.state_dir, extra={"norm": self.features.norm.state(), "metrics": metrics})
+            self.learner.save(self.cfg.state_dir, extra={"norm": self.features.norm.state(), "metrics": metrics,
+                                                          "paper": self.paper.to_state()})
         except Exception as e:  # noqa: BLE001
             log.warning("checkpoint failed: %s", e)
 

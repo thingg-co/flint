@@ -185,12 +185,12 @@
     <div class="peq"><span class="peq-label">paper equity</span><span class="peq-val" id="p-equity">$100,000</span><span class="peq-ret" id="p-return">+0.00%</span></div>
     <div class="pstats" id="p-stats"></div>
   </div>
-  <div class="block"><h3>Equity curve <small>$100k book, this run</small></h3><canvas id="p-curve" class="pcurve"></canvas></div>
+  <div class="block"><h3>Equity curve <small>$100k book, compounding</small></h3><canvas id="p-curve" class="pcurve"></canvas></div>
   <div class="row">
     <div class="block"><h3>Positions <small id="p-pos-meta"></small></h3><div class="ptable" id="p-positions"></div></div>
     <div class="block"><h3>Recent trades <small id="p-tr-meta"></small></h3><div class="ptable" id="p-trades"></div></div>
   </div>
-  <div class="why">Simulated. The model runs a $100k long/short book for the duration of this run, rebalancing to its own suggestions with no leverage and a small cost per trade. These are not real orders, and the book resets when the run restarts.</div>
+  <div class="why">Simulated. The model runs a $100k long/short book, rebalancing to its own suggestions with no leverage and a small cost per trade. It compounds continuously and persists across restarts. These are not real orders.</div>
 </main>
 <main id="console" class="view">
   <div class="term-head">
