@@ -162,7 +162,7 @@ function drawChart(card) {
       ctx.fillRect(xs(i) - cw / 2, vB - vh, cw, Math.max(1, vh));
     });
     ctx.strokeStyle = C.grid; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(padL, vB + 0.5); ctx.lineTo(xLast, vB + 0.5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(padL, vB + 0.5); ctx.lineTo(xs(n - 1), vB + 0.5); ctx.stroke();
     ctx.fillStyle = C.muted; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
     ctx.fillText("vol", padL + 1, vT + 8);
   }
