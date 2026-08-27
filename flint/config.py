@@ -228,6 +228,8 @@ class Config:
     score_threshold: float = _env("SCORE_THRESHOLD", 0.35)  # |q50| / IQR needed to act
     prob_margin: float = _env("PROB_MARGIN", 0.06)          # |P(up) - 0.5| needed to act
     cost_bps: float = _env("COST_BPS", 0.0)                 # round-trip cost charged to paper P&L
+    option_commission: float = _env("OPTION_COMMISSION", 0.65)  # per-contract commission for paper option trades
+    option_dte: int = _env("OPTION_DTE", 35)                # target days-to-expiry when opening a put for a short
     max_size: float = _env("MAX_SIZE", 1.0)
 
     # Signals + Burry overlay

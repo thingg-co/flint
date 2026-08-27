@@ -1221,14 +1221,16 @@ function renderPaper() {
   paintPaperEquity();
   $("#p-stats").innerHTML = [
     ["cash", fmtUSD(p.cash)], ["gross exposure", fmtUSD(p.gross)], ["net", fmtUSD(p.net_exposure)],
-    ["realized", fmtUSD(p.realized)], ["unrealized", fmtUSD(p.unrealized)], ["fees", fmtUSD(p.fees)], ["spread paid", fmtUSD(p.spread_cost || 0)], ["trades", p.n_trades],
+    ["realized", fmtUSD(p.realized)], ["unrealized", fmtUSD(p.unrealized)], ["fees", fmtUSD(p.fees)], ["option fees", fmtUSD(p.option_fees || 0)], ["spread paid", fmtUSD(p.spread_cost || 0)], ["trades", p.n_trades],
   ].map(([k, v]) => `<div class="pstat"><label>${esc(k)}</label><b>${esc(String(v))}</b></div>`).join("");
   const pos = p.positions || [];
   $("#p-pos-meta").textContent = pos.length ? `${pos.length} open` : "";
   $("#p-positions").innerHTML = pos.length
     ? `<div class="prow phead"><span>sym</span><span>side</span><span>weight</span><span>value</span><span>unreal</span></div>` +
       pos.map(x => `<div class="prow"><span class="psym">${esc(base(x.sym))}</span>` +
-        `<span class="${x.shares >= 0 ? "up" : "down"}">${x.shares >= 0 ? "long" : "short"}</span>` +
+        (x.kind === "put"
+          ? `<span class="down" title="bearish via long put — loss capped at the premium">put ${x.strike}${x.expiry ? " " + esc(x.expiry) : ""}</span>`
+          : `<span class="${x.shares >= 0 ? "up" : "down"}">${x.shares >= 0 ? "long" : "short"}</span>`) +
         `<span>${(x.weight * 100).toFixed(1)}%</span><span>${fmtUSD(x.value)}</span>` +
         `<span class="${x.upnl >= 0 ? "up" : "down"}">${x.upnl >= 0 ? "+" : ""}${fmtUSD(x.upnl)}</span></div>`).join("")
     : `<div class="why">no open positions — all cash${state.metrics && !state.metrics.trusted ? " (model still warming up)" : ""}</div>`;
@@ -1236,7 +1238,7 @@ function renderPaper() {
   $("#p-tr-meta").textContent = p.n_trades ? `${p.n_trades} total` : "";
   $("#p-trades").innerHTML = tr.length
     ? tr.slice(0, 40).map(t => `<div class="prow"><span>${fmtTime(t.t)}</span>` +
-        `<span class="${t.side === "buy" ? "up" : "down"}">${t.side}</span>` +
+        `<span class="${(t.side || "").startsWith("buy") ? "up" : "down"}">${esc(t.side)}${t.note ? " " + esc(t.note) : ""}</span>` +
         `<span class="psym">${esc(base(t.sym))}</span><span>${t.shares}</span><span>@ ${fmtPrice(t.price)}</span></div>`).join("")
     : `<div class="why">no trades yet${state.metrics && !state.metrics.trusted ? " — the model is still warming up" : ""}</div>`;
   drawEquityCurve(p);

@@ -212,7 +212,7 @@ class Engine:
         self.prices = {s: {"price": None, "bid": None, "ask": None, "ts": None} for s in self.symbols}
         self.tick_counts = {s: 0 for s in self.symbols}
         self.bars: dict[str, deque[Bar]] = {s: deque(maxlen=cfg.chart_bars) for s in self.symbols}
-        self.paper = PaperBook(cfg.paper_start, cfg.cost_bps)   # $100k paper book for this run
+        self.paper = PaperBook(cfg.paper_start, cfg.cost_bps, option_commission=cfg.option_commission)   # $100k paper book (shorts via puts)
         self.portfolio: dict = {}                               # Schwab account positions (read-only), for the Portfolio tab
         self.bar_index = 0
         self.pending: deque[Pending] = deque()
@@ -793,10 +793,20 @@ class Engine:
                 self.latest[s] = {**sugg[s], "price": float(closes[i]), "ts": ts}
             # only trade once the model is trusted (warmup complete) -- a live system wouldn't act on an unvalidated model
             targets = {s: (self.latest[s]["side"] * self.latest[s]["size"] if self.metrics.trusted else 0.0) for s in self.symbols}
+            put_quotes = {}                                    # a short is opened as a long put (bounded loss), priced off a live chain
+            need = [s for s in self.symbols if targets[s] < 0 and s not in self.paper.puts]
+            if need and self.schwab_auth.authenticated:
+                from .options import fetch_put
+                res = await asyncio.gather(*[fetch_put(self.schwab_auth, s, self.cfg.option_dte) for s in need],
+                                           return_exceptions=True)
+                for s, pq in zip(need, res):
+                    if isinstance(pq, dict):
+                        put_quotes[s] = pq
             self.paper.rebalance(targets,
                                  {s: float(closes[i]) for i, s in enumerate(self.symbols)}, ts,
                                  quotes={s: {"bid": self.prices[s].get("bid"), "ask": self.prices[s].get("ask")}
-                                         for s in self.symbols})
+                                         for s in self.symbols},
+                                 put_quotes=put_quotes)
             self.trace.emit("model", f"bar #{self.bar_index}: regime gate " + " ".join(
                 f"E{k + 1}={g:.2f}" for k, g in enumerate(self.gate)) +
                 f" | band scale x{self.metrics.band_scale:.2f}, P(up) temper {self.metrics.p_scale:.2f}")
