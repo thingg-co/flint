@@ -15,7 +15,7 @@ _THINK = re.compile(r"<think>.*?</think>", re.S)
 # slice name -> (analyst persona, what to focus on)
 ANALYSTS = {
     "tape": ("a quant on the trading desk",
-             "In 2-4 plain sentences say what flint's neural forecasts imply right now: overall "
+             "In 2-4 plain sentences say what Flint's neural forecasts imply right now: overall "
              "direction and conviction, whether it is still warming up, and the two or three names "
              "that stand out and why. No lists, no preamble."),
     "macro": ("a markets reporter",
@@ -89,7 +89,7 @@ async def write_brief(cfg, slices, say=None):
               "human columnist: plain, specific, varied sentence length. No bullet points, no bold, no "
               "subheadings, no hedging filler ('it's worth noting', 'crucially', 'in conclusion'), no "
               "AI throat-clearing. Use only the numbers in the notes and figures; never invent any. This "
-              "is a machine's market read (flint, a neural net still learning), so be honest about "
+              "is a machine's market read (Flint, a neural net still learning), so be honest about "
               "uncertainty rather than overconfident.")
     prompt = ("Write today's column: a short headline on its own first line, then four to six paragraphs "
               "that weave the desk notes and figures into one coherent read of where the market and the "

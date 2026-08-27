@@ -88,7 +88,7 @@ def main() -> None:
 
     cfg = Config()
     app = create_app(Engine(cfg))
-    print(f"flint listening on http://{cfg.host}:{cfg.port}  (feed={cfg.feed}, symbols={','.join(cfg.symbols)})")
+    print(f"Flint listening on http://{cfg.host}:{cfg.port}  (feed={cfg.feed}, symbols={','.join(cfg.symbols)})")
     uvicorn.run(app, host=cfg.host, port=cfg.port, log_level="warning")
 
 

@@ -514,7 +514,7 @@ function updateLoading(offline) {
   if (!busy) return;
   const title = $("#loading-title"), sub = $("#loading-sub");
   const feed = state.status && state.status.feed;
-  if (phase === "offline") { title.textContent = "Rekindling…"; sub.textContent = "reconnecting to flint"; }
+  if (phase === "offline") { title.textContent = "Rekindling…"; sub.textContent = "reconnecting to Flint"; }
   else if (phase === "starting") { title.textContent = "Striking flint…"; sub.textContent = "waking up"; }
   else if (phase.indexOf("backfilling") === 0) { title.textContent = "Gathering tinder…"; sub.textContent = "backfilling market history" + (feed && feed !== "none" ? ` from ${feed}` : ""); }
   else if (phase === "training") { title.textContent = "Starting a fire…"; const m = state.metrics || {}; sub.textContent = `training on history — step ${m.steps || 0}`; }
@@ -752,8 +752,8 @@ function renderOnboard() {
   $("#onb-progress").innerHTML = steps.map((_, i) => `<span class="onb-dot${i === onbStep ? " on" : i < onbStep ? " done" : ""}"></span>`).join("");
   const body = $("#onboard-body");
   if (step.type === "intro") {
-    body.innerHTML = `<h2>Welcome to flint</h2>` +
-      `<p>flint runs out of the box on free, no-key data sources. Adding an API key unlocks better or faster data for that provider \u2014 but <b>every key is optional</b>, and you can add them anytime from the Control panel.</p>` +
+    body.innerHTML = `<h2>Welcome to Flint</h2>` +
+      `<p>Flint runs out of the box on free, no-key data sources. Adding an API key unlocks better or faster data for that provider \u2014 but <b>every key is optional</b>, and you can add them anytime from the Control panel.</p>` +
       `<p class="onb-sub">Let's walk through them. Skip any you don't have.</p>` +
       `<div class="onb-actions"><button class="onb-ghost" id="onb-skipall">Skip setup</button><button class="onb-primary" id="onb-go">Get started</button></div>`;
   } else if (step.type === "key") {
@@ -770,13 +770,13 @@ function renderOnboard() {
       `<div class="onb-actions"><button class="onb-ghost" id="onb-back">Back</button><button class="onb-ghost" id="onb-skip">Skip</button><button class="onb-primary" id="onb-save">Save &amp; continue</button></div>`;
   } else if (step.type === "brief") {
     body.innerHTML = `<h2>Narrative brief <span class="onb-opt">local \u00b7 optional</span></h2>` +
-      `<p>flint can write a plain-English market brief with a local LLM through <b>Ollama</b> \u2014 it runs entirely on your machine, no key and no cloud. If Ollama is installed and running, the brief works automatically.</p>` +
+      `<p>Flint can write a plain-English market brief with a local LLM through <b>Ollama</b> \u2014 it runs entirely on your machine, no key and no cloud. If Ollama is installed and running, the brief works automatically.</p>` +
       `<a class="onb-link" href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">Install Ollama \u2197</a>` +
       `<p class="onb-sub">You can switch the brief on and off anytime in the Control panel.</p>` +
       `<div class="onb-actions"><button class="onb-ghost" id="onb-back">Back</button><button class="onb-primary" id="onb-go">Continue</button></div>`;
   } else {
     body.innerHTML = `<h2>You're all set</h2>` +
-      `<p>flint is already running on free sources and learning from live data. Add or change keys anytime from <b>Control panel \u2192 API keys</b>.</p>` +
+      `<p>Flint is already running on free sources and learning from live data. Add or change keys anytime from <b>Control panel \u2192 API keys</b>.</p>` +
       `<div class="onb-actions"><button class="onb-primary" id="onb-go">Enter flint</button></div>`;
   }
   const on = (id, fn) => { const b = $("#" + id); if (b) b.onclick = fn; };
