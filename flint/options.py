@@ -69,3 +69,43 @@ async def fetch_put(auth, symbol: str, target_dte: int = 35) -> dict | None:
         return None
     return {"contract": o.get("symbol"), "strike": float(best), "expiry_ts": exp_ts,
             "premium": float(ask), "iv": float(iv) / 100.0, "delta": o.get("delta"), "spot": float(spot)}
+
+
+async def fetch_iv_skew(auth, symbol: str, dte: int = 30) -> dict | None:
+    """Forward-looking option signals for the model: ATM implied vol (expected future vol)
+    and put/call skew (downside fear). Returns {iv, skew} as fractions, or None."""
+    token = await auth.token()
+    frm = (date.today() + timedelta(days=max(1, dte - 12))).isoformat()
+    to = (date.today() + timedelta(days=dte + 18)).isoformat()
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.get(CHAINS_URL, headers={"Authorization": f"Bearer {token}"},
+                            params={"symbol": symbol, "contractType": "ALL", "strikeCount": 16,
+                                    "fromDate": frm, "toDate": to, "includeUnderlyingQuote": "true"})
+        if r.status_code != 200:
+            return None
+        d = r.json()
+    except Exception:  # noqa: BLE001
+        return None
+    spot = (d.get("underlying") or {}).get("last")
+    pem = d.get("putExpDateMap") or {}
+    cem = d.get("callExpDateMap") or {}
+    if not spot or not pem or not cem:
+        return None
+    pexp = sorted(pem.keys())[0]
+    cexp = sorted(cem.keys())[0]
+
+    def _iv_at(strikes, target):
+        best = min(strikes.keys(), key=lambda s: abs(float(s) - target))
+        return (strikes[best][0] or {}).get("volatility"), float(best)
+
+    atm_p, _ = _iv_at(pem[pexp], spot)
+    atm_c, _ = _iv_at(cem[cexp], spot)
+    otm_p, _ = _iv_at(pem[pexp], spot * 0.93)   # ~7% OTM put
+    otm_c, _ = _iv_at(cem[cexp], spot * 1.07)   # ~7% OTM call
+    ivs = [v for v in (atm_p, atm_c) if v and v > 0]
+    if not ivs:
+        return None
+    atm_iv = sum(ivs) / len(ivs) / 100.0
+    skew = ((otm_p - otm_c) / 100.0) if (otm_p and otm_c) else 0.0
+    return {"iv": atm_iv, "skew": skew}

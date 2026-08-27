@@ -230,6 +230,7 @@ class Config:
     cost_bps: float = _env("COST_BPS", 0.0)                 # round-trip cost charged to paper P&L
     option_commission: float = _env("OPTION_COMMISSION", 0.65)  # per-contract commission for paper option trades
     option_dte: int = _env("OPTION_DTE", 35)                # target days-to-expiry when opening a put for a short
+    option_features_seconds: float = _env("OPTION_FEATURES_SECONDS", 600.0)  # cadence to refresh ATM IV / skew features
     max_size: float = _env("MAX_SIZE", 1.0)
 
     # Signals + Burry overlay

@@ -11,7 +11,7 @@ from .bars import Bar
 # Base market microstructure features, then exogenous signals appended (news, retail, derivatives, gurus).
 # The exogenous slots are already bounded to [-1, 1] / [0, 1] by their providers, so they pass through
 # standardization untouched. There is deliberately no clock feature.
-EXOGENOUS = ["news_sent", "news_attn", "wsb_sent", "wsb_attn", "fng", "funding", "oi_chg", "longshort", "guru_net", "ethos_bias", "f_value", "f_quality", "breadth", "vix"]
+EXOGENOUS = ["news_sent", "news_attn", "wsb_sent", "wsb_attn", "fng", "funding", "oi_chg", "longshort", "guru_net", "ethos_bias", "f_value", "f_quality", "breadth", "vix", "opt_iv", "opt_skew"]
 FEATURES = ["ret", "range", "logvol", "imbalance", "spread", "logtrades", "closepos", "mom", "rvol"] + EXOGENOUS
 NORMALIZE = np.array([1, 1, 1, 0, 1, 1, 0, 1, 1] + [0] * len(EXOGENOUS), dtype=bool)
 N_FEATURES = len(FEATURES)

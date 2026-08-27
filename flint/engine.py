@@ -584,7 +584,7 @@ class Engine:
         self.trace.emit("system", "live: streaming ticks, forecasting every bar, learning as labels mature")
         self.sources.start()
         self._tasks = [asyncio.create_task(c) for c in
-                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop(), self._market_loop(), self._brief_loop(), self._market_status_loop(), self._portfolio_loop())]
+                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop(), self._market_loop(), self._brief_loop(), self._market_status_loop(), self._portfolio_loop(), self._option_features_loop())]
         await asyncio.gather(*self._tasks)
 
     def _ingest_history(self, ticks: list[Tick]) -> None:
@@ -1214,6 +1214,36 @@ class Engine:
             self.brief = {**self.brief, "generating": False, "error": f"{type(ex).__name__}: {str(ex)[:120]}"}
             self.trace.emit("system", "brief failed: " + str(ex)[:120], "error")
         self._publish({"type": "brief", "brief": self.brief})
+
+    async def _option_features_loop(self) -> None:
+        """Feed forward-looking option signals (ATM implied vol, put/call skew) to the model."""
+        if not self.schwab_auth.authenticated:
+            return
+        import math as _math
+        from .options import fetch_iv_skew
+        sem = asyncio.Semaphore(8)
+        await asyncio.sleep(15)
+
+        async def one(s):
+            async with sem:
+                try:
+                    return s, await fetch_iv_skew(self.schwab_auth, s, self.cfg.option_dte)
+                except Exception:  # noqa: BLE001
+                    return s, None
+        while True:
+            try:
+                res = await asyncio.gather(*[one(s) for s in self.symbols])
+                n = 0
+                for s, r in res:
+                    if r:
+                        self.features.set_exo(s, {"opt_iv": max(-1, min(1, (r["iv"] - 0.30) * 2.5)),
+                                                  "opt_skew": max(-1, min(1, r["skew"] * 15))})
+                        n += 1
+                if n:
+                    self.trace.emit("signals", f"option signals refreshed: ATM IV + skew for {n} names", "act")
+            except Exception as e:  # noqa: BLE001
+                self.trace.emit("signals", f"option features: {type(e).__name__}", "warn")
+            await asyncio.sleep(max(120.0, self.cfg.option_features_seconds))
 
     async def _portfolio_loop(self) -> None:
         """Poll Schwab account positions (read-only) for the Portfolio tab. Never trades."""
