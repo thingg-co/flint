@@ -251,7 +251,7 @@ class Config:
 
     # News skimmer
     news_enabled: bool = _env("NEWS", "1") not in ("0", "false", "no")
-    news_minutes: float = _env("NEWS_MINUTES", 10.0)
+    news_minutes: float = _env("NEWS_MINUTES", 1.0)
     news_browser: bool = _env("NEWS_BROWSER", "1") not in ("0", "false", "no")
     news_off: str = _env("NEWS_OFF", "")           # news source ids off by default: browser, alphavantage
     news_sources: str = _env("NEWS_SOURCES", "")   # "Name|https://url,Name2|https://url2" to override the browser defaults
