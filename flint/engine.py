@@ -791,7 +791,9 @@ class Engine:
             self.latest = {}
             for i, s in enumerate(self.symbols):
                 self.latest[s] = {**sugg[s], "price": float(closes[i]), "ts": ts}
-            self.paper.rebalance({s: self.latest[s]["side"] * self.latest[s]["size"] for s in self.symbols},
+            # only trade once the model is trusted (warmup complete) -- a live system wouldn't act on an unvalidated model
+            targets = {s: (self.latest[s]["side"] * self.latest[s]["size"] if self.metrics.trusted else 0.0) for s in self.symbols}
+            self.paper.rebalance(targets,
                                  {s: float(closes[i]) for i, s in enumerate(self.symbols)}, ts,
                                  quotes={s: {"bid": self.prices[s].get("bid"), "ask": self.prices[s].get("ask")}
                                          for s in self.symbols})
@@ -1214,6 +1216,14 @@ class Engine:
             try:
                 self.portfolio = await fetch_schwab_positions(self.schwab_auth)
                 self._publish({"type": "portfolio", "portfolio": self.portfolio})
+                held = {p["symbol"] for a in self.portfolio.get("accounts", []) for p in a.get("positions", [])
+                        if p.get("asset_type") in ("EQUITY", "ETF", "COLLECTIVE_INVESTMENT") and "." not in (p.get("symbol") or "X")}
+                room = self.cfg.max_universe - len(self.all_symbols)
+                new = [s for s in sorted(held) if s not in self.all_symbols][:max(0, room)]
+                if new:                                    # model your holdings too, so the Portfolio tab shows real calls
+                    self.all_symbols.extend(new)
+                    self.trace.emit("system", f"portfolio holdings added to the universe: {', '.join(new)}", "act")
+                    asyncio.get_running_loop().create_task(self.reconfigure())
             except _httpx.HTTPStatusError as e:
                 if e.response.status_code in (401, 403):
                     self.portfolio = {"error": "Schwab account access not enabled -- add the Accounts product and re-run flint schwab-auth"}
