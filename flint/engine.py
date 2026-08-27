@@ -820,7 +820,9 @@ class Engine:
         n = 0
         while self.pending and self.pending[0].index + self.cfg.horizon <= self.bar_index:
             pp = self.pending.popleft()
-            y = (np.log(closes / pp.closes) * 1e4).astype(np.float32)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                y = (np.log(closes / pp.closes) * 1e4).astype(np.float32)
+            y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)   # a 0-seeded / history-less symbol yields no return, not a NaN that poisons the whole batch
             self.learner.add(pp.x, y)
             if pp.pred is not None:
                 self._score(pp, y)
