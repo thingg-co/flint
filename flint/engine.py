@@ -652,8 +652,11 @@ class Engine:
     def _on_live_tick(self, tick: Tick) -> None:
         """Called by the source manager with the active provider's tick for a symbol.
         Quote/heartbeat ticks update the live price but never build candles -- otherwise a
-        market-closed feed echoing the last quote would fabricate flat bars from stale data."""
-        if not tick.quote:
+        market-closed feed echoing the last quote would fabricate flat bars from stale data.
+        A non-quote tick with zero size and no OHLC is a stale price echo, not a real trade
+        (a real trade has volume), so it updates the price but must not build a candle -- one
+        such echo would mark the interval active and fabricate flat bars across every symbol."""
+        if not tick.quote and (tick.size > 0 or tick.o is not None):
             self.builder.add(tick)
         self._on_tick(tick, live=True)
 
