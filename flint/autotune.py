@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import fcntl
 import os
 import time
 from pathlib import Path
@@ -110,39 +111,68 @@ def autotune(cfg, n_features: int, say=None) -> dict:
     except (OSError, ValueError, KeyError):
         pass
 
-    threads = _best_threads(device, cfg.n_assets, n_features, cfg.n_quantiles, say)
-    torch.set_num_threads(threads)
-    steps_per_bar = max(1, cfg.steps_per_label) + 1
-    cadence = cfg.bar_seconds * 1000.0 * cfg.autotune_util / steps_per_bar        # must keep up with online training
-    warmup_ceiling = cfg.max_warmup_seconds * 1000.0 / max(1, cfg.warmup_steps)   # keep go-live warmup bearable
-    budget = min(cadence, warmup_ceiling)
-    say(f"device {device} ({threads} cpu threads); step budget {budget:.0f} ms "
-        f"(min of {cadence:.0f} ms training cadence, {warmup_ceiling:.0f} ms warmup ceiling "
-        f"= {cfg.max_warmup_seconds:.0f}s over {cfg.warmup_steps} steps)")
-
-    chosen, chosen_ms, chosen_n = PRESETS[0], None, None
-    for preset in PRESETS:
-        try:
-            ms, n = _bench(device, preset, cfg.n_assets, n_features, cfg.batch_size, cfg.n_quantiles)
-        except Exception as e:  # noqa: BLE001
-            say(f"preset {preset[0]} failed ({type(e).__name__}); stopping ladder")
-            break
-        say(f"benchmark {preset[0]:4}: {n / 1e6:5.2f}M params  {ms:5.0f} ms/step" +
-            ("  <- fits" if ms <= budget else "  (over budget)"))
-        if ms <= budget:
-            chosen, chosen_ms, chosen_n = preset, ms, n
-        else:
-            break
-    name, d, dil, exp, heads, win = chosen
-    if chosen_ms is None:
-        chosen_ms, chosen_n = _bench(device, chosen, cfg.n_assets, n_features, cfg.batch_size, cfg.n_quantiles)
-    choice = {"device": device, "threads": threads, "d_model": d, "dilations": list(dil), "n_experts": exp,
-              "n_heads": heads, "window": win, "preset": name, "params": chosen_n,
-              "ms_per_step": round(chosen_ms), "budget_ms": round(budget)}
+    # Serialize benchmarking across processes -- two benchmarks on one GPU thrash memory into swap.
+    lock_f = None
     try:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps({"key": key, "choice": choice}))
+        Path(cfg.state_dir).mkdir(parents=True, exist_ok=True)
+        lock_f = open(Path(cfg.state_dir) / "autotune.lock", "w")
+        try:
+            fcntl.flock(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            say("another benchmark is running; waiting for it to finish (one benchmark at a time)...")
+            fcntl.flock(lock_f, fcntl.LOCK_EX)
     except OSError:
-        pass
-    say(f"selected {name}: {chosen_n / 1e6:.2f}M params on {device}, {round(chosen_ms)} ms/step")
-    return choice
+        lock_f = None
+    try:
+        try:                                    # a concurrent run may have just tuned this exact config
+            c = json.loads(cache.read_text())
+            if c.get("key") == key:
+                ch = c["choice"]
+                say(f"using tuning from a concurrent run: {ch['preset']} ({ch['params'] / 1e6:.2f}M params)")
+                return ch
+        except (OSError, ValueError, KeyError):
+            pass
+
+        threads = _best_threads(device, cfg.n_assets, n_features, cfg.n_quantiles, say)
+        torch.set_num_threads(threads)
+        steps_per_bar = max(1, cfg.steps_per_label) + 1
+        cadence = cfg.bar_seconds * 1000.0 * cfg.autotune_util / steps_per_bar        # must keep up with online training
+        warmup_ceiling = cfg.max_warmup_seconds * 1000.0 / max(1, cfg.warmup_steps)   # keep go-live warmup bearable
+        budget = min(cadence, warmup_ceiling)
+        say(f"device {device} ({threads} cpu threads); step budget {budget:.0f} ms "
+            f"(min of {cadence:.0f} ms training cadence, {warmup_ceiling:.0f} ms warmup ceiling "
+            f"= {cfg.max_warmup_seconds:.0f}s over {cfg.warmup_steps} steps)")
+
+        chosen, chosen_ms, chosen_n = PRESETS[0], None, None
+        for preset in PRESETS:
+            try:
+                ms, n = _bench(device, preset, cfg.n_assets, n_features, cfg.batch_size, cfg.n_quantiles)
+            except Exception as e:  # noqa: BLE001
+                say(f"preset {preset[0]} failed ({type(e).__name__}); stopping ladder")
+                break
+            say(f"benchmark {preset[0]:4}: {n / 1e6:5.2f}M params  {ms:5.0f} ms/step" +
+                ("  <- fits" if ms <= budget else "  (over budget)"))
+            if ms <= budget:
+                chosen, chosen_ms, chosen_n = preset, ms, n
+            else:
+                break
+        name, d, dil, exp, heads, win = chosen
+        if chosen_ms is None:
+            chosen_ms, chosen_n = _bench(device, chosen, cfg.n_assets, n_features, cfg.batch_size, cfg.n_quantiles)
+        choice = {"device": device, "threads": threads, "d_model": d, "dilations": list(dil), "n_experts": exp,
+                  "n_heads": heads, "window": win, "preset": name, "params": chosen_n,
+                  "ms_per_step": round(chosen_ms), "budget_ms": round(budget)}
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps({"key": key, "choice": choice}))
+        except OSError:
+            pass
+        say(f"selected {name}: {chosen_n / 1e6:.2f}M params on {device}, {round(chosen_ms)} ms/step")
+        return choice
+    finally:
+        if lock_f is not None:
+            try:
+                fcntl.flock(lock_f, fcntl.LOCK_UN)
+                lock_f.close()
+            except OSError:
+                pass

@@ -87,6 +87,15 @@ def main() -> None:
     from .server import create_app
 
     cfg = Config()
+    import socket
+    _probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    _probe.settimeout(0.4)
+    if _probe.connect_ex(("127.0.0.1" if cfg.host in ("0.0.0.0", "") else cfg.host, cfg.port)) == 0:
+        _probe.close()
+        print(f"Flint is already running on {cfg.host}:{cfg.port} -- refusing to start a second instance "
+              f"(it would thrash the GPU during tuning). Stop it first:  pkill -9 -f 'python -m flint'")
+        raise SystemExit(1)
+    _probe.close()
     app = create_app(Engine(cfg))
     print(f"Flint listening on http://{cfg.host}:{cfg.port}  (feed={cfg.feed}, symbols={','.join(cfg.symbols)})")
     uvicorn.run(app, host=cfg.host, port=cfg.port, log_level="warning")
