@@ -151,7 +151,7 @@ class Config:
     device: str = _env("DEVICE", "auto")               # auto | cpu | cuda | mps
     auto_size: bool = _env("AUTO_SIZE", "1") not in ("0", "false", "no")
     autotune_util: float = _env("AUTOTUNE_UTIL", 0.7)  # fraction of the bar interval training may use
-    max_warmup_seconds: float = _env("MAX_WARMUP_SECONDS", 300.0)  # go-live warmup ceiling; caps auto model size
+    max_warmup_seconds: float = _env("MAX_WARMUP_SECONDS", 180.0)  # go-live warmup ceiling; caps auto model size
 
     # Model (overridden by auto-sizing unless auto_size is off)
     d_model: int = _env("D_MODEL", 48)
@@ -164,7 +164,7 @@ class Config:
     lr: float = _env("LR", 5e-4)
     weight_decay: float = _env("WEIGHT_DECAY", 1e-2)
     label_smoothing: float = _env("LABEL_SMOOTHING", 0.1)   # softens the P(up) target so the net cannot claim ~99% certainty
-    batch_size: int = _env("BATCH_SIZE", 32)
+    batch_size: int = _env("BATCH_SIZE", 16)   # smaller batch: half the activation memory (this Mac is memory-tight at a big universe)
     steps_per_label: int = _env("STEPS_PER_LABEL", 2)
     replay_size: int = _env("REPLAY_SIZE", 4096)
     recent_frac: float = _env("RECENT_FRAC", 0.3)   # share of each batch drawn from the newest samples
