@@ -239,8 +239,8 @@ ul.headlines li.new a { color: #fff; } ul.headlines li:not(.new) a { color: var(
 .mov:first-child { padding-left: 0; }
 .mov:last-child { padding-right: 0; }
 .mov + .mov { border-left: 1px solid var(--border); }   /* separate the columns so a % can't read as the next ticker's */
-.mov h5 { margin: 0 0 5px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-.mov .row { display: flex; gap: 8px; font-family: var(--mono); font-size: 11.5px; padding: 1px 0; }
+.mov h5 { margin: 0 0 5px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; text-align: center; }
+.mov .row { display: flex; justify-content: center; gap: 8px; font-family: var(--mono); font-size: 11.5px; padding: 1px 0; }
 .mov .row .t { color: var(--ink-2); min-width: 46px; }        /* ticker grouped with its own % */
 .mov .row .c { min-width: 50px; text-align: right; }          /* % right-aligned so magnitudes still line up */
 .mov .row .c.up { color: var(--good); } .mov .row .c.down { color: var(--serious); }
