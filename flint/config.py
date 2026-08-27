@@ -163,6 +163,7 @@ class Config:
     # Online learning
     lr: float = _env("LR", 5e-4)
     weight_decay: float = _env("WEIGHT_DECAY", 1e-2)
+    label_smoothing: float = _env("LABEL_SMOOTHING", 0.1)   # softens the P(up) target so the net cannot claim ~99% certainty
     batch_size: int = _env("BATCH_SIZE", 32)
     steps_per_label: int = _env("STEPS_PER_LABEL", 2)
     replay_size: int = _env("REPLAY_SIZE", 4096)

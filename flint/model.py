@@ -105,11 +105,14 @@ class FlintNet(nn.Module):
 
 
 def flint_loss(q: torch.Tensor, logit: torch.Tensor, gate: torch.Tensor, y: torch.Tensor,
-               quantiles: tuple[float, ...], balance: float = 0.3):
+               quantiles: tuple[float, ...], balance: float = 0.3, label_smoothing: float = 0.0):
     taus = torch.tensor(quantiles, dtype=q.dtype, device=q.device)
     diff = y[..., None] - q
     pinball = torch.maximum(taus * diff, (taus - 1) * diff).mean()
-    bce = F.binary_cross_entropy_with_logits(logit, (y > 0).to(q.dtype))
+    up = (y > 0).to(q.dtype)
+    if label_smoothing > 0:            # keep P(up) off the 0/1 rails so it can't saturate into false confidence
+        up = up * (1 - label_smoothing) + 0.5 * label_smoothing
+    bce = F.binary_cross_entropy_with_logits(logit, up)
     usage = gate.mean(0)
     # KL(usage || uniform): keeps the gate from collapsing onto one expert early on.
     bal = (usage * torch.log(usage * gate.shape[1] + 1e-8)).sum()

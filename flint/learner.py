@@ -1,6 +1,7 @@
 """Online training: a replay buffer of labeled windows and a small optimizer loop."""
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import threading
@@ -103,7 +104,8 @@ class OnlineLearner:
                 if self.cfg.input_noise > 0:
                     x = x + self.cfg.input_noise * torch.randn_like(x)
                 q, logit, gate, _ = self.model(x)
-                loss, parts = flint_loss(q, logit, gate, y, self.cfg.quantiles)
+                loss, parts = flint_loss(q, logit, gate, y, self.cfg.quantiles,
+                                         label_smoothing=self.cfg.label_smoothing)
                 self.opt.zero_grad(set_to_none=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
@@ -147,7 +149,16 @@ class OnlineLearner:
             log.warning("could not read checkpoint %s (%s); starting fresh", f, e)
             return None
         if tuple(ck.get("shape", ())) != tuple(self.rx.shape[1:]) or ck.get("symbols") != list(self.cfg.symbols):
-            log.warning("checkpoint at %s does not match the current config; starting fresh", d)
+            log.warning("checkpoint at %s does not match the current config "
+                        "(saved shape=%s / %d symbols; current shape=%s / %d symbols) — "
+                        "backing up to model.pt.bak and starting fresh. If this was not an intended "
+                        "config change, restore the .bak to avoid losing training.",
+                        d, tuple(ck.get("shape", ())), len(ck.get("symbols") or []),
+                        tuple(self.rx.shape[1:]), len(self.cfg.symbols))
+            with contextlib.suppress(OSError):        # preserve the trained model instead of clobbering it on next save
+                os.replace(f, d / "model.pt.bak")
+                if (d / "replay.npz").exists():
+                    os.replace(d / "replay.npz", d / "replay.npz.bak")
             return None
         try:
             with self.lock:

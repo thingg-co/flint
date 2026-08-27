@@ -1467,19 +1467,27 @@ function connect() {
   ws.onmessage = e => handle(JSON.parse(e.data));
 }
 
-$$(".tabs button").forEach(b => b.onclick = () => {
-  $$(".tabs button").forEach(x => x.classList.toggle("active", x === b));
-  document.body.dataset.view = b.dataset.tab;
-  try { localStorage.setItem("flint.view", b.dataset.tab); } catch (e) { /* storage may be unavailable */ }
-  if (b.dataset.tab === "consoles") Object.values(consoles).forEach(c => { c.body.scrollTop = c.body.scrollHeight; });
-  if (b.dataset.tab === "console") setTermFollow(true);
+function showTab(tab, updateHash) {
+  const btn = $$(".tabs button").find(b => b.dataset.tab === tab && !b.hidden);
+  if (!btn) return false;
+  $$(".tabs button").forEach(x => x.classList.toggle("active", x === btn));
+  document.body.dataset.view = tab;
+  try { localStorage.setItem("flint.view", tab); } catch (e) { /* storage may be unavailable */ }
+  if (updateHash && location.hash.slice(1) !== tab) location.hash = tab;   // reflect the page in the URL so refresh/bookmarks stick
+  if (tab === "consoles") Object.values(consoles).forEach(c => { c.body.scrollTop = c.body.scrollHeight; });
+  if (tab === "console") setTermFollow(true);
   renderAll();
-  if (b.dataset.tab === "consoles") setTimeout(() => { const a = document.activeElement; if (a && a.tagName === "INPUT") a.blur(); }, 0);
-});
-try {
-  const v = localStorage.getItem("flint.view");
-  if (v === "consoles") $$(".tabs button").find(b => b.dataset.tab === v).click();
-} catch (e) { /* ignore */ }
+  if (tab === "consoles") setTimeout(() => { const a = document.activeElement; if (a && a.tagName === "INPUT") a.blur(); }, 0);
+  return true;
+}
+$$(".tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab, true));
+window.addEventListener("hashchange", () => { const t = location.hash.slice(1); if (t) showTab(t, false); });
+// on load the URL hash wins, then the last-used view; dashboard is already active in the markup
+(function () {
+  let t = location.hash.slice(1);
+  if (!t) { try { t = localStorage.getItem("flint.view") || ""; } catch (e) { t = ""; } }
+  if (t && t !== "dashboard") showTab(t, true);
+})();
 
 document.addEventListener("click", e => { if (e.target.closest && (e.target.closest("#brief-regen") || e.target.closest("#brief-now"))) control({ action: "brief" }); });
 { const c = $("#onb-close"); if (c) c.onclick = onboardClose; }
