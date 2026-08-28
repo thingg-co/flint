@@ -467,7 +467,7 @@ class SchwabSource(Source):
     name = "Charles Schwab"
     kind = "equity"
     mechanism = "poll"
-    priority = 30              # above Yahoo (50): real-time beats delayed polling
+    priority = 15              # FIRST, always: Schwab is the primary feed; it builds candles from last-trade price + volume. Everything else augments.
     classes = ("equity",)
     fresh_after = 150.0
 
@@ -477,6 +477,7 @@ class SchwabSource(Source):
         super().__init__(cfg, symbols)
         self.auth = auth
         self.poll_interval = max(4.0, cfg.schwab_seconds)
+        self._last_vol: dict[str, float] = {}   # last cumulative totalVolume per symbol, for per-interval deltas
         if not auth.has_creds:
             self.note = "no app key; set schwab.json or FLINT_SCHWAB_APP_KEY/SECRET"
         elif not auth.authenticated:
@@ -548,8 +549,15 @@ class SchwabSource(Source):
                 ts = float(q.get("quoteTime", 0) or 0) / 1000.0 or time.time()
                 bid = q.get("bidPrice") or None
                 ask = q.get("askPrice") or None
-                self._emit(emit, Tick(sym, ts, float(price), float(q.get("totalVolume") or 0.0), None,
-                                      float(bid) if bid else None, float(ask) if ask else None, quote=True))
+                tv = float(q.get("totalVolume") or 0.0)
+                prev = self._last_vol.get(sym)
+                self._last_vol[sym] = tv
+                dv = (tv - prev) if (prev is not None and tv >= prev) else 0.0   # per-interval volume; 0 on first sample or the daily reset
+                # Build candles from Schwab's last-trade price. quote=False so it feeds the bar builder;
+                # volume>0 only when real trades occurred this interval, so a static/closed market yields
+                # size 0 and no fabricated bar (per the flat-bar rule). bid/ask still update the price book.
+                self._emit(emit, Tick(sym, ts, float(price), dv, None,
+                                      float(bid) if bid else None, float(ask) if ask else None))
                 n += 1
         self.note = f"real-time quotes for {n} symbols"
 
