@@ -1218,6 +1218,21 @@ function renderPortfolio() {
     }).join("");
     return `<div class="block pf-block">${head}<div class="pf-rows"><div class="pf-row phead"><span>sym</span><span>qty</span><span>value</span><span>P/L</span><span>Flint</span></div>${rows}</div></div>`;
   }).join("");
+  const cc = pf.covered_calls || [], ccRoot = $("#pf-covered");
+  if (ccRoot) ccRoot.innerHTML = cc.length ? (
+    `<div class="block pf-block"><div class="pf-acct"><span class="pf-name">Covered-call opportunities</span>` +
+    `<span class="pf-id">premium income on holdings of 100+ shares · Flint-gated · read-only, no trading</span></div>` +
+    `<div class="pf-rows"><div class="pf-row cc-row phead"><span>sym</span><span>write call</span><span>premium</span><span>yield</span><span>ann.</span><span>if called</span><span>assign</span><span>Flint</span></div>` +
+    cc.map(o => {
+      const rec = o.recommend ? `<span class="al ok" title="${esc(o.note)}">harvest</span>` : `<span class="al warn" title="${esc(o.note)}">hold</span>`;
+      return `<div class="pf-row cc-row"><span class="psym">${esc(base(o.symbol))} <small>${o.shares}sh</small></span>` +
+        `<span>$${o.strike}c ${esc(o.expiry)} <small>${o.otm_pct}% otm</small></span>` +
+        `<span>$${o.premium} <small>${fmtUSD(o.income)}</small></span>` +
+        `<span>${o.yield_pct}%</span><span class="up">${o.annualized_pct}%</span>` +
+        `<span>+${o.if_called_pct}%</span><span>${o.assign_prob != null ? o.assign_prob + "%" : "·"}</span>` +
+        `<span>${rec}</span></div>`;
+    }).join("") + `</div></div>`
+  ) : "";
 }
 
 function renderPaper() {

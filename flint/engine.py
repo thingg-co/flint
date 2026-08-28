@@ -220,6 +220,8 @@ class Engine:
                                option_commission=cfg.option_commission,
                                put_min_hold_s=cfg.put_min_hold_bars * cfg.bar_seconds)   # $100k paper book (shorts via puts)
         self.portfolio: dict = {}                               # Schwab account positions (read-only), for the Portfolio tab
+        self._cc_last = 0.0                                     # last covered-call opportunity refresh
+        self._cc_cache: list = []                               # cached covered-call opportunities (persist across 60s position refreshes)
         self.bar_index = 0
         self.pending: deque[Pending] = deque()
         self.latest: dict[str, dict] = {}
@@ -1278,6 +1280,71 @@ class Engine:
                 self.trace.emit("signals", f"option features: {type(e).__name__}", "warn")
             await asyncio.sleep(max(120.0, self.cfg.option_features_seconds))
 
+    async def _covered_calls(self) -> None:
+        """Attach covered-call opportunities to the portfolio snapshot (read-only analysis; never
+        trades). Throttled to covered_call_seconds and cached, so it survives the 60s position poll."""
+        now = time.time()
+        if now - self._cc_last >= self.cfg.covered_call_seconds:
+            self._cc_last = now
+            try:
+                self._cc_cache = await self._compute_covered_calls(now)
+            except Exception as ex:  # noqa: BLE001
+                self.trace.emit("system", f"covered calls: {type(ex).__name__}", "warn")
+        if self._cc_cache:
+            self.portfolio["covered_calls"] = self._cc_cache
+
+    async def _compute_covered_calls(self, now: float) -> list:
+        """For each holding of >=100 shares, price an OTM call and recommend writing it only when
+        Flint is not bullish -- a covered call caps upside, so it fits holdings where Flint expects
+        limited further gains. Purely informational; the app never places an order."""
+        if not self.schwab_auth.authenticated:
+            return []
+        holdings: dict[str, float] = {}
+        for a in self.portfolio.get("accounts", []):
+            for p in a.get("positions", []):
+                sym = p.get("symbol") or ""
+                if (p.get("asset_type") in ("EQUITY", "ETF", "COLLECTIVE_INVESTMENT")
+                        and sym.isalpha() and 1 <= len(sym) <= 5 and (p.get("qty") or 0) >= 100):
+                    holdings[sym] = holdings.get(sym, 0.0) + float(p["qty"])
+        if not holdings:
+            return []
+        from .options import fetch_call
+        syms = sorted(holdings)
+        quotes = await asyncio.gather(
+            *[fetch_call(self.schwab_auth, s, self.cfg.option_dte, self.cfg.covered_call_otm) for s in syms],
+            return_exceptions=True)
+        opps = []
+        for s, cq in zip(syms, quotes):
+            if not isinstance(cq, dict) or not cq.get("premium") or not cq.get("spot"):
+                continue
+            contracts = int(holdings[s] // 100)
+            if contracts < 1:
+                continue
+            spot, strike, prem = cq["spot"], cq["strike"], cq["premium"]
+            dte = max(1.0, (cq["expiry_ts"] - now) / 86400.0)
+            yld = prem / spot * 100.0
+            lat = self.latest.get(s, {})
+            p_up = lat.get("p_up")
+            q = lat.get("q") or []
+            q50 = q[2] if len(q) >= 3 else None
+            bullish = (p_up is not None and p_up > 0.58) or (q50 is not None and q50 > self.cfg.move_floor_bps)
+            delta = cq.get("delta")
+            opps.append({
+                "symbol": s, "shares": round(holdings[s]), "contracts": contracts,
+                "strike": strike, "expiry": datetime.fromtimestamp(cq["expiry_ts"]).strftime("%b %d"),
+                "dte": round(dte), "premium": round(prem, 2), "income": round(prem * 100.0 * contracts),
+                "yield_pct": round(yld, 2), "annualized_pct": round(yld * 365.0 / dte, 1),
+                "otm_pct": round((strike - spot) / spot * 100.0, 1),
+                "assign_prob": round(abs(delta) * 100.0) if delta is not None else None,
+                "if_called_pct": round((strike - spot) / spot * 100.0 + yld, 2),
+                "p_up": round(p_up, 2) if p_up is not None else None,
+                "recommend": not bullish,
+                "note": ("Flint sees limited upside \u2014 harvest premium" if not bullish
+                         else "hold \u2014 Flint expects upside past the strike"),
+            })
+        opps.sort(key=lambda x: (x["recommend"], x["annualized_pct"]), reverse=True)
+        return opps
+
     async def _portfolio_loop(self) -> None:
         """Poll Schwab account positions (read-only) for the Portfolio tab. Never trades."""
         if not self.schwab_auth.authenticated:
@@ -1288,6 +1355,7 @@ class Engine:
         while True:
             try:
                 self.portfolio = await fetch_schwab_positions(self.schwab_auth)
+                await self._covered_calls()
                 self._publish({"type": "portfolio", "portfolio": self.portfolio})
                 held = {p["symbol"] for a in self.portfolio.get("accounts", []) for p in a.get("positions", [])
                         if p.get("asset_type") in ("EQUITY", "ETF", "COLLECTIVE_INVESTMENT")

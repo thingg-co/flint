@@ -577,6 +577,8 @@ ul.headlines li.new a { color: #fff; } ul.headlines li:not(.new) a { color: var(
 .pf-rows { display: flex; flex-direction: column; }
 .pf-row { display: grid; grid-template-columns: 60px 84px 100px 150px 1fr; gap: 8px; align-items: center; padding: 3px 2px; font-size: 12.5px; border-bottom: 1px solid var(--surface2); }
 .pf-row.phead { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; }
+.pf-row.cc-row { grid-template-columns: 96px 132px 108px 52px 58px 66px 56px 64px; }
+.pf-row.cc-row small { color: var(--muted); font-size: 10.5px; }
 .pf-row .psym { font-family: var(--mono); font-weight: 600; }
 .pf-row .up { color: var(--good); } .pf-row .down { color: var(--serious); }
 .pf-row small { color: var(--muted); }

@@ -109,3 +109,44 @@ async def fetch_iv_skew(auth, symbol: str, dte: int = 30) -> dict | None:
     atm_iv = sum(ivs) / len(ivs) / 100.0
     skew = ((otm_p - otm_c) / 100.0) if (otm_p and otm_c) else 0.0
     return {"iv": atm_iv, "skew": skew}
+
+
+async def fetch_call(auth, symbol: str, target_dte: int = 35, otm: float = 0.05) -> dict | None:
+    """Pick an out-of-the-money call ~target_dte out for a covered-call write. Returns the contract
+    to SELL (premium = bid, i.e. what you'd receive) with its strike, IV, delta and expiry, or None.
+    Read-only: this only reads the chain; no order is ever placed."""
+    token = await auth.token()
+    frm = (date.today() + timedelta(days=max(1, target_dte - 12))).isoformat()
+    to = (date.today() + timedelta(days=target_dte + 18)).isoformat()
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.get(CHAINS_URL, headers={"Authorization": f"Bearer {token}"},
+                            params={"symbol": symbol, "contractType": "CALL", "strikeCount": 24,
+                                    "fromDate": frm, "toDate": to, "includeUnderlyingQuote": "true"})
+        if r.status_code != 200:
+            return None
+        d = r.json()
+    except Exception:  # noqa: BLE001
+        return None
+    spot = (d.get("underlying") or {}).get("last")
+    cem = d.get("callExpDateMap") or {}
+    if not spot or not cem:
+        return None
+    exp = sorted(cem.keys())[0]                        # nearest expiry in the window
+    strikes = cem[exp]
+    target = spot * (1.0 + max(0.0, otm))              # aim ~otm above spot (upside room before assignment)
+    otm_strikes = [k for k in strikes if float(k) >= spot] or list(strikes.keys())
+    best = min(otm_strikes, key=lambda s: abs(float(s) - target))
+    o = (strikes[best] or [{}])[0]
+    bid = o.get("bid") or o.get("mark")               # we SELL, so the premium received is the bid
+    iv = o.get("volatility")
+    if not bid or bid <= 0:
+        return None
+    exp_date = exp.split(":")[0]
+    try:
+        exp_ts = datetime.strptime(exp_date, "%Y-%m-%d").replace(hour=16, tzinfo=_ET).timestamp()
+    except ValueError:
+        return None
+    return {"contract": o.get("symbol"), "strike": float(best), "expiry_ts": exp_ts,
+            "premium": float(bid), "iv": (float(iv) / 100.0 if iv else None),
+            "delta": o.get("delta"), "spot": float(spot)}
