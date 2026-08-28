@@ -218,6 +218,20 @@ class PaperBook:
                               "value": round(val, 2), "upnl": round(u, 2), "risk": round(paid, 2),
                               "weight": round(val / eq, 4) if eq else 0.0})
         positions.sort(key=lambda x: -abs(x["value"]))
+        # Compounding scorecard: the geometric-growth consistency (Sharpe) and the peak-to-trough
+        # drawdown that erodes it. "Small, fast, repeatable" wants high Sharpe and shallow drawdowns.
+        eqs = [c["eq"] for c in self.curve]
+        peak, mdd = (eqs[0] if eqs else self.start), 0.0
+        for e in eqs:
+            peak = max(peak, e)
+            if peak > 0:
+                mdd = max(mdd, (peak - e) / peak)
+        rets = [eqs[i] / eqs[i - 1] - 1.0 for i in range(1, len(eqs)) if eqs[i - 1]]
+        sharpe = 0.0
+        if len(rets) > 1:
+            mean = sum(rets) / len(rets)
+            sd = (sum((r - mean) ** 2 for r in rets) / len(rets)) ** 0.5
+            sharpe = (mean / sd) if sd > 0 else 0.0    # per-bar risk-adjusted return
         gross = sum(abs(x["value"]) for x in positions)
         net = sum(x["value"] for x in positions if x["kind"] == "stock") - sum(x["value"] for x in positions if x["kind"] == "put")
         return {"start": self.start, "equity": round(eq, 2), "cash": round(self.cash, 2),
@@ -227,4 +241,5 @@ class PaperBook:
                 "spread_cost": round(self.spread_cost, 2),
                 "pnl": round(eq - self.start, 2), "return_pct": round((eq / self.start - 1) * 100, 3),
                 "n_trades": self.n_trades, "started": self.started, "n_puts": len(self.puts),
+                "sharpe": round(sharpe, 3), "max_drawdown": round(mdd * 100, 2),
                 "positions": positions, "trades": list(self.trades)[:50], "curve": list(self.curve)}

@@ -912,7 +912,11 @@ class Engine:
         if (score > 0) != (p > 0.5):
             reasons.append("its trend and direction signals disagree")
         side = 0 if reasons else (1 if score > 0 else -1)
-        size = cfg.max_size * min(1.0, max(0.0, (conviction - 2 * cfg.prob_margin) / 0.5)) if side else 0.0
+        # Compounding-oriented sizing: allocate by risk-adjusted edge (|q50|/IQR = |score|, a
+        # Sharpe-like fractional-Kelly proxy), so capital concentrates where edge-per-unit-risk is
+        # highest -- the direction/conviction checks above still gate entry. Fractional and hard-capped,
+        # because edge estimates are noisy and drawdowns erode compounding faster than wins build it.
+        size = cfg.max_size * min(1.0, cfg.kelly_fraction * abs(score)) if side else 0.0
         why = "holding: " + "; ".join(reasons) if reasons else f"leaning in: {q50:+.0f} bps expected, {p * 100:.0f}% up / {p_down * 100:.0f}% down"
         if p > 0.5 and p_down > 0.5:
             why += "  |  both tails fat — expect a big move, direction unclear"

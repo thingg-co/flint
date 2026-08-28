@@ -1225,6 +1225,7 @@ function renderPaper() {
   $("#p-stats").innerHTML = [
     ["cash", fmtUSD(p.cash)], ["gross exposure", fmtUSD(p.gross)], ["net", fmtUSD(p.net_exposure)],
     ["realized", fmtUSD(p.realized)], ["unrealized", fmtUSD(p.unrealized)], ["fees", fmtUSD(p.fees)], ["option fees", fmtUSD(p.option_fees || 0)], ["spread paid", fmtUSD(p.spread_cost || 0)], ["trades", p.n_trades],
+    ["Sharpe", (p.sharpe || 0).toFixed(2)], ["max drawdown", (p.max_drawdown || 0).toFixed(1) + "%"],
   ].map(([k, v]) => `<div class="pstat"><label>${esc(k)}</label><b>${esc(String(v))}</b></div>`).join("");
   const pos = p.positions || [];
   $("#p-pos-meta").textContent = pos.length ? `${pos.length} open` : "";
