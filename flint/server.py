@@ -26,7 +26,7 @@ def create_app(engine: Engine) -> FastAPI:
             with contextlib.suppress(asyncio.CancelledError):
                 await engine.stop()
 
-    app = FastAPI(title="flint", lifespan=lifespan)
+    app = FastAPI(title="Flint", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=WEB), name="static")
 
     @app.get("/")

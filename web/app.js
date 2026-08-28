@@ -499,7 +499,7 @@ function updateLoading(offline) {
   const title = $("#loading-title"), sub = $("#loading-sub");
   const feed = state.status && state.status.feed;
   if (phase === "offline") { title.textContent = "Rekindling…"; sub.textContent = "reconnecting to Flint"; }
-  else if (phase === "starting") { title.textContent = "Striking flint…"; sub.textContent = "waking up"; }
+  else if (phase === "starting") { title.textContent = "Striking Flint…"; sub.textContent = "waking up"; }
   else if (phase.indexOf("backfilling") === 0) { title.textContent = "Gathering tinder…"; sub.textContent = "backfilling market history" + (feed && feed !== "none" ? ` from ${feed}` : ""); }
   else if (phase === "training") { title.textContent = "Starting a fire…"; const m = state.metrics || {}; sub.textContent = `training on history — step ${m.steps || 0}`; }
   else { title.textContent = "Kindling the model…"; sub.textContent = phase; }
@@ -766,7 +766,7 @@ function renderOnboard() {
   } else {
     body.innerHTML = `<h2>You're all set</h2>` +
       `<p>Flint is already running on free sources and learning from live data. Add or change keys anytime from <b>Control panel \u2192 API keys</b>.</p>` +
-      `<div class="onb-actions"><button class="onb-primary" id="onb-go">Enter flint</button></div>`;
+      `<div class="onb-actions"><button class="onb-primary" id="onb-go">Enter Flint</button></div>`;
   }
   const on = (id, fn) => { const b = $("#" + id); if (b) b.onclick = fn; };
   on("onb-go", onbNext); on("onb-skip", onbNext); on("onb-back", onbBack); on("onb-skipall", onboardClose);
@@ -1050,7 +1050,7 @@ function briefColumn() {
   const b = state.brief;
   const busy = b && b.generating;
   const regen = `<button id="brief-regen"${busy ? " disabled" : ""}>${busy ? "writing…" : "\u21bb regenerate"}</button>`;
-  const masthead = meta => `<div class="col-masthead"><span class="col-name">flint \u00b7 Markets</span><span class="col-meta">${esc(meta)}</span>${regen}</div>`;
+  const masthead = meta => `<div class="col-masthead"><span class="col-name">Flint \u00b7 Markets</span><span class="col-meta">${esc(meta)}</span>${regen}</div>`;
   if (busy && !(b && b.text)) {
     return `<div class="brief-column">${masthead("the local desk is writing\u2026")}<div class="col-loading"><div class="spark-mini"></div>` +
       `<p>Fast models are digesting the tape, macro, positioning and smart money; a bigger model writes the column. This runs entirely on your machine and can take a minute.</p></div></div>`;
