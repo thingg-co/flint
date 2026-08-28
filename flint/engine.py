@@ -10,6 +10,8 @@ import re
 import httpx
 import time
 from collections import deque
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -102,6 +104,7 @@ class Pending:
     ts: float
     x: np.ndarray
     closes: np.ndarray
+    real: np.ndarray
     pred: Prediction | None
     suggestions: dict[str, dict]
 
@@ -212,7 +215,9 @@ class Engine:
         self.prices = {s: {"price": None, "bid": None, "ask": None, "ts": None} for s in self.symbols}
         self.tick_counts = {s: 0 for s in self.symbols}
         self.bars: dict[str, deque[Bar]] = {s: deque(maxlen=cfg.chart_bars) for s in self.symbols}
-        self.paper = PaperBook(cfg.paper_start, cfg.cost_bps, option_commission=cfg.option_commission)   # $100k paper book (shorts via puts)
+        self.paper = PaperBook(cfg.paper_start, cfg.cost_bps, min_trade_frac=cfg.paper_min_trade_frac,
+                               option_commission=cfg.option_commission,
+                               put_min_hold_s=cfg.put_min_hold_bars * cfg.bar_seconds)   # $100k paper book (shorts via puts)
         self.portfolio: dict = {}                               # Schwab account positions (read-only), for the Portfolio tab
         self.bar_index = 0
         self.pending: deque[Pending] = deque()
@@ -622,10 +627,11 @@ class Engine:
         for s in self.symbols:
             self.bars.setdefault(s, deque(maxlen=self.cfg.chart_bars)).append(row[s])
         closes = np.array([row[s].close for s in self.symbols], dtype=np.float32)
-        self._mature(closes)
+        real_now = np.array([row[s].volume > 0.0 for s in self.symbols])
+        self._mature(closes, real_now)
         x = self.features.push(row)
         if x is not None:
-            self.pending.append(Pending(self.bar_index, row[self.symbols[0]].ts, x, closes, None, {}))
+            self.pending.append(Pending(self.bar_index, row[self.symbols[0]].ts, x, closes, real_now, None, {}))
 
     async def _warmup(self) -> None:
         cfg = self.cfg
@@ -756,6 +762,7 @@ class Engine:
         for s in self.symbols:
             self.bars.setdefault(s, deque(maxlen=self.cfg.chart_bars)).append(row[s])
         closes = np.array([row[s].close for s in self.symbols], dtype=np.float32)
+        real_now = np.array([row[s].volume > 0.0 for s in self.symbols])   # a v=0 bar is a carry-forward, not a real trade
         ts = row[self.symbols[0]].ts
 
         self.trace.emit("feed", f"{cfg.bar_seconds:.0f}s: " + " | ".join(
@@ -769,7 +776,7 @@ class Engine:
             parts.append(f"{self.base[s]} {self._fmt_price(s, b.close)} ({r:+.1f}bps, {b.trades} trd, vol {b.volume:.3g})")
         self.trace.emit("bars", f"#{self.bar_index} " + " | ".join(parts))
 
-        matured = self._mature(closes)
+        matured = self._mature(closes, real_now)
         x = self.features.push(row)
 
         if x is not None:
@@ -789,13 +796,14 @@ class Engine:
         if x is not None:
             pred = self.learner.predict(x)
             sugg = {s: self._suggest(i, s, pred) for i, s in enumerate(self.symbols)}
-            self.pending.append(Pending(self.bar_index, ts, x, closes, pred, sugg))
+            self.pending.append(Pending(self.bar_index, ts, x, closes, real_now, pred, sugg))
             self.gate = [float(g) for g in pred.gate]
             self.latest = {}
             for i, s in enumerate(self.symbols):
                 self.latest[s] = {**sugg[s], "price": float(closes[i]), "ts": ts}
-            # only trade once the model is trusted (warmup complete) -- a live system wouldn't act on an unvalidated model
-            targets = {s: (self.latest[s]["side"] * self.latest[s]["size"] if self.metrics.trusted else 0.0) for s in self.symbols}
+            # trade only once the model is trusted AND has shown real directional skill (not just tenure)
+            tradeable = self.metrics.trusted and self.metrics.hit_ema > cfg.min_hit_rate
+            targets = {s: (self.latest[s]["side"] * self.latest[s]["size"] if tradeable else 0.0) for s in self.symbols}
             put_quotes = {}                                    # a short is opened as a long put (bounded loss), priced off a live chain
             need = [s for s in self.symbols if targets[s] < 0 and s not in self.paper.puts]
             if need and self.schwab_auth.authenticated:
@@ -833,14 +841,15 @@ class Engine:
             "status": self.status_dict(), "paper": self.paper.snapshot(self._live_prices()),
         })
 
-    def _mature(self, closes: np.ndarray) -> int:
+    def _mature(self, closes: np.ndarray, real_now: np.ndarray | None = None) -> int:
         n = 0
         while self.pending and self.pending[0].index + self.cfg.horizon <= self.bar_index:
             pp = self.pending.popleft()
             with np.errstate(divide="ignore", invalid="ignore"):
                 y = (np.log(closes / pp.closes) * 1e4).astype(np.float32)
             y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)   # a 0-seeded / history-less symbol yields no return, not a NaN that poisons the whole batch
-            self.learner.add(pp.x, y)
+            mask = (pp.real & real_now).astype(np.float32) if real_now is not None else None   # train only on symbols that really traded at both ends
+            self.learner.add(pp.x, y, mask)
             if pp.pred is not None:
                 self._score(pp, y)
             n += 1
@@ -865,6 +874,15 @@ class Engine:
         qc = [q50 + m.band_scale * (float(v) - q50) for v in q]
         return qc, self._temper(p_raw)
 
+    def _regular_session(self) -> bool:
+        """Regular US equity session by the wall clock (9:30-16:00 ET, weekdays). Gates trading;
+        a no-trade (volume 0) bar additionally covers holidays and early closes."""
+        now = datetime.now(ZoneInfo("America/New_York"))
+        if now.weekday() >= 5:
+            return False
+        mins = now.hour * 60 + now.minute
+        return 570 <= mins < 960
+
     def _suggest(self, i: int, s: str, pred: Prediction) -> dict:
         cfg = self.cfg
         m = self.metrics
@@ -884,6 +902,13 @@ class Engine:
             reasons.append(f"direction is near a coin flip ({p * 100:.0f}% up)")
         if edge <= 0:
             reasons.append("the expected move does not cover trading cost")
+        if abs(q50) < cfg.move_floor_bps:
+            reasons.append(f"expected move {abs(q50):.0f} bps is below the {cfg.move_floor_bps:.0f} bps floor")
+        bar = self.bars[s][-1] if self.bars.get(s) else None
+        if not (bar and bar.volume > 0):
+            reasons.append("no live trade this bar (stale/flat price)")
+        if not self._regular_session():
+            reasons.append("outside regular trading hours")
         if (score > 0) != (p > 0.5):
             reasons.append("its trend and direction signals disagree")
         side = 0 if reasons else (1 if score > 0 else -1)

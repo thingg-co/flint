@@ -40,6 +40,7 @@ class OnlineLearner:
         cap = cfg.replay_size
         self.rx = np.zeros((cap, cfg.n_assets, cfg.window, n_features), dtype=np.float32)
         self.ry = np.zeros((cap, cfg.n_assets), dtype=np.float32)
+        self.rmask = np.ones((cap, cfg.n_assets), dtype=np.float32)
         self.size = 0
         self.ptr = 0
         self.steps = 0
@@ -74,9 +75,10 @@ class OnlineLearner:
         return Prediction(q[0].cpu().numpy(), torch.sigmoid(up_logit[0]).cpu().numpy(),
                           torch.sigmoid(down_logit[0]).cpu().numpy(), gate[0].cpu().numpy(), attn[0].cpu().numpy())
 
-    def add(self, x: np.ndarray, y: np.ndarray) -> None:
+    def add(self, x: np.ndarray, y: np.ndarray, mask: np.ndarray | None = None) -> None:
         self.rx[self.ptr] = x
         self.ry[self.ptr] = y
+        self.rmask[self.ptr] = 1.0 if mask is None else mask
         self.ptr = (self.ptr + 1) % self.rx.shape[0]
         self.size = min(self.size + 1, self.rx.shape[0])
         self.labels += 1
@@ -88,7 +90,7 @@ class OnlineLearner:
         recent = (self.ptr - 1 - self.rng.integers(0, n_recent, k_recent)) % cap
         uniform = self.rng.integers(0, self.size, batch - k_recent)
         idx = np.concatenate([recent, uniform])
-        return torch.from_numpy(self.rx[idx]), torch.from_numpy(self.ry[idx])
+        return torch.from_numpy(self.rx[idx]), torch.from_numpy(self.ry[idx]), torch.from_numpy(self.rmask[idx])
 
     def train_steps(self, n: int) -> dict | None:
         """Run n optimizer steps. Safe to call from a worker thread."""
@@ -99,15 +101,16 @@ class OnlineLearner:
         with self.lock:
             self.model.train()
             for _ in range(n):
-                x, y = self._sample(batch)
+                x, y, mask = self._sample(batch)
                 x = x.to(self.device)
                 y = y.to(self.device)
+                mask = mask.to(self.device)
                 if self.cfg.input_noise > 0:
                     x = x + self.cfg.input_noise * torch.randn_like(x)
                 q, up_logit, down_logit, gate, _ = self.model(x)
                 loss, parts = flint_loss(q, up_logit, down_logit, gate, y, self.cfg.quantiles,
                                          label_smoothing=self.cfg.label_smoothing,
-                                         threshold=self.cfg.direction_threshold_bps)
+                                         threshold=self.cfg.direction_threshold_bps, mask=mask)
                 self.opt.zero_grad(set_to_none=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
@@ -137,7 +140,7 @@ class OnlineLearner:
                 "extra": extra or {},
             }, d / "model.pt.tmp")
             os.replace(d / "model.pt.tmp", d / "model.pt")                       # atomic: never leave a half-written file
-            np.savez_compressed(d / "replay.tmp.npz", x=self.rx[:self.size], y=self.ry[:self.size], ptr=self.ptr)
+            np.savez_compressed(d / "replay.tmp.npz", x=self.rx[:self.size], y=self.ry[:self.size], mask=self.rmask[:self.size], ptr=self.ptr)
             os.replace(d / "replay.tmp.npz", d / "replay.npz")
 
     def load(self, directory: str | Path) -> dict | None:
@@ -180,6 +183,7 @@ class OnlineLearner:
                     n = len(z["y"])
                     self.rx[:n] = z["x"]
                     self.ry[:n] = z["y"]
+                    self.rmask[:n] = z["mask"] if "mask" in z else 1.0
                     self.size = n
                     self.ptr = int(z["ptr"]) % self.rx.shape[0] if n == self.rx.shape[0] else n % self.rx.shape[0]
             except Exception as e:  # noqa: BLE001 -- keep the model, just drop an unreadable replay buffer

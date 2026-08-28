@@ -232,6 +232,10 @@ class Config:
     option_dte: int = _env("OPTION_DTE", 35)                # target days-to-expiry when opening a put for a short
     option_features_seconds: float = _env("OPTION_FEATURES_SECONDS", 600.0)  # cadence to refresh ATM IV / skew features
     max_size: float = _env("MAX_SIZE", 1.0)
+    move_floor_bps: float = _env("MOVE_FLOOR_BPS", 8.0)     # min |expected move| (bps) to take a side; kills false confidence from flat/degenerate-IQR series
+    min_hit_rate: float = _env("MIN_HIT_RATE", 0.5)         # only trade once directional skill (hit_ema) beats a coin flip
+    paper_min_trade_frac: float = _env("PAPER_MIN_TRADE_FRAC", 0.015)  # skip paper rebalances smaller than this share of equity (anti-churn)
+    put_min_hold_bars: int = _env("PUT_MIN_HOLD_BARS", 3)   # hold a paper put at least this many bars before closing (anti-churn)
 
     # Signals + Burry overlay
     muted_symbols: str = _env("MUTED", "")           # symbols to watch-but-not-suggest (comma list)

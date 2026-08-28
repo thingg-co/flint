@@ -14,13 +14,14 @@ from .options import bs_put, years_to
 
 class PaperBook:
     def __init__(self, start: float = 100_000.0, cost_bps: float = 1.0, max_weight: float = 0.15,
-                 min_trade_frac: float = 0.004, option_commission: float = 0.65):
+                 min_trade_frac: float = 0.004, option_commission: float = 0.65, put_min_hold_s: float = 0.0):
         self.start = float(start)
         self.cash = float(start)
         self.cost_bps = float(cost_bps)
         self.max_weight = float(max_weight)          # cap on a single name's gross weight
         self.min_trade_frac = float(min_trade_frac)  # skip rebalances smaller than this share of equity
         self.option_commission = float(option_commission)
+        self.put_min_hold_s = float(put_min_hold_s)   # hold a put at least this long before closing (anti-churn)
         self.pos: dict[str, float] = {}              # signed shares (longs only, in practice)
         self.avg: dict[str, float] = {}              # average entry price
         self.puts: dict[str, dict] = {}              # sym -> {contracts, strike, expiry_ts, entry_prem, iv}
@@ -78,8 +79,8 @@ class PaperBook:
             ref = self._px(s, prices)
             if not ref or ref <= 0:
                 continue
-            if w >= 0:                                      # long or flat: close any put, manage stock
-                if s in self.puts:
+            if w >= 0:                                      # long or flat: close any put (once past min hold), manage stock
+                if s in self.puts and ts - self.puts[s].get("opened", 0.0) >= self.put_min_hold_s:
                     self._close_put(s, ref, ts)
                 desired = eq * w * scale / ref
                 cur = self.pos.get(s, 0.0)
@@ -141,7 +142,7 @@ class PaperBook:
         self.option_fees += fee
         self.n_trades += 1
         self.puts[s] = {"contracts": contracts, "strike": float(pq["strike"]), "expiry_ts": float(pq["expiry_ts"]),
-                        "entry_prem": float(prem), "iv": float(pq["iv"])}
+                        "entry_prem": float(prem), "iv": float(pq["iv"]), "opened": ts}
         self.trades.appendleft({"t": ts, "sym": s, "side": "buy put", "shares": round(contracts, 2),
                                 "price": round(prem, 2), "notional": round(cost, 2),
                                 "note": f"P{pq['strike']:.0f} {self._exp(pq['expiry_ts'])}"})

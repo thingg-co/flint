@@ -106,17 +106,27 @@ class FlintNet(nn.Module):
 
 def flint_loss(q: torch.Tensor, up_logit: torch.Tensor, down_logit: torch.Tensor, gate: torch.Tensor,
                y: torch.Tensor, quantiles: tuple[float, ...], balance: float = 0.3,
-               label_smoothing: float = 0.0, threshold: float = 0.0):
+               label_smoothing: float = 0.0, threshold: float = 0.0, mask: torch.Tensor | None = None):
     taus = torch.tensor(quantiles, dtype=q.dtype, device=q.device)
     diff = y[..., None] - q
-    pinball = torch.maximum(taus * diff, (taus - 1) * diff).mean()
+    pin_el = torch.maximum(taus * diff, (taus - 1) * diff)   # (batch, assets, quantiles)
     up = (y > threshold).to(q.dtype)        # independent tails around a deadband, so they need not sum to 1
     down = (y < -threshold).to(q.dtype)
     if label_smoothing > 0:                  # keep the heads off the 0/1 rails
         up = up * (1 - label_smoothing) + 0.5 * label_smoothing
         down = down * (1 - label_smoothing) + 0.5 * label_smoothing
-    bce = 0.5 * (F.binary_cross_entropy_with_logits(up_logit, up)
-                 + F.binary_cross_entropy_with_logits(down_logit, down))
+    if mask is not None:
+        # A carry-forward (no-trade) bar yields a fake zero return; mask those symbols out so the
+        # net never learns "everything is flat" from stale prices.
+        mk = mask.to(q.dtype)               # (batch, assets)
+        denom = mk.sum().clamp(min=1.0)
+        pinball = (pin_el.mean(-1) * mk).sum() / denom
+        bce = 0.5 * (((F.binary_cross_entropy_with_logits(up_logit, up, reduction="none")
+                       + F.binary_cross_entropy_with_logits(down_logit, down, reduction="none")) * mk).sum() / denom)
+    else:
+        pinball = pin_el.mean()
+        bce = 0.5 * (F.binary_cross_entropy_with_logits(up_logit, up)
+                     + F.binary_cross_entropy_with_logits(down_logit, down))
     usage = gate.mean(0)
     # KL(usage || uniform): keeps the gate from collapsing onto one expert early on.
     bal = (usage * torch.log(usage * gate.shape[1] + 1e-8)).sum()
