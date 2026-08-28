@@ -1322,6 +1322,9 @@ class Engine:
             if contracts < 1:
                 continue
             spot, strike, prem = cq["spot"], cq["strike"], cq["premium"]
+            otm_pct = (strike - spot) / spot * 100.0
+            if not (0.0 <= otm_pct <= 60.0):    # skip garbage strikes (bad chain/spot/delta data); a real covered call is modestly OTM
+                continue
             dte = max(1.0, (cq["expiry_ts"] - now) / 86400.0)
             yld = prem / spot * 100.0
             lat = self.latest.get(s, {})
@@ -1335,9 +1338,9 @@ class Engine:
                 "strike": strike, "expiry": datetime.fromtimestamp(cq["expiry_ts"]).strftime("%b %d"),
                 "dte": round(dte), "premium": round(prem, 2), "income": round(prem * 100.0 * contracts),
                 "yield_pct": round(yld, 2), "annualized_pct": round(yld * 365.0 / dte, 1),
-                "otm_pct": round((strike - spot) / spot * 100.0, 1),
+                "otm_pct": round(otm_pct, 1),
                 "assign_prob": round(abs(delta) * 100.0) if delta is not None else None,
-                "if_called_pct": round((strike - spot) / spot * 100.0 + yld, 2),
+                "if_called_pct": round(otm_pct + yld, 2),
                 "p_up": round(p_up, 2) if p_up is not None else None,
                 "recommend": not bullish,
                 "note": ("Flint sees limited upside \u2014 harvest premium" if not bullish
