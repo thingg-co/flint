@@ -111,7 +111,8 @@ async def fetch_iv_skew(auth, symbol: str, dte: int = 30) -> dict | None:
     return {"iv": atm_iv, "skew": skew}
 
 
-async def fetch_call(auth, symbol: str, target_dte: int = 35, otm: float = 0.05) -> dict | None:
+async def fetch_call(auth, symbol: str, target_dte: int = 35, otm: float = 0.05,
+                     target_delta: float = 0.30) -> dict | None:
     """Pick an out-of-the-money call ~target_dte out for a covered-call write. Returns the contract
     to SELL (premium = bid, i.e. what you'd receive) with its strike, IV, delta and expiry, or None.
     Read-only: this only reads the chain; no order is ever placed."""
@@ -134,10 +135,22 @@ async def fetch_call(auth, symbol: str, target_dte: int = 35, otm: float = 0.05)
         return None
     exp = sorted(cem.keys())[0]                        # nearest expiry in the window
     strikes = cem[exp]
-    target = spot * (1.0 + max(0.0, otm))              # aim ~otm above spot (upside room before assignment)
-    otm_strikes = [k for k in strikes if float(k) >= spot] or list(strikes.keys())
-    best = min(otm_strikes, key=lambda s: abs(float(s) - target))
-    o = (strikes[best] or [{}])[0]
+    # Prefer an OTM call near target_delta (standard covered-call selection; delta ~= assignment
+    # probability, so ~0.30 keeps the shares most of the time). Fall back to a fixed OTM% if the
+    # chain carries no usable deltas.
+    delta_cands = []
+    for k in strikes:
+        oo = (strikes[k] or [{}])[0]
+        dd = oo.get("delta")
+        if dd is not None and abs(float(dd)) <= 1.0 and float(k) >= spot:
+            delta_cands.append((abs(abs(float(dd)) - target_delta), k, oo))
+    if delta_cands:
+        _, best, o = min(delta_cands, key=lambda x: x[0])
+    else:
+        target = spot * (1.0 + max(0.0, otm))          # aim ~otm above spot (upside room before assignment)
+        otm_strikes = [k for k in strikes if float(k) >= spot] or list(strikes.keys())
+        best = min(otm_strikes, key=lambda s: abs(float(s) - target))
+        o = (strikes[best] or [{}])[0]
     bid = o.get("bid") or o.get("mark")               # we SELL, so the premium received is the bid
     iv = o.get("volatility")
     if not bid or bid <= 0:

@@ -1311,7 +1311,8 @@ class Engine:
         from .options import fetch_call
         syms = sorted(holdings)
         quotes = await asyncio.gather(
-            *[fetch_call(self.schwab_auth, s, self.cfg.option_dte, self.cfg.covered_call_otm) for s in syms],
+            *[fetch_call(self.schwab_auth, s, self.cfg.option_dte, self.cfg.covered_call_otm,
+                          self.cfg.covered_call_delta) for s in syms],
             return_exceptions=True)
         opps = []
         for s, cq in zip(syms, quotes):

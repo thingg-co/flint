@@ -233,6 +233,7 @@ class Config:
     option_features_seconds: float = _env("OPTION_FEATURES_SECONDS", 600.0)  # cadence to refresh ATM IV / skew features
     covered_call_seconds: float = _env("COVERED_CALL_SECONDS", 300.0)  # cadence to refresh covered-call opportunities for the Portfolio tab
     covered_call_otm: float = _env("COVERED_CALL_OTM", 0.05)   # target out-of-the-money fraction for the suggested covered-call strike
+    covered_call_delta: float = _env("COVERED_CALL_DELTA", 0.30)  # target call delta (~assignment probability) for covered-call selection
     max_size: float = _env("MAX_SIZE", 1.0)
     move_floor_bps: float = _env("MOVE_FLOOR_BPS", 8.0)     # min |expected move| (bps) to take a side; kills false confidence from flat/degenerate-IQR series
     min_hit_rate: float = _env("MIN_HIT_RATE", 0.5)         # only trade once directional skill (hit_ema) beats a coin flip
