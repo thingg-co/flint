@@ -230,10 +230,11 @@ ul.headlines li.new a { color: #fff; } ul.headlines li:not(.new) a { color: var(
 .mstat b { color: var(--ink); font-size: 14px; }
 .mstat.regime.on b { color: var(--good); } .mstat.regime.off b { color: var(--serious); } .mstat.regime.mixed b { color: var(--warning); }
 .mstat .up { color: var(--good); } .mstat .down { color: var(--serious); }
-.market-grid { display: grid; grid-template-columns: 2fr 3fr; gap: 16px; margin-top: 12px; }
+.market-grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin-top: 12px; }  /* sectors row, then movers row */
+.market-sectors { padding-bottom: 12px; border-bottom: 1px solid var(--border); }
 @media (max-width: 820px) { .market-grid { grid-template-columns: 1fr; } }
 .mlabel { color: var(--muted); font-size: 11px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
-.sector-heat { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 4px; }
+.sector-heat { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 5px; }
 .sector-heat .sc { border-radius: 5px; padding: 5px 7px; font-size: 11px; color: #fff; display: flex; justify-content: space-between; gap: 6px; }
 .sector-heat .sc b { font-variant-numeric: tabular-nums; }
 .market-movers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; }
