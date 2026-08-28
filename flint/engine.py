@@ -32,7 +32,8 @@ log = logging.getLogger(__name__)
 
 TUNABLE = {"score_threshold": float, "prob_margin": float, "cost_bps": float, "max_size": float,
            "lr": float, "steps_per_label": int, "min_labels": int, "news_minutes": float,
-           "burry_aggr": float, "burry_fade_at": float, "burry_safety": float, "signals_minutes": float}
+           "burry_aggr": float, "burry_fade_at": float, "burry_safety": float, "signals_minutes": float,
+           "kelly_fraction": float, "move_floor_bps": float, "min_hit_rate": float}
 
 
 def clean(o):
