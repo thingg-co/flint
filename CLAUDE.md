@@ -74,7 +74,8 @@ change actually requires it.
 - Sources live in `REGISTRY` (sources.py); their keys live in `KEY_SERVICES` (engine.py).
   `KEY_SERVICES` drives onboarding and the Control panel, so adding a provider there makes
   it appear as a skippable setup step with no frontend code.
-- The narrative brief runs on local Ollama. Never route it to a cloud API.
+- The narrative brief runs on a **local** LLM backend — Ollama (default) or any OpenAI-compatible
+  server such as vLLM (set `brief_backend=openai` + `brief_openai_base`). Never route it to a cloud API.
 - User-facing text capitalizes "Flint" as a proper noun.
 - FlintNet returns five tensors (quantiles, up-logit, down-logit, gate, attention). If you change the head, update `flint_loss` AND `autotune._bench` together -- an arity mismatch only surfaces on a re-benchmark (a feature/symbol-count change), not on a cached start.
 - Changing the feature set or the symbol list reshapes the model, so it resets once (guarded; the old checkpoint is backed up to model.pt.bak).

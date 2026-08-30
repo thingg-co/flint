@@ -181,6 +181,8 @@ class Config:
     brief_minutes: float = _env("BRIEF_MINUTES", 15.0)         # auto-refresh cadence for the narrative brief
     brief_timeout: float = _env("BRIEF_TIMEOUT", 1800.0)       # max seconds for the writer model (local, can be slow)
     brief_enabled: bool = _env("BRIEF_ENABLED", False, cast=lambda v: v.lower() in ("1", "true", "yes", "on"))  # local LLM brief on/off (off for now)
+    brief_backend: str = _env("BRIEF_BACKEND", "ollama")     # local LLM backend: "ollama" (default) or "openai" (vLLM / any OpenAI-compatible local server)
+    brief_openai_base: str = _env("BRIEF_OPENAI_BASE", "http://localhost:8001/v1")  # OpenAI-compatible base URL when brief_backend=openai (e.g. vLLM `vllm serve <model> --port 8001`). Local only, never cloud.
     av_rate_seconds: float = _env("AV_RATE_SECONDS", 1.0)     # global floor between ANY two Alpha Vantage calls
     bar_seconds: float = _env("BAR_SECONDS", 300.0)   # 5-minute bars (FMP provides reliable 5-min history)
     backfill_seconds: float = _env("BACKFILL_SECONDS", 432000.0)  # ~5 trading days: enough real bars to fill the model window + training
