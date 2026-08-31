@@ -1195,13 +1195,16 @@ function renderPortfolio() {
   pf.accounts.forEach(a => { total += a.liquidation || 0; (a.positions || []).forEach(p => pnl += p.pnl || 0); });
   $("#pf-total").textContent = fmtUSD(total);
   const pe = $("#pf-pnl"); pe.textContent = (pnl >= 0 ? "+" : "") + fmtUSD(pnl); pe.className = "peq-ret " + (pnl >= 0 ? "up" : "down");
-  if (meta) meta.textContent = pf.t ? "updated " + fmtTime(pf.t) + " · read-only, no trading" : "";
+  if (meta) meta.textContent = (pf.t ? "updated " + fmtTime(pf.t) + " · read-only, no trading" : "") +
+    (state.metrics && !state.metrics.trusted ? " · model warming up" : "");
   root.innerHTML = pf.accounts.map(a => {
     const head = `<div class="pf-acct"><span class="pf-name">${esc(a.name)}</span><span class="pf-id">${esc(a.id)}</span><span class="pf-liq">${fmtUSD(a.liquidation)}</span></div>`;
     const rows = (a.positions || []).map(p => {
       const L = state.latest[p.symbol];
       let sig = `<span class="nm">not modeled</span>`;
-      if (L) {
+      if (L && !L.trusted) {
+        sig = `<span class="warm">warming up</span>`;
+      } else if (L) {
         const act = L.action || "HOLD";
         const pu = L.p_up != null ? Math.round(L.p_up * 100) : "·";
         const pd = L.p_down != null ? Math.round(L.p_down * 100) : "·";
