@@ -74,6 +74,14 @@ change actually requires it.
 - Sources live in `REGISTRY` (sources.py); their keys live in `KEY_SERVICES` (engine.py).
   `KEY_SERVICES` drives onboarding and the Control panel, so adding a provider there makes
   it appear as a skippable setup step with no frontend code.
+- The universe grown at runtime (portfolio holdings, movers, news adds) persists in
+  `state/universe.json` and is merged back on start, so a restart rebuilds at the same
+  symbol count and the checkpoint still matches. Delete the file to intentionally shrink
+  the universe back to the config default.
+- While the market is closed, `_deep_backfill_loop` pages history back in ~10-day chunks
+  (to `deep_backfill_days`, a live control; 0 disables), adds labeled windows to the replay
+  through an isolated bar/feature pipeline, and trains on them. It must never run while the
+  market is open.
 - The narrative brief runs on a **local** LLM backend — Ollama (default) or any OpenAI-compatible
   server such as vLLM (set `brief_backend=openai` + `brief_openai_base`). Never route it to a cloud API.
 - User-facing text capitalizes "Flint" as a proper noun.

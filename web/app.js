@@ -23,6 +23,7 @@ const CONTROL_FIELDS = [
   ["max_size", "max size", 0.05], ["lr", "learning rate", 0.0001], ["steps_per_label", "steps per label", 1],
   ["min_labels", "labels before trusted", 1], ["news_minutes", "news every (min)", 1],
   ["kelly_fraction", "Kelly fraction", 0.01], ["move_floor_bps", "move floor (bps)", 1], ["min_hit_rate", "min hit rate", 0.01],
+  ["deep_backfill_days", "backfill depth (days)", 1],
 ];
 
 const state = { config: null, status: {}, controls: {}, prices: {}, bars: {}, latest: {}, gate: [], outcomes: {}, portfolio: null,

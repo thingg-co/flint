@@ -393,6 +393,11 @@ class FMPSource(Source):
             self.note = "no API key (set fmp.json or FLINT_FMP_KEY)"
 
     async def backfill(self, symbols, cutoff):
+        return await self.backfill_range(symbols, cutoff, None)
+
+    async def backfill_range(self, symbols, cutoff, until):
+        """History for [cutoff, until); until=None means now. The deep-backfill loop uses
+        the bounded form to page further back than the startup backfill."""
         syms = [s for s in symbols if self.supports(s)]
         if not syms or not self.key:
             return []
@@ -403,7 +408,7 @@ class FMPSource(Source):
         except Exception:  # noqa: BLE001
             et = None
         frm = (date.fromtimestamp(cutoff) - timedelta(days=1)).isoformat()
-        to = date.fromtimestamp(time.time() + 86400).isoformat()
+        to = date.fromtimestamp((until or time.time()) + 86400).isoformat()
         ticks = []
         async with httpx.AsyncClient(timeout=25) as c:
             for sym in syms:
@@ -418,6 +423,8 @@ class FMPSource(Source):
                             dt = datetime.strptime(row["date"], "%Y-%m-%d %H:%M:%S")
                             ts = (dt.replace(tzinfo=et).timestamp() if et else dt.timestamp()) + self.cfg.bar_seconds
                         except (ValueError, KeyError):
+                            continue
+                        if until is not None and not (cutoff <= ts < until):   # bounded page: no overlap with bars already ingested
                             continue
                         if row.get("close"):
                             c0 = float(row["close"])
@@ -1326,6 +1333,27 @@ class SourceManager:
             self.active[s] = chosen.get(s)
         merged.sort(key=lambda t: t.ts)
         return merged, chosen
+
+    async def backfill_range(self, cutoff: float, until: float) -> list[Tick]:
+        """Bounded history page [cutoff, until) from the best enabled source that supports
+        ranged fetches (currently FMP). Used by the deep-backfill loop while the market is
+        closed; quiet on failure so an API hiccup never disturbs the live feeds."""
+        for src in self.ordered():
+            if not self.enabled.get(src.id) or not hasattr(src, "backfill_range"):
+                continue
+            want = [s for s in self.symbols if src.supports(s)]
+            if not want:
+                continue
+            try:
+                ticks = await asyncio.wait_for(src.backfill_range(want, cutoff, until), timeout=120)
+            except Exception as e:  # noqa: BLE001
+                if self.trace:
+                    self.trace.emit("feed", f"{src.name} deep backfill failed: {type(e).__name__}: {str(e)[:80]}", "warn")
+                continue
+            if ticks:
+                ticks.sort(key=lambda t: t.ts)
+                return ticks
+        return []
 
     def start(self) -> None:
         for src in self.sources.values():

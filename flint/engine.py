@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import re
 
 import httpx
@@ -33,7 +34,8 @@ log = logging.getLogger(__name__)
 TUNABLE = {"score_threshold": float, "prob_margin": float, "cost_bps": float, "max_size": float,
            "lr": float, "steps_per_label": int, "min_labels": int, "news_minutes": float,
            "burry_aggr": float, "burry_fade_at": float, "burry_safety": float, "signals_minutes": float,
-           "kelly_fraction": float, "move_floor_bps": float, "min_hit_rate": float}
+           "kelly_fraction": float, "move_floor_bps": float, "min_hit_rate": float,
+           "deep_backfill_days": float}
 
 
 def clean(o):
@@ -152,9 +154,19 @@ class Metrics:
 
 class Engine:
     def __init__(self, cfg):
-        import os
         self.cfg = cfg
         self.all_symbols = [s.upper() for s in cfg.symbols]     # full configured universe
+        # Merge the persisted universe (state/universe.json): symbols added at runtime by the
+        # portfolio/movers/news loops must survive a restart, or the rebuilt
+        # engine starts at the config default, mismatches the checkpoint's symbol list, and
+        # resets the trained model. Delete the file to intentionally shrink the universe.
+        try:
+            saved = json.load(open(os.path.join(cfg.state_dir, "universe.json"))).get("symbols", [])
+            extra_syms = [s for s in saved if s not in set(self.all_symbols)]
+            room = cfg.max_universe - len(self.all_symbols)
+            self.all_symbols.extend(extra_syms[:max(0, room)])
+        except (OSError, ValueError):
+            pass
         self.muted = {x.strip().upper() for x in cfg.muted_symbols.split(",") if x.strip()} & set(self.all_symbols)
         self.subs: set[asyncio.Queue] = set()
         self.trace = Trace(self._publish)
@@ -573,6 +585,7 @@ class Engine:
         self.trace.emit("feed", f"sources enabled: {', '.join(enabled)}; backfilling "
                                 f"{cfg.backfill_seconds / 60:.0f} min per symbol from the best available")
         cutoff = time.time() - cfg.backfill_seconds
+        self._deep_cutoff = cutoff                     # deep-backfill loop pages further back from here
         ticks, chosen = await self.sources.backfill(cutoff)
         if not ticks:
             self.trace.emit("feed", "no source returned history; the simulator will provide a live fallback", "warn")
@@ -592,7 +605,7 @@ class Engine:
         self.trace.emit("system", "live: streaming ticks, forecasting every bar, learning as labels mature")
         self.sources.start()
         self._tasks = [asyncio.create_task(c) for c in
-                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop(), self._market_loop(), self._brief_loop(), self._market_status_loop(), self._portfolio_loop(), self._option_features_loop())]
+                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop(), self._market_loop(), self._brief_loop(), self._market_status_loop(), self._portfolio_loop(), self._option_features_loop(), self._deep_backfill_loop())]
         await asyncio.gather(*self._tasks)
 
     def _ingest_history(self, ticks: list[Tick]) -> None:
@@ -657,6 +670,77 @@ class Engine:
             self._publish({"type": "metrics", "metrics": self.metrics.as_dict(), "history": self._drain_history()})
 
     # Live loops -------------------------------------------------------------------------
+
+    async def _deep_backfill_loop(self) -> None:
+        """While the market is closed, page history back beyond the startup backfill (in
+        ~10-day chunks, down to deep_backfill_days), add the labeled windows to the replay
+        buffer, and train on them. Idle hours become training time. Runs nothing while the
+        market is open, so it never competes with live forecasting for the GPU."""
+        while True:
+            await asyncio.sleep(600)
+            cfg = self.cfg
+            days = float(getattr(cfg, "deep_backfill_days", 0) or 0)
+            target = time.time() - days * 86400.0
+            if (days <= 0 or self.market_status.get("isOpen") is not False
+                    or not self.learning_enabled or self._deep_cutoff <= target):
+                continue
+            until = self._deep_cutoff
+            cutoff = max(target, until - 10 * 86400.0)
+            try:
+                ticks = await self.sources.backfill_range(cutoff, until)
+                self._deep_cutoff = cutoff
+                if not ticks:
+                    self.trace.emit("feed", "deep backfill: no history returned for "
+                                            f"{datetime.fromtimestamp(cutoff):%b %d} – {datetime.fromtimestamp(until):%b %d}", "warn")
+                    continue
+                added = await asyncio.to_thread(self._ingest_offline, ticks)
+                res = await asyncio.to_thread(self.learner.train_steps, 30) if added else None
+                if res:
+                    self._absorb_train(res)
+                self.trace.emit("learn", f"deep backfill {datetime.fromtimestamp(cutoff):%b %d} – "
+                                         f"{datetime.fromtimestamp(until):%b %d}: {len(ticks)} ticks, "
+                                         f"{added} windows added ({self.learner.size} in replay)" +
+                                         (f", 30 training steps (loss {res['loss']:.3f})" if res else ""))
+                self._publish({"type": "metrics", "metrics": self.metrics.as_dict(), "history": self._drain_history()})
+            except Exception as e:  # noqa: BLE001
+                self.trace.emit("learn", f"deep backfill failed: {type(e).__name__}: {str(e)[:80]}", "warn")
+
+    def _ingest_offline(self, ticks: list[Tick]) -> int:
+        """Turn a chunk of old history into labeled replay windows without touching the live
+        pipeline: a throwaway bar builder and feature builder (seeded with the live
+        normalization state) walk the chunk chronologically and feed the learner directly."""
+        cfg = self.cfg
+        builder = BarBuilder(self.symbols, cfg.bar_seconds)
+        feats = FeatureBuilder(self.symbols, cfg.window)
+        feats.norm.load(self.features.norm.state())
+        first: dict[str, float] = {}
+        for t in ticks:
+            first.setdefault(t.symbol, t.price)
+        for s in self.symbols:
+            first.setdefault(s, 0.0)                   # flat-seed history-less symbols, same as startup backfill
+        for sym, px in first.items():
+            builder.last_close.setdefault(sym, px)
+        for t in ticks:
+            builder.add(t)
+        rows = builder.roll(ticks[-1].ts + cfg.bar_seconds)
+        added, idx = 0, 0
+        pend: deque[tuple[int, np.ndarray, np.ndarray, np.ndarray]] = deque()
+        for row in rows:
+            idx += 1
+            closes = np.array([row[s].close for s in self.symbols], dtype=np.float32)
+            real_now = np.array([row[s].volume > 0.0 for s in self.symbols])
+            while pend and pend[0][0] + cfg.horizon <= idx:
+                _, x0, c0, r0 = pend.popleft()
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    y = (np.log(closes / c0) * 1e4).astype(np.float32)
+                y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+                self.learner.add(x0, y, (r0 & real_now).astype(np.float32))
+                added += 1
+            x = feats.push(row)
+            if x is not None:
+                pend.append((idx, x, closes, real_now))
+        self.metrics.labels = self.learner.labels
+        return added
 
     def _on_live_tick(self, tick: Tick) -> None:
         """Called by the source manager with the active provider's tick for a symbol.
@@ -727,6 +811,10 @@ class Engine:
             metrics["pnl_by_symbol"] = dict(m.pnl_by_symbol)
             self.learner.save(self.cfg.state_dir, extra={"norm": self.features.norm.state(), "metrics": metrics,
                                                           "paper": self.paper.to_state()})
+            tmp = os.path.join(self.cfg.state_dir, "universe.json.tmp")
+            with open(tmp, "w") as f:
+                json.dump({"symbols": list(self.all_symbols)}, f)
+            os.replace(tmp, os.path.join(self.cfg.state_dir, "universe.json"))
         except Exception as e:  # noqa: BLE001
             log.warning("checkpoint failed: %s", e)
 
