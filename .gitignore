@@ -19,3 +19,6 @@ alpaca.json
 tradier.json
 etrade.json
 etrade_tokens.json
+
+# Tauri mobile build artifacts
+mobile/src-tauri/target/

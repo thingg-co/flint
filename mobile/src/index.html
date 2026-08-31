@@ -1,0 +1,75 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Flint</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+         background: #0d1117; color: #e6edf3; font: 16px -apple-system, Roboto, system-ui, sans-serif; }
+  .card { width: min(88vw, 360px); padding: 28px; }
+  h1 { font-size: 22px; margin: 0 0 4px; } h1 span { color: #f0a848; }
+  p { color: #8b949e; font-size: 13px; margin: 0 0 20px; }
+  input { width: 100%; box-sizing: border-box; padding: 12px 14px; font-size: 16px; border-radius: 8px;
+          border: 1px solid #30363d; background: #161b22; color: #e6edf3; outline: none; }
+  input:focus { border-color: #f0a848; }
+  button { width: 100%; margin-top: 12px; padding: 12px; font-size: 16px; border: 0; border-radius: 8px;
+           background: #f0a848; color: #1c1408; font-weight: 600; }
+  button:active { filter: brightness(.9); }
+  .err { color: #e0574b; font-size: 13px; min-height: 18px; margin-top: 10px; }
+  .hint { color: #8b949e; font-size: 12px; margin-top: 16px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1><span>▲</span> Flint</h1>
+  <p>Connect to the machine running the Flint server.</p>
+  <input id="addr" placeholder="192.168.1.20:8000" inputmode="url" autocapitalize="off" autocorrect="off">
+  <button id="go">Connect</button>
+  <div class="err" id="err"></div>
+  <div class="hint">The server must be started with FLINT_HOST=0.0.0.0 to be reachable
+    from this device, and the phone must be on the same network.</div>
+</div>
+<script>
+  const $ = s => document.querySelector(s);
+  let saved = "";
+  try { saved = localStorage.getItem("flint_server") || ""; } catch (e) {}
+  if (saved) $("#addr").value = saved;
+
+  function normalize(v) {
+    v = v.trim().replace(/\/+$/, "");
+    if (!v) return null;
+    if (!/^https?:\/\//.test(v)) v = "http://" + v;
+    if (!/:\d+$/.test(v.replace(/^https?:\/\//, ""))) v += ":8000";
+    return v;
+  }
+
+  async function connect(url) {
+    $("#err").textContent = "";
+    $("#go").textContent = "Connecting…";
+    try {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 4000);
+      const r = await fetch(url + "/api/state", { signal: ctl.signal });
+      clearTimeout(t);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      try { localStorage.setItem("flint_server", url); } catch (e) {}
+      window.location.href = url + "/";
+    } catch (e) {
+      $("#go").textContent = "Connect";
+      $("#err").textContent = "Could not reach " + url + " — check the address, the network, and FLINT_HOST.";
+    }
+  }
+
+  $("#go").addEventListener("click", () => { const u = normalize($("#addr").value); if (u) connect(u); });
+  $("#addr").addEventListener("keydown", e => { if (e.key === "Enter") $("#go").click(); });
+  // Auto-connect on launch when a server is remembered; landing back here (Android back
+  // button) shows the form so the address can be changed.
+  if (saved && !sessionStorage.getItem("flint_stay")) {
+    try { sessionStorage.setItem("flint_stay", "1"); } catch (e) {}
+    connect(saved);
+  }
+</script>
+</body>
+</html>

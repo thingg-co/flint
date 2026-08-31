@@ -27,6 +27,11 @@ def create_app(engine: Engine) -> FastAPI:
                 await engine.stop()
 
     app = FastAPI(title="Flint", lifespan=lifespan)
+    from fastapi.middleware.cors import CORSMiddleware
+    # The mobile app's webview runs on its own origin (http://tauri.localhost) and probes
+    # /api/state before handing the view over to the dashboard; without CORS that probe is
+    # blocked. The server is LAN-only and read-only over HTTP, so a wildcard is fine.
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     app.mount("/static", StaticFiles(directory=WEB), name="static")
 
     @app.get("/")
