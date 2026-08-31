@@ -130,3 +130,8 @@ flint/engine.py    orchestration, policy + council overlay, universe, metrics, c
 flint/server.py    FastAPI app, websocket, control + keys endpoints
 web/               dashboard (no build step, plain HTML/CSS/JS)
 ```
+
+## License
+
+PolyForm Noncommercial 1.0.0: free for personal, hobby, research and other noncommercial use.
+Commercial use needs a separate license. See LICENSE and NOTICE.

@@ -2,6 +2,7 @@
 name = "flint"
 version = "0.1.0"
 description = "Continuously learning market model with a live web dashboard"
+license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
     "torch>=2.3",
