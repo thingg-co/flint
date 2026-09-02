@@ -187,6 +187,7 @@ class Config:
     bar_seconds: float = _env("BAR_SECONDS", 300.0)   # 5-minute bars (FMP provides reliable 5-min history)
     backfill_seconds: float = _env("BACKFILL_SECONDS", 432000.0)  # ~5 trading days: enough real bars to fill the model window + training
     backfill_pages: int = _env("BACKFILL_PAGES", 40)  # max REST pages per symbol
+    train_in_session: bool = _env("TRAIN_IN_SESSION", "0") not in ("0", "false", "no")   # let the idle-training loop run while the market is open too (a step can delay a forecast by one step, ~2 s on the Spark)
     idle_train_epochs: float = _env("IDLE_TRAIN_EPOCHS", 2.0)   # while the market is closed, keep training on the replay up to this many passes over it per closed session (0 = off); otherwise the GPU idles between backfill chunks
     deep_backfill_days: float = _env("DEEP_BACKFILL_DAYS", 30.0)  # while the market is closed, keep fetching history back this far and train on it (0 = off); the cap on market-data use
     coinbase_ws: str = "wss://ws-feed.exchange.coinbase.com"

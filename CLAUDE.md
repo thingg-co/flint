@@ -83,7 +83,9 @@ change actually requires it.
   through an isolated bar/feature pipeline, and trains on them. It must never run while the
   market is open. `_idle_train_loop` fills the gaps between chunks: while closed it trains on
   the replay up to `idle_train_epochs` passes per closed session (a live control; 0 disables),
-  a budget bounded by replay size rather than by hours, so a long night cannot overfit it.
+  a budget bounded by replay size rather than by hours, so a long night cannot overfit it. With
+  `train_in_session` on (a live control, off by default) it also runs through the open session with
+  its own budget; a step can delay a forecast by at most one step.
 - On CUDA the train step runs under bf16 autocast with TF32 matmuls (loss in fp32); MPS and CPU
   stay fp32. `FLINT_COMPILE=1` wraps the training forward in `torch.compile` (2.1x on the GB10,
   same loss range; a two-minute compile on the first step after each start). Prediction and

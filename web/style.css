@@ -713,3 +713,6 @@ h3 .mini { float: right; padding: 2px 10px; font-size: 11px; margin-top: -2px; }
   .prow.ptr { grid-template-columns: 62px 1.4fr 1fr 1fr; }
   .prow.ptr .c-qty, .prow.ptr .c-price { display: none; }
 }
+/* recent trades: a fixed-height box that scrolls, header stays put */
+#p-trades { max-height: 430px; overflow-y: auto; }
+#p-trades .phead { position: sticky; top: 0; background: var(--surface); z-index: 1; }

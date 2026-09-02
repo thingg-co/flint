@@ -36,7 +36,8 @@ TUNABLE = {"score_threshold": float, "prob_margin": float, "cost_bps": float, "m
            "burry_aggr": float, "burry_fade_at": float, "burry_safety": float, "signals_minutes": float,
            "kelly_fraction": float, "move_floor_bps": float, "min_hit_rate": float,
            "deep_backfill_days": float, "idle_train_epochs": float,
-           "extended_hours": lambda v: str(v).lower() in ("1", "true", "yes", "on")}
+           "extended_hours": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
+           "train_in_session": lambda v: str(v).lower() in ("1", "true", "yes", "on")}
 
 
 def clean(o):
@@ -725,16 +726,17 @@ class Engine:
         the learner lock short so pre-market forecasts are not held up. Never runs while the
         market is open; the open resets the budget."""
         done = 0
+        self._idle_was_open = None
         wait = 20.0
         while True:
             await asyncio.sleep(wait)
             wait = 20.0                                   # idle poll; drops to ~0 while there is budget to burn
             cfg = self.cfg
             is_open = self.market_status.get("isOpen")
-            if is_open is not False:
-                if is_open:
-                    done = 0
-                continue
+            if is_open is None or (is_open and not getattr(cfg, "train_in_session", False)):
+                continue                                  # unknown status, or open and session training is off
+            if is_open != self._idle_was_open:            # each session (open or closed) gets its own budget
+                done, self._idle_was_open = 0, is_open
             epochs = float(getattr(cfg, "idle_train_epochs", 0) or 0)
             size = self.learner.size
             if epochs <= 0 or not self.learning_enabled or size < 64:
@@ -750,7 +752,7 @@ class Engine:
             done += chunk
             self._absorb_train(res)
             if done % 40 < chunk or done >= budget:
-                self.trace.emit("learn", f"idle training {done}/{budget} steps this closed session "
+                self.trace.emit("learn", f"idle training {done}/{budget} steps this {'open' if is_open else 'closed'} session "
                                          f"({size} windows in replay): loss {res['loss']:.3f} "
                                          f"(pinball {res['pinball']:.2f} bps, bce {res['bce']:.3f})")
                 self._publish({"type": "metrics", "metrics": self.metrics.as_dict(), "history": self._drain_history()})

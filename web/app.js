@@ -23,7 +23,7 @@ const CONTROL_FIELDS = [
   ["max_size", "max size", 0.05], ["lr", "learning rate", 0.0001], ["steps_per_label", "steps per label", 1],
   ["min_labels", "labels before trusted", 1], ["news_minutes", "news every (min)", 1],
   ["kelly_fraction", "Kelly fraction", 0.01], ["move_floor_bps", "move floor (bps)", 1], ["min_hit_rate", "min hit rate", 0.01],
-  ["deep_backfill_days", "backfill depth (days)", 1], ["idle_train_epochs", "idle training (passes)", 0.5], ["extended_hours", "extended hours (0/1)", 1],
+  ["deep_backfill_days", "backfill depth (days)", 1], ["idle_train_epochs", "idle training (passes)", 0.5], ["extended_hours", "extended hours (0/1)", 1], ["train_in_session", "train while open (0/1)", 1],
 ];
 
 let wsUp = false;
@@ -1483,12 +1483,11 @@ function renderPaper() {
         `<span class="c-weight">${(x.weight * 100).toFixed(1)}%</span><span class="c-value">${fmtUSD(x.value)}</span>${pnlCell(x)}${gainCell(x)}</div>`).join("")
     : `<div class="why">no options open</div>`;
   const tr = (p.trades || []).map(t => ({ ...t, label: tradeLabel(t) }));
-  const N = 10, showAll = paperTradesAll;
-  $("#p-tr-meta").textContent = p.n_trades ? `${p.n_trades} total` : "";
-  const more = $("#p-tr-more"); if (more) { more.hidden = tr.length <= N; more.textContent = showAll ? "Show fewer" : `Show all ${tr.length}`; }
+  $("#p-tr-meta").textContent = p.n_trades ? `${p.n_trades} total, scroll for more` : "";
+  const more = $("#p-tr-more"); if (more) more.hidden = true;
   $("#p-trades").innerHTML = tr.length
     ? head("trades", [["t", "time"], ["label", "action"], ["sym", "sym"], ["shares", "qty", "c-qty"], ["price", "price", "c-price"], ["notional", "value"]]) +
-      srt(tr, "trades").slice(0, showAll ? tr.length : N).map(t => `<div class="prow ptr"><span>${fmtTime(t.t)}</span>` +
+      srt(tr, "trades").map(t => `<div class="prow ptr"><span>${fmtTime(t.t)}</span>` +
         `<span class="${(t.side || "").startsWith("buy") ? "up" : "down"}">${esc(t.label)}</span>` +
         `<span class="psym tk" data-sym="${esc(t.sym)}">${esc(base(t.sym))}</span><span class="c-qty">${t.shares}</span><span class="c-price">${fmtPrice(t.price)}</span><span>${t.notional != null ? fmtUSD(t.notional) : ""}</span></div>`).join("")
     : `<div class="why">no trades yet${state.metrics && !state.metrics.trusted ? " — the model is still warming up" : ""}</div>`;
