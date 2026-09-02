@@ -35,7 +35,8 @@ TUNABLE = {"score_threshold": float, "prob_margin": float, "cost_bps": float, "m
            "lr": float, "steps_per_label": int, "min_labels": int, "news_minutes": float,
            "burry_aggr": float, "burry_fade_at": float, "burry_safety": float, "signals_minutes": float,
            "kelly_fraction": float, "move_floor_bps": float, "min_hit_rate": float,
-           "deep_backfill_days": float}
+           "deep_backfill_days": float, "idle_train_epochs": float,
+           "extended_hours": lambda v: str(v).lower() in ("1", "true", "yes", "on")}
 
 
 def clean(o):
@@ -230,7 +231,8 @@ class Engine:
         self.bars: dict[str, deque[Bar]] = {s: deque(maxlen=cfg.chart_bars) for s in self.symbols}
         self.paper = PaperBook(cfg.paper_start, cfg.cost_bps, min_trade_frac=cfg.paper_min_trade_frac,
                                option_commission=cfg.option_commission,
-                               put_min_hold_s=cfg.put_min_hold_bars * cfg.bar_seconds)   # $100k paper book (shorts via puts)
+                               put_min_hold_s=cfg.put_min_hold_bars * cfg.bar_seconds,
+                               straddle_min_hold_s=cfg.straddle_hold_bars * cfg.bar_seconds)   # $100k paper book (shorts via puts)
         self.portfolio: dict = {}                               # Schwab account positions (read-only), for the Portfolio tab
         self._cc_last = 0.0                                     # last covered-call opportunity refresh
         self._cc_cache: list = []                               # cached covered-call opportunities (persist across 60s position refreshes)
@@ -564,6 +566,13 @@ class Engine:
             for k in self._PERSIST_METRICS:
                 if md.get(k) is not None:
                     setattr(m, k, md[k])
+            # Calibration state is versioned: values saved by an older calibration regime measured
+            # the wrong thing (the pre-batch updater pinned the scales at their clips and poisoned
+            # the EMAs), so a pre-v2 checkpoint re-enters with the fresh-model priors and lets live
+            # labels re-earn everything. Bump CALIB_V whenever the calibration math changes shape.
+            if int(md.get("calib_v") or 1) < self.CALIB_V:
+                m.band_scale, m.p_scale = 2.0, 0.3
+                m.hit_ema = m.coverage_ema = None
             for sym, v in (md.get("pnl_by_symbol") or {}).items():
                 if sym in m.pnl_by_symbol:
                     m.pnl_by_symbol[sym] = v
@@ -605,7 +614,7 @@ class Engine:
         self.trace.emit("system", "live: streaming ticks, forecasting every bar, learning as labels mature")
         self.sources.start()
         self._tasks = [asyncio.create_task(c) for c in
-                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop(), self._market_loop(), self._brief_loop(), self._market_status_loop(), self._portfolio_loop(), self._option_features_loop(), self._deep_backfill_loop())]
+                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop(), self._market_loop(), self._brief_loop(), self._market_status_loop(), self._portfolio_loop(), self._option_features_loop(), self._deep_backfill_loop(), self._idle_train_loop())]
         await asyncio.gather(*self._tasks)
 
     def _ingest_history(self, ticks: list[Tick]) -> None:
@@ -676,14 +685,17 @@ class Engine:
         ~10-day chunks, down to deep_backfill_days), add the labeled windows to the replay
         buffer, and train on them. Idle hours become training time. Runs nothing while the
         market is open, so it never competes with live forecasting for the GPU."""
+        wait = 600.0
         while True:
-            await asyncio.sleep(600)
+            await asyncio.sleep(wait)
+            wait = 600.0                                  # nothing to fetch: check back every 10 min
             cfg = self.cfg
             days = float(getattr(cfg, "deep_backfill_days", 0) or 0)
             target = time.time() - days * 86400.0
             if (days <= 0 or self.market_status.get("isOpen") is not False
                     or not self.learning_enabled or self._deep_cutoff <= target):
                 continue
+            wait = 150.0                                  # more history to page: a 211-symbol burst every 150 s stays under Schwab's 120 req/min
             until = self._deep_cutoff
             cutoff = max(target, until - 10 * 86400.0)
             try:
@@ -704,6 +716,44 @@ class Engine:
                 self._publish({"type": "metrics", "metrics": self.metrics.as_dict(), "history": self._drain_history()})
             except Exception as e:  # noqa: BLE001
                 self.trace.emit("learn", f"deep backfill failed: {type(e).__name__}: {str(e)[:80]}", "warn")
+
+    async def _idle_train_loop(self) -> None:
+        """While the market is closed, train on the replay buffer instead of leaving the GPU
+        idle between deep-backfill chunks. The budget is idle_train_epochs passes over the
+        replay per closed session (recomputed as backfill grows the replay), so it is bounded
+        by data, not by hours, and cannot grind the same windows all night. Small chunks keep
+        the learner lock short so pre-market forecasts are not held up. Never runs while the
+        market is open; the open resets the budget."""
+        done = 0
+        wait = 20.0
+        while True:
+            await asyncio.sleep(wait)
+            wait = 20.0                                   # idle poll; drops to ~0 while there is budget to burn
+            cfg = self.cfg
+            is_open = self.market_status.get("isOpen")
+            if is_open is not False:
+                if is_open:
+                    done = 0
+                continue
+            epochs = float(getattr(cfg, "idle_train_epochs", 0) or 0)
+            size = self.learner.size
+            if epochs <= 0 or not self.learning_enabled or size < 64:
+                continue
+            budget = int(epochs * size / max(1, cfg.batch_size))
+            if done >= budget:
+                continue
+            wait = 0.5                                    # back to back: keep the GPU busy, yield to the event loop
+            chunk = min(4, budget - done)
+            res = await asyncio.to_thread(self.learner.train_steps, chunk)
+            if not res:
+                continue
+            done += chunk
+            self._absorb_train(res)
+            if done % 40 < chunk or done >= budget:
+                self.trace.emit("learn", f"idle training {done}/{budget} steps this closed session "
+                                         f"({size} windows in replay): loss {res['loss']:.3f} "
+                                         f"(pinball {res['pinball']:.2f} bps, bce {res['bce']:.3f})")
+                self._publish({"type": "metrics", "metrics": self.metrics.as_dict(), "history": self._drain_history()})
 
     def _ingest_offline(self, ticks: list[Tick]) -> int:
         """Turn a chunk of old history into labeled replay windows without touching the live
@@ -800,6 +850,8 @@ class Engine:
             self.trace.emit("system", f"checkpoint saved to {self.cfg.state_dir} ({self.learner.steps} steps, "
                                       f"{self.learner.size} windows)")
 
+    CALIB_V = 2   # calibration-state schema: 2 = batch (once-per-bar) updates; pre-2 values are untrusted
+
     _PERSIST_METRICS = ("live_labels", "live_pinball", "band_scale", "p_scale", "decisions", "hits",
                         "hit_ema", "coverage_n", "covered", "coverage_ema", "sharpness_ema",
                         "coverage_raw_n", "covered_raw", "suggestions", "suggestion_wins", "pnl_bps")
@@ -809,6 +861,7 @@ class Engine:
             m = self.metrics
             metrics = {k: getattr(m, k) for k in self._PERSIST_METRICS}
             metrics["pnl_by_symbol"] = dict(m.pnl_by_symbol)
+            metrics["calib_v"] = self.CALIB_V
             self.learner.save(self.cfg.state_dir, extra={"norm": self.features.norm.state(), "metrics": metrics,
                                                           "paper": self.paper.to_state()})
             tmp = os.path.join(self.cfg.state_dir, "universe.json.tmp")
@@ -893,7 +946,7 @@ class Engine:
             for i, s in enumerate(self.symbols):
                 self.latest[s] = {**sugg[s], "price": float(closes[i]), "ts": ts}
             # trade only once the model is trusted AND has shown real directional skill (not just tenure)
-            tradeable = self.metrics.trusted and self.metrics.hit_ema > cfg.min_hit_rate
+            tradeable = self.metrics.trusted and (self.metrics.hit_ema or 0.0) > cfg.min_hit_rate
             targets = {s: (self.latest[s]["side"] * self.latest[s]["size"] if tradeable else 0.0) for s in self.symbols}
             put_quotes = {}                                    # a short is opened as a long put (bounded loss), priced off a live chain
             need = [s for s in self.symbols if targets[s] < 0 and s not in self.paper.puts]
@@ -904,11 +957,32 @@ class Engine:
                 for s, pq in zip(need, res):
                     if isinstance(pq, dict):
                         put_quotes[s] = pq
+            # Fat-tail forecasts trade as long straddles: they need band skill, not directional
+            # skill, so they gate on calibrated coverage instead of hit rate.
+            vol_tradeable = (self.metrics.trusted and cfg.straddle_enabled
+                             and (self.metrics.coverage_ema or 0.0) >= cfg.straddle_min_coverage)
+            straddle_targets: dict[str, float] = {}
+            straddle_quotes: dict[str, dict] = {}
+            if vol_tradeable:
+                flagged = sorted((s for s in self.symbols if self.latest[s].get("straddle")),
+                                 key=lambda s: -(self.latest[s].get("width") or 0.0))
+                keep = [s for s in flagged if s in self.paper.straddles]
+                room = max(0, cfg.straddle_max - len(self.paper.straddles))
+                new = [s for s in flagged if s not in self.paper.straddles][:room]
+                straddle_targets = {s: cfg.straddle_budget for s in (*keep, *new)}
+                if new and self.schwab_auth.authenticated:
+                    from .options import fetch_straddle
+                    sres = await asyncio.gather(*[fetch_straddle(self.schwab_auth, s, self.cfg.option_dte) for s in new],
+                                                return_exceptions=True)
+                    for s, sq in zip(new, sres):
+                        if isinstance(sq, dict):
+                            straddle_quotes[s] = sq
             self.paper.rebalance(targets,
                                  {s: float(closes[i]) for i, s in enumerate(self.symbols)}, ts,
                                  quotes={s: {"bid": self.prices[s].get("bid"), "ask": self.prices[s].get("ask")}
                                          for s in self.symbols},
-                                 put_quotes=put_quotes)
+                                 put_quotes=put_quotes,
+                                 straddle_targets=straddle_targets, straddle_quotes=straddle_quotes)
             self.trace.emit("model", f"bar #{self.bar_index}: regime gate " + " ".join(
                 f"E{k + 1}={g:.2f}" for k, g in enumerate(self.gate)) +
                 f" | band scale x{self.metrics.band_scale:.2f}, P(up) temper {self.metrics.p_scale:.2f}")
@@ -974,6 +1048,20 @@ class Engine:
         mins = now.hour * 60 + now.minute
         return 570 <= mins < 960
 
+    def _extended_session(self) -> bool:
+        """Schwab's extended sessions by the wall clock: 4:00-9:30 and 16:00-20:00 ET, weekdays.
+        Stock only -- options do not trade here, so puts and straddles keep the regular gate."""
+        now = datetime.now(ZoneInfo("America/New_York"))
+        if now.weekday() >= 5:
+            return False
+        mins = now.hour * 60 + now.minute
+        return 240 <= mins < 570 or 960 <= mins < 1200
+
+    def _stock_session(self) -> bool:
+        """When a long-stock entry or exit is allowed: the regular session, plus the extended
+        sessions when `extended_hours` is on."""
+        return self._regular_session() or (self.cfg.extended_hours and self._extended_session())
+
     def _suggest(self, i: int, s: str, pred: Prediction) -> dict:
         cfg = self.cfg
         m = self.metrics
@@ -998,8 +1086,10 @@ class Engine:
         bar = self.bars[s][-1] if self.bars.get(s) else None
         if not (bar and bar.volume > 0):
             reasons.append("no live trade this bar (stale/flat price)")
-        if not self._regular_session():
-            reasons.append("outside regular trading hours")
+        if not self._stock_session():
+            reasons.append("outside trading hours")
+        elif score < 0 and not self._regular_session():
+            reasons.append("shorts are puts, and options only trade in regular hours")
         if (score > 0) != (p > 0.5):
             reasons.append("its trend and direction signals disagree")
         side = 0 if reasons else (1 if score > 0 else -1)
@@ -1009,7 +1099,13 @@ class Engine:
         # because edge estimates are noisy and drawdowns erode compounding faster than wins build it.
         size = cfg.max_size * min(1.0, cfg.kelly_fraction * abs(score)) if side else 0.0
         why = "holding: " + "; ".join(reasons) if reasons else f"leaning in: {q50:+.0f} bps expected, {p * 100:.0f}% up / {p_down * 100:.0f}% down"
-        if p > 0.5 and p_down > 0.5:
+        fat_tails = p > 0.5 and p_down > 0.5
+        width = q90 - q10
+        # A fat-tail forecast is tradeable without direction: a long straddle wins on |move|,
+        # loss capped at the premium. Requires a live bar and market hours like any entry.
+        straddle = (cfg.straddle_enabled and fat_tails and width >= cfg.straddle_band_bps
+                    and bool(bar and bar.volume > 0) and self._regular_session())
+        if fat_tails:
             why += "  |  both tails fat — expect a big move, direction unclear"
         base_side, base_size = side, size
         muted = s in self.muted
@@ -1022,6 +1118,7 @@ class Engine:
             if overlay["notes"]:
                 why = why + "  |  Burry overlay: " + "; ".join(overlay["notes"])
         return {"symbol": s, "action": "BUY" if side > 0 else "SELL" if side < 0 else "HOLD", "side": side,
+                "straddle": straddle and not muted, "width": round(width, 1),
                 "size": round(size, 3), "score": score, "p_up": p, "p_raw": p_raw, "p_down": p_down, "p_down_raw": p_down_raw, "q": qc,
                 "q_raw": [float(v) for v in pred.q[i]], "iqr": iqr, "band_scale": m.band_scale, "p_scale": m.p_scale,
                 "trusted": m.trusted, "why": why,
@@ -1114,6 +1211,10 @@ class Engine:
         cfg = self.cfg
         taus = np.asarray(cfg.quantiles, dtype=np.float64)
         parts = []
+        # Symbols move together, so a bar's 211 labels are one observation of calibration, not 211.
+        # Per-symbol updates here compound into one enormous step (and with the horizon's delay,
+        # band_scale bang-bangs between its clips). Accumulate the bar, apply each update once.
+        pins, hits_b, widths, insides, p_grads = [], [], [], [], []
         for i, s in enumerate(self.symbols):
             q = pp.pred.q[i]
             yi = float(y[i])
@@ -1122,13 +1223,13 @@ class Engine:
             # Out-of-sample pinball loss of the raw forecast made before this label existed.
             diff = yi - q.astype(np.float64)
             pin = float(np.maximum(taus * diff, (taus - 1) * diff).mean())
-            m.live_pinball = _ema(m.live_pinball, pin, 0.05)
+            pins.append(pin)
             hit = None
             if yi != 0.0 and q50 != 0.0:
                 hit = (q50 > 0) == (yi > 0)
                 m.decisions += 1
                 m.hits += int(hit)
-                m.hit_ema = _ema(m.hit_ema, float(hit), 0.02)
+                hits_b.append(float(hit))
             raw_inside = float(q[0]) <= yi <= float(q[-1])
             m.coverage_raw_n += 1
             m.covered_raw += int(raw_inside)
@@ -1136,16 +1237,13 @@ class Engine:
             inside = qc[0] <= yi <= qc[-1]
             m.coverage_n += 1
             m.covered += int(inside)
-            m.coverage_ema = _ema(m.coverage_ema, float(inside), 0.02)
-            m.sharpness_ema = _ema(m.sharpness_ema, float(qc[-1] - qc[0]), 0.05)
-            # Adaptive conformal update: the band scale settles where 20% of labels fall outside.
-            m.band_scale = float(np.clip(m.band_scale * math.exp(cfg.band_gamma * ((0.0 if inside else 1.0) - 0.2)), 0.5, 25.0))
-            # Online temperature on the direction head, one SGD step of the calibration cross-entropy.
+            insides.append(float(inside))
+            widths.append(float(qc[-1] - qc[0]))
             if yi != 0.0:
                 p_raw = min(max(float(sug.get("p_raw", pp.pred.p_up[i])), 1e-6), 1 - 1e-6)
                 z = max(-6.0, min(6.0, math.log(p_raw / (1 - p_raw))))
                 pc = 1.0 / (1.0 + math.exp(-m.p_scale * z))
-                m.p_scale = float(np.clip(m.p_scale - cfg.temper_lr * (pc - (1.0 if yi > 0 else 0.0)) * z, 0.02, 1.5))
+                p_grads.append((pc - (1.0 if yi > 0 else 0.0)) * z)
             pnl = None
             if sug["side"] != 0 and sug["trusted"]:
                 pnl = sug["side"] * sug["size"] * yi - cfg.cost_bps * sug["size"]
@@ -1159,6 +1257,17 @@ class Engine:
                                      "side": sug["side"], "pnl": pnl, "pin": pin})
             mark = "hit" if hit else "miss" if hit is False else "flat"
             parts.append(f"{self.base[s]} {yi:+.1f} vs q50 {q50:+.1f} {mark}" + ("" if inside else " (outside band)"))
+        m.live_pinball = _ema(m.live_pinball, float(np.mean(pins)), 0.05)
+        if hits_b:
+            m.hit_ema = _ema(m.hit_ema, float(np.mean(hits_b)), 0.02)
+        inside_frac = float(np.mean(insides))
+        m.coverage_ema = _ema(m.coverage_ema, inside_frac, 0.02)
+        m.sharpness_ema = _ema(m.sharpness_ema, float(np.mean(widths)), 0.05)
+        # Adaptive conformal update: the band scale settles where 20% of labels fall outside.
+        m.band_scale = float(np.clip(m.band_scale * math.exp(cfg.band_gamma * ((1.0 - inside_frac) - 0.2)), 0.5, 25.0))
+        # Online temperature on the direction head, one SGD step of the calibration cross-entropy.
+        if p_grads:
+            m.p_scale = float(np.clip(m.p_scale - cfg.temper_lr * float(np.mean(p_grads)), 0.02, 1.5))
         m.live_labels += 1
         m.trusted = m.live_labels >= cfg.min_labels
         self._hpush("loss", m.live_pinball)

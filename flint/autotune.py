@@ -7,9 +7,10 @@ once per machine — this is what lets the app adapt when shared to different ha
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import logging
-import fcntl
 import os
 import time
 from pathlib import Path
@@ -28,6 +29,8 @@ PRESETS = [
     ("XL",   192, (1, 2, 4, 8, 16, 32),      8, 8, 128),
     ("XXL",  256, (1, 2, 4, 8, 16, 32),      8, 8, 128),
     ("XXXL", 384, (1, 2, 4, 8, 16, 32, 64),  8, 8, 128),
+    ("4XL",  512, (1, 2, 4, 8, 16, 32, 64),  8, 8, 128),    # GPU-class presets: a Mac never reaches these
+    ("5XL",  768, (1, 2, 4, 8, 16, 32, 64), 12, 12, 128),
 ]
 
 
@@ -41,6 +44,24 @@ def pick_device(pref: str = "auto") -> str:
     return "cpu"
 
 
+def configure_backend(device: str) -> None:
+    """One-time precision/kernel settings. On CUDA: TF32 matmuls and cuDNN autotuning; the
+    training step then runs the forward/backward under bf16 autocast (see `autocast`). fp32
+    everywhere else. Idempotent."""
+    if device == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
+        torch.set_float32_matmul_precision("high")
+
+
+def autocast(device: str):
+    """bf16 mixed precision on CUDA; a no-op context elsewhere (MPS bf16 is still patchy)."""
+    if device == "cuda":
+        return torch.autocast("cuda", dtype=torch.bfloat16)
+    return contextlib.nullcontext()
+
+
 def _sync(device: str) -> None:
     if device == "cuda":
         torch.cuda.synchronize()
@@ -50,6 +71,7 @@ def _sync(device: str) -> None:
 
 def _bench(device: str, preset, n_assets: int, n_features: int, batch: int, n_quant: int, iters: int = 6):
     _, d, dil, exp, heads, win = preset
+    configure_backend(device)
     dev = torch.device(device)
     quant = tuple((i + 1) / (n_quant + 1) for i in range(n_quant))
     m = FlintNet(n_features, n_assets, n_quant, d_model=d, dilations=dil, n_experts=exp, n_heads=heads).to(dev)
@@ -58,8 +80,9 @@ def _bench(device: str, preset, n_assets: int, n_features: int, batch: int, n_qu
     y = torch.randn(batch, n_assets, device=dev)
 
     def step():
-        q, up, down, g, _ = m(x)
-        loss, _ = flint_loss(q, up, down, g, y, quant)
+        with autocast(device):
+            q, up, down, g, _ = m(x)
+        loss, _ = flint_loss(q.float(), up.float(), down.float(), g.float(), y, quant)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
@@ -82,7 +105,7 @@ def _bench(device: str, preset, n_assets: int, n_features: int, batch: int, n_qu
 def _best_threads(device: str, n_assets: int, n_features: int, n_quant: int, say) -> int:
     cores = os.cpu_count() or 4
     if device != "cpu":
-        return max(1, min(4, cores))          # GPU does the math; a few CPU threads feed it
+        return max(2, min(8, cores // 2))     # GPU does the math; CPU threads sample the replay and build features
     best_ms, best_th = 1e9, 2
     for th in sorted({2, cores // 2, max(2, int(cores * 0.6)), cores - 2}):
         if th < 1:
@@ -98,8 +121,9 @@ def _best_threads(device: str, n_assets: int, n_features: int, n_quant: int, say
 def autotune(cfg, n_features: int, say=None) -> dict:
     say = say or (lambda *a, **k: log.info(*a))
     device = pick_device(cfg.device)
+    configure_backend(device)
     cache = Path(cfg.state_dir) / "machine.json"
-    key = (f"{device}|{os.cpu_count()}|{cfg.n_assets}|{n_features}|{cfg.bar_seconds}|{cfg.batch_size}"
+    key = (f"{device}|bf16|{os.cpu_count()}|{cfg.n_assets}|{n_features}|{cfg.bar_seconds}|{cfg.batch_size}"
            f"|{cfg.autotune_util}|{cfg.max_warmup_seconds}|{cfg.warmup_steps}")
     try:
         c = json.loads(cache.read_text())

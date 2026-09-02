@@ -187,6 +187,7 @@ class Config:
     bar_seconds: float = _env("BAR_SECONDS", 300.0)   # 5-minute bars (FMP provides reliable 5-min history)
     backfill_seconds: float = _env("BACKFILL_SECONDS", 432000.0)  # ~5 trading days: enough real bars to fill the model window + training
     backfill_pages: int = _env("BACKFILL_PAGES", 40)  # max REST pages per symbol
+    idle_train_epochs: float = _env("IDLE_TRAIN_EPOCHS", 2.0)   # while the market is closed, keep training on the replay up to this many passes over it per closed session (0 = off); otherwise the GPU idles between backfill chunks
     deep_backfill_days: float = _env("DEEP_BACKFILL_DAYS", 30.0)  # while the market is closed, keep fetching history back this far and train on it (0 = off); the cap on market-data use
     coinbase_ws: str = "wss://ws-feed.exchange.coinbase.com"
     coinbase_rest: str = "https://api.exchange.coinbase.com"
@@ -199,9 +200,10 @@ class Config:
     # Compute + auto-sizing (benchmarks the machine on first run and picks the biggest
     # model that still trains in real time; cached to <state_dir>/machine.json).
     device: str = _env("DEVICE", "auto")               # auto | cpu | cuda | mps
+    compile: bool = _env("COMPILE", "0") not in ("0", "false", "no")   # torch.compile the net (CUDA only): fuses the tap slicing/concat and expert heads; a few minutes of compile at start, falls back to eager on failure
     auto_size: bool = _env("AUTO_SIZE", "1") not in ("0", "false", "no")
     autotune_util: float = _env("AUTOTUNE_UTIL", 0.7)  # fraction of the bar interval training may use
-    max_warmup_seconds: float = _env("MAX_WARMUP_SECONDS", 180.0)  # go-live warmup ceiling; caps auto model size
+    max_warmup_seconds: float = _env("MAX_WARMUP_SECONDS", 180.0)  # go-live warmup ceiling; caps auto model size (this, not the bar cadence, is the binding budget; raise it on a box that restarts rarely)
 
     # Model (overridden by auto-sizing unless auto_size is off)
     d_model: int = _env("D_MODEL", 48)
@@ -215,7 +217,7 @@ class Config:
     weight_decay: float = _env("WEIGHT_DECAY", 1e-2)
     label_smoothing: float = _env("LABEL_SMOOTHING", 0.1)   # softens the P(up)/P(down) targets so the net cannot claim ~99% certainty
     direction_threshold_bps: float = _env("DIRECTION_THRESHOLD_BPS", 10.0)  # deadband: P(up)=P(ret>+t), P(down)=P(ret<-t); the gap is P(flat)
-    batch_size: int = _env("BATCH_SIZE", 16)   # smaller batch: half the activation memory (this Mac is memory-tight at a big universe)
+    batch_size: int = _env("BATCH_SIZE", 16)   # step time grows ~linearly with batch (activation-bandwidth bound, even on a GPU), so a bigger batch only buys a smaller model under the step budget
     steps_per_label: int = _env("STEPS_PER_LABEL", 2)
     replay_size: int = _env("REPLAY_SIZE", 4096)
     recent_frac: float = _env("RECENT_FRAC", 0.3)   # share of each batch drawn from the newest samples
@@ -225,9 +227,10 @@ class Config:
     min_labels: int = _env("MIN_LABELS", 48)        # live (out-of-sample) labels before suggestions are counted
     band_gamma: float = _env("BAND_GAMMA", 0.05)     # adaptive conformal step for the band scale
     temper_lr: float = _env("TEMPER_LR", 0.01)       # online temperature step for P(up)
-    torch_threads: int = _env("TORCH_THREADS", 2)
+    torch_threads: int = _env("TORCH_THREADS", 2)   # overridden by autotune (up to half the cores on a GPU box)
 
     # Suggestion policy
+    extended_hours: bool = _env("EXTENDED_HOURS", "0") not in ("0", "false", "no")  # allow long-stock entries/exits in Schwab's extended sessions (4:00-9:30, 16:00-20:00 ET); puts and straddles stay regular-hours (options do not trade then)
     score_threshold: float = _env("SCORE_THRESHOLD", 0.35)  # |q50| / IQR needed to act
     prob_margin: float = _env("PROB_MARGIN", 0.06)          # |P(up) - 0.5| needed to act
     cost_bps: float = _env("COST_BPS", 0.0)                 # round-trip cost charged to paper P&L
@@ -245,6 +248,12 @@ class Config:
     kelly_fraction: float = _env("KELLY_FRACTION", 0.15)   # fractional-Kelly sizing: weight = this * |q50|/IQR (risk-adjusted edge).
     #                                                      Calibrated to the per-name weight cap so tradeable scores (~0.35-1.0) map
     #                                                      into (0, max_weight] and differentiate; only the strongest edges hit the cap.
+    straddle_enabled: bool = _env("STRADDLE", True, cast=lambda v: v.lower() in ("1", "true", "yes", "on"))  # open paper straddles on fat-tail forecasts (big move, direction unclear)
+    straddle_band_bps: float = _env("STRADDLE_BAND_BPS", 120.0)  # min calibrated q10-q90 width (bps) to consider a straddle
+    straddle_budget: float = _env("STRADDLE_BUDGET", 0.01)  # premium spent per straddle, as a fraction of equity (also the max loss)
+    straddle_max: int = _env("STRADDLE_MAX", 3)             # max concurrent paper straddles
+    straddle_min_coverage: float = _env("STRADDLE_MIN_COVERAGE", 0.55)  # band coverage EMA required before trusting the width forecast
+    straddle_hold_bars: int = _env("STRADDLE_HOLD_BARS", 12)  # hold a straddle at least this many bars (~the forecast horizon)
 
     # Signals + Burry overlay
     muted_symbols: str = _env("MUTED", "")           # symbols to watch-but-not-suggest (comma list)
@@ -253,9 +262,8 @@ class Config:
     market_scan_seconds: float = _env("MARKET_SCAN_SECONDS", 45.0)  # tight loop for movers/sectors/breadth (skips the heavy radar)
     portfolio_seconds: float = _env("PORTFOLIO_SECONDS", 60.0)      # how often to poll Schwab account positions (read-only)
     operator_half_life: float = _env("OPERATOR_HALF_LIFE", 1800.0)  # decay of an injected human note (seconds)
-    radar_top: int = _env("RADAR_TOP", 250)                 # how many market-wide movers to watch
     max_universe: int = _env("MAX_UNIVERSE", 256)            # cap on modeled symbols (cross-attention + data-rate limit)
-    radar_top: int = _env("RADAR_TOP", 750)                  # movers watchlist size (display + breadth); Yahoo supply ~1000
+    radar_top: int = _env("RADAR_TOP", 750)                  # movers watchlist size (display + breadth); supply is ~8 screeners x radar_count, deduped
     radar_count: int = _env("RADAR_COUNT", 250)              # per-screener fetch (Yahoo hard cap is 250)
     burry_enabled: bool = _env("BURRY", "1") not in ("0", "false", "no")
     burry_aggr: float = _env("BURRY_AGGR", 0.7)         # 0..1: how hard the contrarian overlay fades crowded trades

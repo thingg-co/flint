@@ -138,7 +138,7 @@
       <a class="btn primary" href="#quickstart">Get started</a>
       <a class="btn ghost" href="https://github.com/thingg-co/flint">View on GitHub</a>
     </div>
-    <div class="hero-note">Python · PyTorch · FastAPI · a no-build dashboard · optional local LLM via Ollama</div>
+    <div class="hero-note">Python · PyTorch · FastAPI · a no-build dashboard · optional local LLM via llama.cpp or Ollama</div>
     <div class="shot">
       <img src="img/dashboard.png" alt="The Flint dashboard: candlestick cards with forecasts, a whole-market panel, and live ticks">
       <div class="cap">the live dashboard — candles, MACD, a forecast fan, and cards that reorder by urgency</div>
@@ -152,13 +152,15 @@
     <p class="sub">A forecasting model, a trading dashboard, and a window into the model's head, in one thing you run yourself.</p>
     <div class="grid">
       <div class="feat"><div class="ic">🧠</div><h3>Always learning</h3><p>It trains online as its forecasts mature, and its calibration keeps it honest. When it has no real edge it holds, instead of trading noise.</p></div>
-      <div class="feat"><div class="ic">📈</div><h3>Live charts</h3><p>Every stock gets a candlestick chart with MACD and a forecast fan. Cards rank by urgency and reorder in real time, and any chart flips between 5 and 1 minute bars.</p></div>
-      <div class="feat"><div class="ic">🔦</div><h3>See it think</h3><p>A control panel streams the model's consciousness across eight consoles, and a Console tab tails everything at once: the feed, the features, the forecasts, the policy, the training.</p></div>
-      <div class="feat"><div class="ic">📝</div><h3>On-device brief</h3><p>Small models summarize the tape, the macro backdrop, positioning and the smart money. A larger local model turns those notes into a plain newspaper column. It all runs through Ollama, so nothing leaves the machine.</p></div>
+      <div class="feat"><div class="ic">📈</div><h3>Live charts</h3><p>Every stock gets a candlestick chart with MACD and a forecast fan. Cards rank by urgency and reorder in real time, the top fifty render first, and any chart flips between 5 and 1 minute bars.</p></div>
+      <div class="feat"><div class="ic">🔍</div><h3>Everything about a name</h3><p>Click any ticker anywhere, a card, the heatmap, a holding, a 13F line, and a detail view opens: a big chart, the calibrated forecast, its track record, signals, fundamentals, news and positions. The URL follows, so back and refresh work.</p></div>
+      <div class="feat"><div class="ic">🗺️</div><h3>Market heatmap</h3><p>The movers radar draws as a treemap, area by market cap and colour by change, grouped by sector, trimmed on the fly so every block carries its ticker.</p></div>
+      <div class="feat"><div class="ic">🔦</div><h3>See it think</h3><p>A control panel streams the model's consciousness across eight consoles, and a Console tab tails everything at once: the feed, the features, the forecasts, the policy, the training. Arrange the panel's sections however you like.</p></div>
+      <div class="feat"><div class="ic">📝</div><h3>On-device brief</h3><p>Small models summarize the tape, the macro backdrop, positioning and the smart money. A larger local model turns those notes into a plain newspaper column. It talks to a local model server, llama.cpp or Ollama, so nothing leaves the machine.</p></div>
       <div class="feat"><div class="ic">🏛️</div><h3>Investor council</h3><p>A panel of well-known investors, built from their real 13F filings and documented style, nudges the model. Burry, Buffett, Ackman, Icahn and others.</p></div>
       <div class="feat"><div class="ic">🛰️</div><h3>Whole-market radar</h3><p>Breadth, sector rotation, volatility and a large movers watchlist give you and the model the full picture. Penny and small-cap movers included.</p></div>
       <div class="feat"><div class="ic">🔒</div><h3>Local and private</h3><p>Everything runs on your machine. API keys sit in gitignored files and only ever talk to their own provider.</p></div>
-      <div class="feat"><div class="ic">⚙️</div><h3>Fits your machine</h3><p>A first-run benchmark sizes the network to your hardware and uses the GPU when there is one, so it runs on a laptop or a workstation.</p></div>
+      <div class="feat"><div class="ic">⚙️</div><h3>Fits your machine</h3><p>A first-run benchmark sizes the network to your hardware and uses the GPU when there is one, Apple silicon or NVIDIA, so it runs on a laptop, a workstation, or a DGX Spark. While the market is closed it keeps training on deeper history instead of idling.</p></div>
     </div>
   </div>
 </section>
@@ -169,7 +171,7 @@
     <p class="sub">It behaves less like a backtest and more like a trader who shows up every morning and keeps score.</p>
     <div class="steps">
       <div class="step"><h3>Warm up</h3><p>Flint pulls intraday history, benchmarks your machine, and trains on the recent session before it goes live.</p></div>
-      <div class="step"><h3>Stream and forecast</h3><p>Real trades drive the charts. Each bar the model forecasts the next hour and turns it into a buy, sell or hold with a reason in plain English.</p></div>
+      <div class="step"><h3>Stream and forecast</h3><p>Real trades drive the charts. Each bar the model forecasts the next hour and turns it into a buy, sell or hold with a reason in plain English. Paper trades are stock or long options only, never a position with unlimited risk, and can run through the extended sessions.</p></div>
       <div class="step"><h3>Learn as it goes</h3><p>An hour later every forecast is scored and the model recalibrates. You judge it on live accuracy over hours, not on how well it fit the past.</p></div>
     </div>
     <div class="showcase">
@@ -182,7 +184,7 @@
 <section id="quickstart">
   <div class="wrap">
     <h2>Run it</h2>
-    <p class="sub">You need Python 3.12 and <a href="https://docs.astral.sh/uv/">uv</a>. For the written brief, install <a href="https://ollama.com/download">Ollama</a> and pull a model.</p>
+    <p class="sub">You need Python 3.12 and <a href="https://docs.astral.sh/uv/">uv</a>. For the written brief, run a local model with <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> or <a href="https://ollama.com/download">Ollama</a>.</p>
     <div class="qs">
 <pre><code><span class="c"># clone and install</span>
 git clone git@github.com:thingg-co/flint.git
@@ -192,8 +194,9 @@ uv sync
 <span class="c"># run it, then open http://localhost:8000</span>
 uv run flint
 
-<span class="c"># optional: a local model for the daily brief</span>
-ollama pull qwen3.5          <span class="c"># or any chat model you like</span></code></pre>
+<span class="c"># optional: a local model for the daily brief (either works)</span>
+ollama pull qwen3.5          <span class="c"># Ollama, the default backend</span>
+llama-server -m model.gguf --port 8080   <span class="c"># or llama.cpp, with FLINT_BRIEF_BACKEND=openai</span></code></pre>
       <p>It works out of the box on free, no-key data sources. On first launch a short walkthrough lets you add
         API keys for better feeds, and you can skip any of them. Everything, including the LLM brief, runs locally.</p>
     </div>

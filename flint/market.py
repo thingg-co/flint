@@ -10,6 +10,8 @@ is required beyond the Finnhub key already in use; Yahoo/CoinGecko cover the res
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import math
 import time
 
@@ -27,13 +29,63 @@ def clip(x, lo=-1.0, hi=1.0):
     return max(lo, min(hi, x))
 
 
+# Finnhub industries folded into GICS-style sectors for the treemap; unmapped industries keep their own name
+SECTOR_OF = {
+    "Semiconductors": "Technology", "Technology": "Technology", "Software": "Technology", "Electronic Equipment": "Technology",
+    "Communications": "Technology", "Computers": "Technology", "Electrical Equipment": "Industrials",
+    "Banking": "Financials", "Financial Services": "Financials", "Insurance": "Financials", "Diversified Financial": "Financials",
+    "Real Estate": "Real Estate", "Pharmaceuticals": "Health Care", "Biotechnology": "Health Care", "Health Care": "Health Care",
+    "Medical Devices": "Health Care", "Life Sciences Tools & Services": "Health Care",
+    "Energy": "Energy", "Oil & Gas": "Energy", "Utilities": "Utilities", "Chemicals": "Materials", "Metals & Mining": "Materials",
+    "Packaging": "Materials", "Building": "Industrials", "Machinery": "Industrials", "Aerospace & Defense": "Industrials",
+    "Industrial Conglomerates": "Industrials", "Transportation": "Industrials", "Airlines": "Industrials", "Logistics & Transportation": "Industrials",
+    "Auto Components": "Consumer Discretionary", "Automobiles": "Consumer Discretionary", "Retail": "Consumer Discretionary",
+    "Hotels, Restaurants & Leisure": "Consumer Discretionary", "Textiles, Apparel & Luxury Goods": "Consumer Discretionary",
+    "Leisure Products": "Consumer Discretionary", "Distributors": "Consumer Discretionary", "Consumer products": "Consumer Staples",
+    "Beverages": "Consumer Staples", "Food Products": "Consumer Staples", "Tobacco": "Consumer Staples", "Food & Staples Retailing": "Consumer Staples",
+    "Media": "Communication Services", "Telecommunication": "Communication Services", "Entertainment": "Communication Services",
+    "Interactive Media & Services": "Communication Services",
+}
+
+
 class MarketScanner:
-    def __init__(self, finnhub_key: str = "", radar_top: int = 250, radar_count: int = 100):
+    def __init__(self, finnhub_key: str = "", radar_top: int = 250, radar_count: int = 100, state_dir: str = ""):
         self.finnhub_key = finnhub_key
         self.radar_top = radar_top
         self.radar_count = radar_count
         self.state: dict = {}
         self.status = ""
+        self.sector_file = os.path.join(state_dir, "sectors.json") if state_dir else ""
+        self.sectors: dict = {}                       # symbol -> sector (persisted; industries do not change)
+        try:
+            self.sectors = json.loads(open(self.sector_file).read()) if self.sector_file else {}
+        except (OSError, ValueError):
+            self.sectors = {}
+
+    async def _fill_sectors(self, c, syms, budget: int = 40) -> None:
+        """Look up the industry for radar names we have not seen, a few per scan (Finnhub allows
+        60 calls/min), and persist. Names Finnhub does not know get "Other" so they are not retried."""
+        if not self.finnhub_key:
+            return
+        todo = [s for s in syms if s not in self.sectors][:budget]
+        for s in todo:
+            try:
+                r = await c.get("https://finnhub.io/api/v1/stock/profile2", params={"symbol": s, "token": self.finnhub_key})
+                if r.status_code == 429:
+                    break
+                ind = (r.json().get("finnhubIndustry") or "") if r.status_code == 200 else ""
+                self.sectors[s] = SECTOR_OF.get(ind, ind or "Other")
+            except Exception:  # noqa: BLE001
+                self.sectors[s] = "Other"
+            await asyncio.sleep(0.15)
+        if todo and self.sector_file:
+            try:
+                tmp = self.sector_file + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(self.sectors, f)
+                os.replace(tmp, self.sector_file)
+            except OSError:
+                pass
 
     async def _finnhub_quotes(self, c, syms):
         out = {}
@@ -103,11 +155,15 @@ class MarketScanner:
                     seen[sym] = {"symbol": sym, "name": (x.get("shortName") or "")[:24],
                                  "chg": round(x.get("regularMarketChangePercent") or 0, 2),
                                  "price": x.get("regularMarketPrice"),
-                                 "vol": x.get("regularMarketVolume"), "cat": cat}
+                                 "vol": x.get("regularMarketVolume"), "cat": cat,
+                                 "mcap": x.get("marketCap")}
             except Exception:  # noqa: BLE001
                 pass
-        rows = sorted(seen.values(), key=lambda r: -abs(r["chg"]))
-        return rows[:self.radar_top]
+        rows = sorted(seen.values(), key=lambda r: -abs(r["chg"]))[:self.radar_top]
+        await self._fill_sectors(c, [r["symbol"] for r in rows])
+        for r in rows:
+            r["sector"] = self.sectors.get(r["symbol"])
+        return rows
 
     async def scan(self, say=None, light=False) -> dict:
         say = say or (lambda *a, **k: None)

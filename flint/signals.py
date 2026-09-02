@@ -411,7 +411,7 @@ class SignalHub:
         self.enabled = {pid: pid not in off for pid in self.providers}
         for gid in self.gurus:
             self.enabled[gid] = gid not in off
-        self.market = MarketScanner(cfg.finnhub_key, getattr(cfg, "radar_top", 250), getattr(cfg, "radar_count", 100))
+        self.market = MarketScanner(cfg.finnhub_key, getattr(cfg, "radar_top", 250), getattr(cfg, "radar_count", 100), getattr(cfg, "state_dir", ""))
         self.enabled["market"] = "market" not in off
         self.state = {"per_asset": {}, "market": {}, "gurus": [], "council": {}, "crowding": {},
                       "guru_tilt": {}, "ethos_bias": {}, "providers": self.status(), "t": None}

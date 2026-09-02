@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .autotune import pick_device
+from .autotune import autocast, configure_backend, pick_device
 from .model import FlintNet, flint_loss
 
 log = logging.getLogger(__name__)
@@ -32,10 +32,13 @@ class OnlineLearner:
         torch.set_num_threads(cfg.torch_threads)
         torch.manual_seed(0)
         self.cfg = cfg
-        self.device = torch.device(pick_device(cfg.device))
+        dev = pick_device(cfg.device)
+        configure_backend(dev)
+        self.device = torch.device(dev)
         self.model = FlintNet(n_features, cfg.n_assets, cfg.n_quantiles, cfg.d_model, cfg.dilations,
                               cfg.n_experts, cfg.n_heads, cfg.dropout).to(self.device)
         self.opt = torch.optim.AdamW(self.model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+        self.train_model = self._compiled(self.model)
         self.lock = threading.Lock()
         cap = cfg.replay_size
         self.rx = np.zeros((cap, cfg.n_assets, cfg.window, n_features), dtype=np.float32)
@@ -57,12 +60,28 @@ class OnlineLearner:
             self.model = FlintNet(self.rx.shape[-1], cfg.n_assets, cfg.n_quantiles, cfg.d_model, cfg.dilations,
                                   cfg.n_experts, cfg.n_heads, cfg.dropout).to(self.device)
             self.opt = torch.optim.AdamW(self.model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+            self.train_model = self._compiled(self.model)
             self.steps = 0
             self.loss_ema = self.pinball_ema = self.bce_ema = None
             if clear_replay:
                 self.size = 0
                 self.ptr = 0
                 self.labels = 0
+
+    def _compiled(self, model):
+        """torch.compile wrapper for the training step (shares weights with `model`, so
+        checkpoints and predict are untouched). Eager on non-CUDA devices, when disabled, or
+        if compilation fails."""
+        if not getattr(self.cfg, "compile", False) or self.device.type != "cuda":
+            return model
+        try:
+            t = time.time()
+            compiled = torch.compile(model, dynamic=False)
+            log.info("torch.compile enabled for the training step (first steps compile; ~%.0fs setup)", time.time() - t)
+            return compiled
+        except Exception as e:  # noqa: BLE001
+            log.warning("torch.compile unavailable (%s: %s); training eager", type(e).__name__, str(e)[:120])
+            return model
 
     @property
     def n_params(self) -> int:
@@ -107,8 +126,9 @@ class OnlineLearner:
                 mask = mask.to(self.device)
                 if self.cfg.input_noise > 0:
                     x = x + self.cfg.input_noise * torch.randn_like(x)
-                q, up_logit, down_logit, gate, _ = self.model(x)
-                loss, parts = flint_loss(q, up_logit, down_logit, gate, y, self.cfg.quantiles,
+                with autocast(self.device.type):
+                    q, up_logit, down_logit, gate, _ = self.train_model(x)
+                loss, parts = flint_loss(q.float(), up_logit.float(), down_logit.float(), gate.float(), y, self.cfg.quantiles,
                                          label_smoothing=self.cfg.label_smoothing,
                                          threshold=self.cfg.direction_threshold_bps, mask=mask)
                 self.opt.zero_grad(set_to_none=True)

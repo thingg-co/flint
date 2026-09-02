@@ -23,9 +23,10 @@ const CONTROL_FIELDS = [
   ["max_size", "max size", 0.05], ["lr", "learning rate", 0.0001], ["steps_per_label", "steps per label", 1],
   ["min_labels", "labels before trusted", 1], ["news_minutes", "news every (min)", 1],
   ["kelly_fraction", "Kelly fraction", 0.01], ["move_floor_bps", "move floor (bps)", 1], ["min_hit_rate", "min hit rate", 0.01],
-  ["deep_backfill_days", "backfill depth (days)", 1],
+  ["deep_backfill_days", "backfill depth (days)", 1], ["idle_train_epochs", "idle training (passes)", 0.5], ["extended_hours", "extended hours (0/1)", 1],
 ];
 
+let wsUp = false;
 const state = { config: null, status: {}, controls: {}, prices: {}, bars: {}, latest: {}, gate: [], outcomes: {}, portfolio: null,
   metrics: {}, history: { loss: [], hit: [], coverage: [], pnl: [] }, log: [], news: null,
   sources: [], news_sources: [], providers: {}, classes: {},
@@ -40,7 +41,7 @@ let ws, retry = 1000, drawQueued = false;
 let audioCtx = null, soundOn = false;
 let demoLoading = /[?&#]loading\b/i.test(location.href);
 const prevAction = {};
-try { soundOn = localStorage.getItem("flint.sound") === "1"; } catch (e) { /* ignore */ }
+// sound alerts always start off; turning them on lasts for this page load only
 
 function beep(freq, dur, when = 0, type = "sine", gain = 0.14) {
   if (!soundOn || !audioCtx) return;
@@ -169,7 +170,7 @@ function drawChart(card) {
     ctx.fillText("vol", padL + 1, vT + 8);
   }
 
-  // forecast fan
+  // forecast fan: straight wedges from the last close to the quantiles at the horizon
   const xLast = xs(n - 1), xEnd = padL + plotW;
   const anchor = L ? L.price : closes[n - 1];
   if (fan) {
@@ -178,7 +179,15 @@ function drawChart(card) {
     const wedge = (a, b, color) => { ctx.beginPath(); ctx.moveTo(xLast, ys(anchor)); ctx.lineTo(xEnd, ys(a)); ctx.lineTo(xEnd, ys(b)); ctx.closePath(); ctx.fillStyle = color; ctx.fill(); };
     wedge(fan[0], fan[4], "rgba(57,135,229,0.16)");
     wedge(fan[1], fan[3], "rgba(57,135,229,0.30)");
-    ctx.setLineDash([4, 3]); ctx.strokeStyle = C.blue; ctx.lineWidth = 1.5;
+    // fat-tail forecasts (straddle signal) flag their outer edges in orange: big move, direction unclear
+    if (L.straddle) {
+      ctx.setLineDash([2, 3]); ctx.strokeStyle = "rgba(224,145,59,0.85)"; ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(xLast, ys(anchor)); ctx.lineTo(xEnd, ys(fan[0])); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(xLast, ys(anchor)); ctx.lineTo(xEnd, ys(fan[4])); ctx.stroke();
+    }
+    // median tinted by the model's call
+    ctx.setLineDash([4, 3]); ctx.lineWidth = 1.5;
+    ctx.strokeStyle = L.action === "BUY" ? upC : L.action === "SELL" ? downC : C.blue;
     ctx.beginPath(); ctx.moveTo(xLast, ys(anchor)); ctx.lineTo(xEnd, ys(fan[2])); ctx.stroke(); ctx.setLineDash([]);
     ctx.restore();
     const my = Math.max(pT + 8, Math.min(pB - 2, ys(fan[2]) - 9));   // keep the median label on-pane
@@ -204,6 +213,29 @@ function drawChart(card) {
   if (live && marketLive) {   // the live-price dot only makes sense while the session is open;
     ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(xLast, ys(live), 4, 0, Math.PI * 2); ctx.fill();  // otherwise it floats away from the frozen candles
     ctx.strokeStyle = C.surface; ctx.lineWidth = 2; ctx.stroke();
+  }
+
+  // the fan's track record: each matured forecast draws a diamond at its predicted median on
+  // the bar where it resolved, with a stem to the close it was judged against. Green/red by
+  // direction hit; hollow when the label landed outside the calibrated band.
+  const outs = (state.outcomes && state.outcomes[sym]) || [];
+  if (outs.length && cfg.horizon && cfg.bar_seconds) {
+    const tsIdx = new Map(bars.map((b, i) => [Math.round(b.t), i]));
+    outs.forEach(o => {
+      const i = tsIdx.get(Math.round(o.t + cfg.horizon * cfg.bar_seconds));
+      if (i == null) return;
+      const realized = bars[i].c;
+      const origin = realized / Math.exp((o.y || 0) / 1e4);       // close the forecast was made from
+      const pred = origin * Math.exp((o.q50 || 0) / 1e4);
+      const x = xs(i), yp = ys(pred), yr = ys(realized);
+      const col = o.hit === true ? upC : o.hit === false ? downC : C.muted;
+      ctx.globalAlpha = 0.45; ctx.strokeStyle = col; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, yp); ctx.lineTo(x, yr); ctx.stroke();
+      ctx.globalAlpha = 0.9; ctx.fillStyle = col; ctx.strokeStyle = col;
+      ctx.beginPath(); ctx.moveTo(x, yp - 3); ctx.lineTo(x + 3, yp); ctx.lineTo(x, yp + 3); ctx.lineTo(x - 3, yp); ctx.closePath();
+      o.inside === false ? ctx.stroke() : ctx.fill();
+      ctx.globalAlpha = 1;
+    });
   }
 
   // MACD pane (12/26/9)
@@ -313,8 +345,150 @@ function buildCards() {
     if (chartRO) chartRO.observe(card.canvas);
     card.canvas.addEventListener("mousemove", e => { card.hoverX = e.offsetX; card.tipX = e.clientX; card.tipY = e.clientY; drawChart(card); });
     card.canvas.addEventListener("mouseleave", () => { card.hoverX = null; hideTooltip(); drawChart(card); });
+    el.addEventListener("click", e => { if (!e.target.closest("canvas, a, button, input")) openDetail(sym); });
   });
 }
+
+// only the top N cards render; the rest wait behind "show more" (urgency ordering puts what matters first)
+let cardLimit = 50;
+function applyCardLimit(order) {
+  order = order || [...document.querySelectorAll("#cards .card")].map(c => c.dataset.sym);
+  const mutedSet = new Set(state.muted || []);
+  let shown = 0, total = 0;
+  order.forEach(sym => {
+    const c = cards[sym]; if (!c || mutedSet.has(sym)) return;
+    total++;
+    const beyond = shown >= cardLimit;
+    c.el.classList.toggle("beyond", beyond);
+    if (!beyond) shown++;
+  });
+  const wrap = $("#more-wrap");
+  if (wrap) {
+    wrap.hidden = total <= shown;
+    $("#more-cards").textContent = `Show ${Math.min(50, total - shown)} more`;
+    $("#more-meta").textContent = `${shown} of ${total} cards, most urgent first`;
+  }
+  redrawCharts();
+}
+document.addEventListener("DOMContentLoaded", () => { const b = $("#more-cards"); if (b) b.onclick = () => { cardLimit += 50; applyCardLimit(); }; });
+
+// ---- symbol detail overlay: everything the dashboard knows about one name ----
+let detailSym = null, detailCard = null, pendingDetail = null;
+function openDetail(sym, pushHistory = true) {
+  if (!state.config) { pendingDetail = sym; return; }          // before the first snapshot: open once the data is here
+  const tab = document.body.dataset.view || "dashboard";
+  if (pushHistory && location.hash !== `#${tab}/${sym}`) history.pushState(null, "", `#${tab}/${encodeURIComponent(sym)}`);
+  detailSym = sym;
+  const d = $("#detail"); d.hidden = false;
+  if (!detailCard) {
+    const cv = $("#dcanvas");
+    detailCard = { sym, el: d, canvas: cv, hoverX: null };
+    cv.addEventListener("mousemove", e => { detailCard.hoverX = e.offsetX; detailCard.tipX = e.clientX; detailCard.tipY = e.clientY; drawChart(detailCard); });
+    cv.addEventListener("mouseleave", () => { detailCard.hoverX = null; hideTooltip(); drawChart(detailCard); });
+    addEventListener("resize", () => { if (detailSym) drawChart(detailCard); });
+  }
+  detailCard.sym = sym; detailCard.hoverX = null;
+  renderDetail();
+  const hasBars = (state.bars[sym] || []).length > 1;
+  $("#detail .dchart").hidden = !hasBars;
+  if (hasBars) requestAnimationFrame(() => drawChart(detailCard));
+}
+function closeDetail(pushHistory = true) {
+  detailSym = null; hideTooltip(); $("#detail").hidden = true;
+  if (pushHistory && location.hash.includes("/")) history.pushState(null, "", location.hash.split("/")[0]);   // forward keeps the detail, back reopens it
+}
+function renderDetail() {
+  const sym = detailSym; if (!sym) return;
+  const L = state.latest[sym] || {}, P = state.prices[sym] || {}, cfg = state.config || {};
+  const bps = v => v == null ? "·" : `${v >= 0 ? "+" : ""}${Number(v).toFixed(0)} bps`;
+  const pct = v => v == null ? "·" : `${(v * 100).toFixed(0)}%`;
+  const num = (v, d = 2) => v == null || v === "" || Number.isNaN(Number(v)) ? "·" : Number(v).toFixed(d);
+  const sgn = v => v > 0 ? "good" : v < 0 ? "bad" : "";
+  const row = (k, v, cls = "") => `<dt>${esc(k)}</dt><dd class="${cls}">${v}</dd>`;
+  const bar = (v, scale = 1) => { const x = Math.max(-1, Math.min(1, (v || 0) / scale)); const w = Math.abs(x) * 50;
+    return `<span class="dbar"><i class="${x < 0 ? "neg" : "pos"}" style="left:${x < 0 ? 50 - w : 50}%;width:${w}%"></i></span>${num(v)}`; };
+  const sect = (title, inner, wide = false) => `<section class="dsec${wide ? " wide" : ""}"><h4>${esc(title)}</h4>${inner || '<div class="dempty">nothing yet</div>'}</section>`;
+  const kpi = (label, val, sub = "", cls = "") => `<div class="dkpi ${cls}"><label>${esc(label)}</label><b>${val}</b>${sub ? `<small>${sub}</small>` : ""}</div>`;
+  const d = $("#detail");
+  // header
+  $(".dsym", d).textContent = sym;
+  $(".dmeta", d).textContent = state.latest[sym] ? [state.classes[sym], state.providers[sym] || state.status.providers?.[sym], L.trusted ? "trusted" : "warming up"].filter(Boolean).join(" · ") : "on the radar, not modeled";
+  const rr0 = ((state.signals && state.signals.market && state.signals.market.radar) || []).find(r => r.symbol === sym);
+  const price = P.price ?? L.price ?? (rr0 && rr0.price); $(".dprice", d).textContent = fmtPrice(price);
+  const bars = state.bars[sym] || []; const chg = bars.length && bars[0].o ? (price / bars[0].o - 1) * 100 : null;
+  const dchg = $(".dchg", d); dchg.textContent = chg == null ? "" : `${chg >= 0 ? "+" : ""}${chg.toFixed(2)}% over ${bars.length} bars`; dchg.className = "dchg num " + (chg > 0 ? "up" : chg < 0 ? "down" : "");
+  const badge = $(".dbadge", d); badge.textContent = L.action || "HOLD"; badge.className = "dbadge " + (L.action === "BUY" ? "buy" : L.action === "SELL" ? "sell" : "");
+  $(".dwhy", d).textContent = L.why || (state.latest[sym] ? "no forecast yet" : "Flint does not model this name; what follows is what the market scan knows about it.");
+  // KPIs
+  const q = L.q || [];
+  $(".dkpis", d).innerHTML =
+    kpi("median", bps(q[2]), "1-hour expected move", sgn(q[2])) +
+    kpi("10–90 band", q.length ? `${(q[4] - q[0]).toFixed(0)} bps` : "·", q.length ? `${bps(q[0])} … ${bps(q[4])}` : "") +
+    kpi("P(up)", pct(L.p_up), `raw ${pct(L.p_raw)}`, L.p_up > 0.5 ? "good" : "") +
+    kpi("P(down)", pct(L.p_down), `raw ${pct(L.p_down_raw)}`, L.p_down > 0.5 ? "bad" : "") +
+    kpi("score", num(L.score), "|median| / IQR", sgn(L.score)) +
+    kpi("size", L.size ? `${(L.size * 100).toFixed(1)}%` : "0%", "of the paper book");
+  // sections
+  const qr = L.q_raw || [];
+  const fc = row("calibrated quantiles", q.length ? q.map(x => x.toFixed(0)).join(" / ") : "·") + row("raw quantiles", qr.length ? qr.map(x => x.toFixed(0)).join(" / ") : "·")
+    + row("IQR", bps(L.iqr)) + row("band scale", num(L.band_scale)) + row("temperature", num(L.p_scale))
+    + row("fat tails", L.straddle ? "yes — straddle candidate" : "no") + (L.base_action && L.base_action !== L.action ? row("model said", esc(L.base_action)) : "")
+    + (L.overlay && L.overlay.length ? row("overlay", esc(L.overlay.join("; "))) : "") + (L.muted ? row("muted", "yes") : "");
+  const outs = state.outcomes[sym] || [];
+  const hits = outs.filter(o => o.hit === true).length, judged = outs.filter(o => o.hit != null).length;
+  const cov = outs.filter(o => o.covered != null), covered = cov.filter(o => o.covered).length;
+  const tr = outs.length ? row("matured forecasts", outs.length) + row("direction hit rate", judged ? `${hits}/${judged} (${(hits / judged * 100).toFixed(0)}%)` : "·", judged ? (hits / judged >= 0.5 ? "good" : "bad") : "")
+    + row("band coverage", cov.length ? `${covered}/${cov.length} (${(covered / cov.length * 100).toFixed(0)}%)` : "·")
+    + row("last error", bps((outs[outs.length - 1].y ?? 0) - (outs[outs.length - 1].q50 ?? 0))) : "";
+  const spread = P.bid && P.ask ? `${((P.ask - P.bid) / ((P.ask + P.bid) / 2) * 1e4).toFixed(1)} bps` : "·";
+  const lb = bars[bars.length - 1];
+  const pf = row("bid / ask", P.bid && P.ask ? `${fmtPrice(P.bid)} / ${fmtPrice(P.ask)}` : "·") + row("spread", spread)
+    + row("bars held", `${bars.length} × ${cfg.bar_seconds ? cfg.bar_seconds / 60 : "?"} min`)
+    + (lb ? row("last bar", `O ${fmtPrice(lb.o)} H ${fmtPrice(lb.h)} L ${fmtPrice(lb.l)} C ${fmtPrice(lb.c)}`) + row("last volume", Number(lb.v).toLocaleString()) : "");
+  const sg = state.signals && state.signals.per_asset && state.signals.per_asset[sym];
+  let sig = "", fund = "";
+  if (sg) {
+    sig = row("WSB sentiment", bar(sg.wsb_sent)) + row("WSB attention", bar(sg.wsb_attn)) + row("WSB mentions", `${sg.mentions ?? 0}${sg.wsb_top ? ` · "${esc(sg.wsb_top)}"` : ""}`)
+      + row("guru net", bar(sg.guru_net)) + (sg.gurus ? Object.entries(sg.gurus).map(([g, v]) => row(`↳ ${g}`, bar(v))).join("") : "")
+      + row("ethos bias", bar(sg.ethos_bias)) + row("value factor", bar(sg.f_value)) + row("quality factor", bar(sg.f_quality)) + row("breadth", bar(sg.breadth))
+      + row("crowding", num(L.crowding, 3)) + row("guru tilt", num(L.guru_tilt, 3));
+    const f = sg.fundamentals || {}; const names = { pe: "P/E", eps: "EPS", ps: "P/S", pb: "P/B", mcap: "market cap", div: "dividend", beta: "beta", roe: "ROE", margin: "margin", growth: "growth" };
+    fund = Object.entries(f).filter(([, v]) => v != null && v !== "").map(([k, v]) => row(names[k] || k, typeof v === "number" ? (Math.abs(v) >= 1e9 ? `${(v / 1e9).toFixed(1)}B` : num(v, Math.abs(v) >= 100 ? 0 : 2)) : esc(String(v)))).join("");
+  }
+  const nw = state.news && state.news.per_asset && state.news.per_asset[sym];
+  const b0 = sym.split("-")[0];
+  const heads = ((state.news && state.news.headlines) || []).filter(h => (h.assets || []).some(a => a === sym || a === b0)).sort((x, y) => (y.ts || 0) - (x.ts || 0));
+  let news = "";
+  if (nw) news += `<dl>${row("mentions", `${nw.mentions ?? 0} scored · ${nw.generic ?? 0} generic`)}${row("tone", bar(nw.sentiment))}${row("attention", bar(nw.attention))}</dl>`;
+  if (heads.length) {
+    const age = t => { const m = Math.max(0, (Date.now() / 1000 - t) / 60); return m < 60 ? `${m.toFixed(0)}m` : m < 1440 ? `${(m / 60).toFixed(0)}h` : `${(m / 1440).toFixed(0)}d`; };
+    news += `<ul class="dnews">${heads.slice(0, 12).map(h => `<li><span class="dtone ${h.sentiment > 0.2 ? "pos" : h.sentiment < -0.2 ? "neg" : ""}">●</span>` +
+      (h.url ? `<a href="${esc(h.url)}" target="_blank" rel="noopener">${esc(h.title)}</a>` : esc(h.title)) +
+      ` <small>${esc(h.source || "")}${h.ts ? ` · ${age(h.ts)}` : ""}${h.new ? " · new" : ""}</small></li>`).join("")}</ul>`;
+  } else if (nw && nw.top && nw.top.length) {
+    news += `<ul class="dnews">${nw.top.slice(0, 6).map(h => `<li>${esc(typeof h === "string" ? h : (h.title || h.text || ""))}</li>`).join("")}</ul>`;
+  }
+  let pos = "";
+  const pp = ((state.paper && state.paper.positions) || []).find(x => x.sym === sym || x.symbol === sym);
+  if (pp) pos += row("paper", esc(Object.entries(pp).filter(([k]) => !["sym", "symbol"].includes(k)).map(([k, v]) => `${k} ${typeof v === "number" ? num(v) : v}`).join(", ")));
+  ((state.portfolio && state.portfolio.accounts) || []).forEach(a => (a.positions || []).filter(x => x.symbol === sym).forEach(x => { pos += row(`account ${esc(a.id || "")}`, `${x.qty} @ ${fmtPrice(x.avg)} = ${fmtPrice(x.value)}`); }));
+  const dl = inner => inner ? `<dl>${inner}</dl>` : "";
+  $(".dbody", d).innerHTML =
+    sect("Forecast detail", dl(fc)) + sect("Track record", dl(tr)) + sect("Price & feed", dl(pf)) +
+    sect("Signals", dl(sig)) + sect("Fundamentals", dl(fund)) + sect("Positions", dl(pos)) + sect("News", news, true);
+}
+document.addEventListener("keydown", e => { if (e.key === "Escape" && detailSym) closeDetail(); });
+// any ticker anywhere (Market watch tiles, radar rows, sector ETFs, portfolio and paper rows, guru holdings, brief) opens the detail
+document.addEventListener("click", e => {
+  if (!e.target.closest) return;
+  if (e.target.closest("button, a, input, label, #cards .card, #detail")) return;
+  const t = e.target.closest("[data-sym]"); if (t) openDetail(t.dataset.sym);
+});
+document.addEventListener("DOMContentLoaded", () => {
+  const d = $("#detail"); if (!d) return;
+  $(".dclose", d).onclick = closeDetail;
+  d.addEventListener("click", e => { if (e.target === d) closeDetail(); });
+});
 
 function updatePrice(sym) {
   const card = cards[sym]; if (!card) return;
@@ -337,6 +511,7 @@ function updateVia(sym) {
 }
 
 function updateCard(sym) {
+  if (sym === detailSym) renderDetail();
   const card = cards[sym]; if (!card) return;
   updatePrice(sym); updateVia(sym);
   const L = state.latest[sym];
@@ -394,7 +569,6 @@ function renderSparks() {
   drawSpark("#spark-loss", h.loss, { color: C.orange, fmt: v => v.toFixed(2) });
   drawSpark("#spark-hit", h.hit, { color: C.aqua, ref: 0.5, fmt: v => (v * 100).toFixed(0) + "%" });
   drawSpark("#spark-coverage", h.coverage, { color: C.blue, ref: 0.8, fmt: v => (v * 100).toFixed(0) + "%" });
-  drawSpark("#spark-pnl", h.pnl, { color: C.yellow, ref: 0, fmt: v => fmtBps(v) });
 }
 
 function renderGate() {
@@ -414,42 +588,43 @@ function renderArch() {
     `feed <b>${esc(state.status.feed || "?")}</b>, news skim every <b>${state.controls.news_minutes}</b> min`;
 }
 
+// a leading ticker in a log line becomes a click-through to its detail
+function linkTicker(text) {
+  const m = /^([A-Z][A-Z0-9.\-]{0,7})\b/.exec(text || "");
+  const sym = m && state.config && (state.config.symbols || []).find(x => x === m[1] || x.split("-")[0] === m[1]);
+  if (!sym) return esc(text);
+  return `<span class="tk" data-sym="${esc(sym)}">${esc(m[1])}</span>${esc(text.slice(m[1].length))}`;
+}
 function renderLog() {
   $("#log").innerHTML = state.log.slice().reverse().map(l =>
-    `<li class="${esc(l.kind)}"><span class="t">${fmtTime(l.t)}</span><span>${esc(l.text)}</span></li>`).join("")
-    || `<li><span>no resolved suggestions yet</span></li>`;
-}
-
-function updateETClock() {
-  const el = $("#et-seg"); if (!el) return;
-  el.textContent = new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" });
+    `<li class="${esc(l.kind)}"><span class="t">${fmtTime(l.t)}</span><span>${linkTicker(l.text)}</span></li>`).join("")
+    || `<li class="empty"><span>no resolved suggestions yet</span></li>`;
 }
 
 function marketState() {
   // Prefer Finnhub's holiday-aware status; fall back to the Eastern clock if it hasn't loaded.
   const ms = (state.status || {}).market_status;
   if (ms && ms.isOpen != null) {
-    if (ms.holiday) return { label: ms.holiday + " \u00b7 closed", cls: "closed" };
-    if (ms.isOpen) return { label: "market open", cls: "live" };
-    if (ms.session === "pre-market") return { label: "pre-market", cls: "ext" };
-    if (ms.session === "post-market") return { label: "after-hours", cls: "ext" };
-    return { label: "market closed", cls: "closed" };
+    if (ms.holiday) return { label: "Closed \u00b7 " + ms.holiday, cls: "closed" };
+    if (ms.isOpen) return { label: "Open", cls: "live" };
+    if (ms.session === "pre-market") return { label: "Pre", cls: "ext" };
+    if (ms.session === "post-market") return { label: "Post", cls: "ext" };
+    return { label: "Closed", cls: "closed" };
   }
   const et = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
   const day = et.getDay();
-  if (day === 0 || day === 6) return { label: "market closed", cls: "closed" };
+  if (day === 0 || day === 6) return { label: "Closed", cls: "closed" };
   const m = et.getHours() * 60 + et.getMinutes();
-  if (m >= 570 && m < 960) return { label: "market open", cls: "live" };      // 9:30-16:00
-  if (m >= 240 && m < 570) return { label: "pre-market", cls: "ext" };        // 4:00-9:30
-  if (m >= 960 && m < 1200) return { label: "after-hours", cls: "ext" };      // 16:00-20:00
+  if (m >= 570 && m < 960) return { label: "Open", cls: "live" };      // 9:30-16:00
+  if (m >= 240 && m < 570) return { label: "Pre", cls: "ext" };        // 4:00-9:30
+  if (m >= 960 && m < 1200) return { label: "Post", cls: "ext" };      // 16:00-20:00
   return { label: "market closed", cls: "closed" };
 }
 
 function renderStatus() {
   const s = state.status || {};
-  const phase = $("#phase");
-  phase.textContent = s.phase || "?";
-  phase.className = "pill " + (s.phase === "live" ? "live" : s.phase === "error" ? "err" : "warn");
+  const phase = $("#phase");   // the phase pill is gone from the header; the session pill and loading bar carry it
+  if (phase) { phase.textContent = s.phase || "?"; phase.className = "pill " + (s.phase === "live" ? "live" : s.phase === "error" ? "err" : "warn"); }
   $("#feed").textContent = "feed: " + (s.feed || "?");
   $("#bars").textContent = s.bar_index ?? 0;
   $("#pending").textContent = s.pending ?? 0;
@@ -459,9 +634,9 @@ function renderStatus() {
     const ms = marketState();
     let fresh = 0;
     for (const v of Object.values(state.prices || {})) if (v && v.ts) fresh = Math.max(fresh, v.ts);
-    mk.textContent = "● " + ms.label;
-    mk.className = "pill market-nav " + ms.cls;
-    mk.title = ms.cls === "live" ? "US regular session (9:30–16:00 ET)" : (fresh ? "last trade " + fmtTime(fresh) : ms.label);
+    $("#market-label").textContent = ms.label;       // the border carries the link state: pulsing = connected, red = down
+    mk.className = "pill market-nav " + ms.cls + (wsUp ? " up" : " down");
+    mk.title = (wsUp ? "live feed connected; the border pulses with data" : "websocket down, reconnecting") + " · " + (ms.cls === "live" ? "US regular session (9:30–16:00 ET)" : (fresh ? "last trade " + fmtTime(fresh) : ms.label));
   }
   updateLoading();
 }
@@ -612,7 +787,7 @@ function buildControls() {
   form.onsubmit = async e => {
     e.preventDefault();
     const set = {};
-    CONTROL_FIELDS.forEach(([k]) => { const v = form.elements[k].value; if (v !== "" && Number(v) !== state.controls[k]) set[k] = Number(v); });
+    CONTROL_FIELDS.forEach(([k]) => { const v = form.elements[k].value; if (v !== "" && Number(v) !== Number(state.controls[k])) set[k] = Number(v); });   // booleans compare as 1/0
     if (Object.keys(set).length) await control({ set });
   };
 }
@@ -620,7 +795,7 @@ function buildControls() {
 function syncControls() {
   const form = $("#controls");
   if (!form.elements.length) return;
-  CONTROL_FIELDS.forEach(([k]) => { const inp = form.elements[k]; if (inp && document.activeElement !== inp) inp.value = state.controls[k] ?? ""; });
+  CONTROL_FIELDS.forEach(([k]) => { const inp = form.elements[k]; if (inp && document.activeElement !== inp) { const v = state.controls[k]; inp.value = v == null ? "" : typeof v === "boolean" ? (v ? 1 : 0) : v; } });
   const b = $("#btn-pause");
   b.textContent = state.controls.learning === false ? "Resume learning" : "Pause learning";
   b.dataset.action = state.controls.learning === false ? "resume" : "pause";
@@ -700,7 +875,7 @@ function renderUniverse() {
   box.innerHTML = universe.map(sym => {
     const cls = (state.classes || {})[sym] || "";
     const on = active.has(sym);
-    return `<div class="uni ${on ? "" : "muted"}"><span><span class="un">${esc(base(sym))}</span> <span class="uc">${esc(cls)}</span></span>` +
+    return `<div class="uni ${on ? "" : "muted"}"><span><span class="un tk" data-sym="${esc(sym)}">${esc(base(sym))}</span> <span class="uc">${esc(cls)}</span></span>` +
       `<span class="right"><label class="switch"><input type="checkbox" data-mute="${esc(sym)}" ${on ? "checked" : ""}><span class="track"></span><span class="thumb"></span></label>` +
       `<button type="button" class="rm" data-remove="${esc(sym)}" title="remove from universe">×</button></span></div>`;
   }).join("");
@@ -927,6 +1102,7 @@ function reorderCards(force) {
   const first = {};
   syms.forEach(s => { first[s] = cards[s].el.getBoundingClientRect(); });
   order.forEach(sym => { if (cards[sym]) root.appendChild(cards[sym].el); });
+  applyCardLimit(order);
   if (firstRun) return;
   syms.forEach(s => {
     const el = cards[s].el, a = first[s], b = el.getBoundingClientRect();
@@ -965,7 +1141,7 @@ function renderWatch() {
     if (mdl) flags.push(`<span class="mdl">modeled</span>`);
     if (r.wsb) flags.push(`<span class="wsb">WSB ${r.wsb}</span>`);
     (r.gurus || []).forEach(g => flags.push(`<span class="guru">${esc(g)}</span>`));
-    return `<div class="wtile ${mdl ? "modeled" : ""}"><div class="wt"><span class="sym">${esc(r.symbol)}</span>` +
+    return `<div class="wtile ${mdl ? "modeled" : ""}" data-sym="${esc(r.symbol)}" title="details"><div class="wt"><span class="sym">${esc(r.symbol)}</span>` +
       `<span class="chg ${r.chg >= 0 ? "up" : "down"}">${r.chg >= 0 ? "+" : ""}${(r.chg || 0).toFixed(1)}%</span></div>` +
       `<div class="px">${r.price != null ? fmtPrice(r.price) : "·"}</div><div class="wf">${flags.join("")}</div></div>`;
   }).join("");
@@ -986,7 +1162,7 @@ function renderRadar() {
     const flags = [];
     if (r.wsb) flags.push(`<span class="wsb">WSB ${r.wsb}</span>`);
     (r.gurus || []).forEach(g => flags.push(`<span class="guru">${esc(g)}</span>`));
-    return `<div class="rrow"><span class="sym">${esc(r.symbol)}</span>` +
+    return `<div class="rrow"><span class="sym tk" data-sym="${esc(r.symbol)}">${esc(r.symbol)}</span>` +
       `<span class="chg ${r.chg >= 0 ? "up" : "down"}">${r.chg >= 0 ? "+" : ""}${(r.chg || 0).toFixed(1)}%</span>` +
       `<span>${r.price != null ? fmtPrice(r.price) : "·"}</span><span>${fvol(r.vol)}</span>` +
       `<span class="cat">${esc(r.cat || "")}</span><span class="flags">${flags.join("") || `<span class="nm">${esc(r.name || "")}</span>`}</span></div>`;
@@ -1102,7 +1278,7 @@ function renderBrief() {
   const mv = m.movers || {};
   const moverPanel = (title, rows, up) => `<div class="bpanel"><h3>${title}</h3>` +
     (rows || []).slice(0, 6).map(r => { const w = Math.min(100, Math.abs(r.chg) * 4);
-      return `<div class="bmover"><span class="sym">${esc(r.symbol)}</span>` +
+      return `<div class="bmover"><span class="sym tk" data-sym="${esc(r.symbol)}">${esc(r.symbol)}</span>` +
       `<div class="bar" style="width:${w}%;background:${up ? C.good : C.serious}"></div>` +
       `<span class="v ${r.chg >= 0 ? "up" : "down"}">${r.chg >= 0 ? "+" : ""}${(r.chg || 0).toFixed(1)}%</span></div>`; }).join("") + `</div>`;
 
@@ -1110,7 +1286,7 @@ function renderBrief() {
   const calls = state.config.symbols.map(s => state.latest[s]).filter(L => L && L.q)
     .sort((a, b) => Math.abs(b.score) - Math.abs(a.score)).slice(0, 6);
   const callPanel = `<div class="bpanel"><h3>Model calls <small>60s forecast, 10–90 band</small></h3>` +
-    (calls.length ? calls.map(L => `<div class="bcall"><span class="sym">${esc(base(L.symbol))}</span>` +
+    (calls.length ? calls.map(L => `<div class="bcall"><span class="sym tk" data-sym="${esc(L.symbol)}">${esc(base(L.symbol))}</span>` +
       `<span class="badge ${L.action.toLowerCase()}">${L.action}</span>${rangeBar(L.q)}</div>`).join("")
       : `<div class="why">warming up…</div>`) + `</div>`;
 
@@ -1136,7 +1312,7 @@ function renderBrief() {
   const sectorPanel = m.sectors && m.sectors.length ? `<div class="bpanel"><h3>Sector rotation</h3><div class="sector-heat">` +
     m.sectors.map(sc => { const t = Math.max(-1, Math.min(1, sc.chg / 2));
       const bg = t >= 0 ? `rgba(12,163,12,${0.25 + 0.55 * t})` : `rgba(208,59,59,${0.25 + 0.55 * -t})`;
-      return `<div class="sc" data-etf="${esc(sc.etf)}" data-chg="${sc.chg}" style="background:${bg}" title="${esc(sc.name)}"><span>${esc(sc.etf)}</span><b>${sc.chg >= 0 ? "+" : ""}${sc.chg.toFixed(1)}</b></div>`; }).join("") + `</div></div>` : "";
+      return `<div class="sc tk" data-sym="${esc(sc.etf)}" data-etf="${esc(sc.etf)}" data-chg="${sc.chg}" style="background:${bg}" title="${esc(sc.name)}"><span>${esc(sc.etf)}</span><b>${sc.chg >= 0 ? "+" : ""}${sc.chg.toFixed(1)}</b></div>`; }).join("") + `</div></div>` : "";
 
   box.innerHTML = hero + gaugeRow + `<div class="brief-grid">` +
     callPanel + moverPanel("Top gainers", mv.gainers, true) + moverPanel("Top losers", mv.losers, false) +
@@ -1214,7 +1390,7 @@ function renderPortfolio() {
         const align = act === "HOLD" ? "" : ((p.qty >= 0) === bull ? `<span class="al ok">aligned</span>` : `<span class="al warn">counter</span>`);
         sig = `<span class="badge ${act.toLowerCase()}">${act}</span> <span class="up">${pu}%↑</span> <span class="down">${pd}%↓</span> <span class="q">${q50}bps</span> ${align}`;
       }
-      return `<div class="pf-row"><span class="psym">${esc(base(p.symbol))}</span>` +
+      return `<div class="pf-row"><span class="psym tk" data-sym="${esc(p.symbol)}">${esc(base(p.symbol))}</span>` +
         `<span class="${p.qty >= 0 ? "" : "down"}">${p.qty >= 0 ? "" : "short "}${Math.abs(p.qty)}</span>` +
         `<span>${fmtUSD(p.value)}</span>` +
         `<span class="${p.pnl >= 0 ? "up" : "down"}">${p.pnl >= 0 ? "+" : ""}${fmtUSD(p.pnl)} <small>${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%</small></span>` +
@@ -1229,7 +1405,7 @@ function renderPortfolio() {
     `<div class="pf-rows"><div class="pf-row cc-row phead"><span>sym</span><span>write call</span><span>premium</span><span>yield</span><span>ann.</span><span>if called</span><span>assign</span><span>Flint</span></div>` +
     cc.map(o => {
       const rec = o.recommend ? `<span class="al ok" title="${esc(o.note)}">harvest</span>` : `<span class="al warn" title="${esc(o.note)}">hold</span>`;
-      return `<div class="pf-row cc-row"><span class="psym">${esc(base(o.symbol))} <small>${o.shares}sh</small></span>` +
+      return `<div class="pf-row cc-row"><span class="psym tk" data-sym="${esc(o.symbol)}">${esc(base(o.symbol))} <small>${o.shares}sh</small></span>` +
         `<span>$${o.strike}c ${esc(o.expiry)} <small>${o.otm_pct}% otm</small></span>` +
         `<span>$${o.premium} <small>${fmtUSD(o.income)}</small></span>` +
         `<span>${o.yield_pct}%</span><span class="up">${o.annualized_pct}%</span>` +
@@ -1251,9 +1427,11 @@ function renderPaper() {
   $("#p-pos-meta").textContent = pos.length ? `${pos.length} open` : "";
   $("#p-positions").innerHTML = pos.length
     ? `<div class="prow phead"><span>sym</span><span>side</span><span>weight</span><span>value</span><span>unreal</span></div>` +
-      pos.map(x => `<div class="prow"><span class="psym">${esc(base(x.sym))}</span>` +
+      pos.map(x => `<div class="prow"><span class="psym tk" data-sym="${esc(x.sym)}">${esc(base(x.sym))}</span>` +
         (x.kind === "put"
           ? `<span class="down" title="bearish via long put — loss capped at the premium">put ${x.strike}${x.expiry ? " " + esc(x.expiry) : ""}</span>`
+          : x.kind === "straddle"
+          ? `<span title="big move expected, direction unclear — long put + call, loss capped at the premium">straddle ${x.strike}${x.expiry ? " " + esc(x.expiry) : ""}</span>`
           : `<span class="${x.shares >= 0 ? "up" : "down"}">${x.shares >= 0 ? "long" : "short"}</span>`) +
         `<span>${(x.weight * 100).toFixed(1)}%</span><span>${fmtUSD(x.value)}</span>` +
         `<span class="${x.upnl >= 0 ? "up" : "down"}">${x.upnl >= 0 ? "+" : ""}${fmtUSD(x.upnl)}</span></div>`).join("")
@@ -1263,7 +1441,7 @@ function renderPaper() {
   $("#p-trades").innerHTML = tr.length
     ? tr.slice(0, 40).map(t => `<div class="prow"><span>${fmtTime(t.t)}</span>` +
         `<span class="${(t.side || "").startsWith("buy") ? "up" : "down"}">${esc(t.side)}${t.note ? " " + esc(t.note) : ""}</span>` +
-        `<span class="psym">${esc(base(t.sym))}</span><span>${t.shares}</span><span>@ ${fmtPrice(t.price)}</span></div>`).join("")
+        `<span class="psym tk" data-sym="${esc(t.sym)}">${esc(base(t.sym))}</span><span>${t.shares}</span><span>@ ${fmtPrice(t.price)}</span></div>`).join("")
     : `<div class="why">no trades yet${state.metrics && !state.metrics.trusted ? " — the model is still warming up" : ""}</div>`;
   drawEquityCurve(p);
 }
@@ -1310,11 +1488,102 @@ function renderMarket() {
   $("#market-stats").innerHTML = stats.join("");
   const heatColor = c => { const t = Math.max(-1, Math.min(1, c / 2)); return t >= 0 ? `rgba(12,163,12,${0.25 + 0.55 * t})` : `rgba(208,59,59,${0.25 + 0.55 * -t})`; };
   $("#sector-heat").innerHTML = (m.sectors || []).map(sc =>
-    `<div class="sc" data-etf="${esc(sc.etf)}" data-chg="${sc.chg}" title="${esc(sc.name)}"><span>${esc(sc.etf)}</span><b>${sc.chg >= 0 ? "+" : ""}${sc.chg.toFixed(1)}</b></div>`).join("");
-  const mv = m.movers || {};
-  const col = (title, rows) => `<div class="mov"><h5>${title}</h5>` +
-    (rows || []).slice(0, 12).map(r => `<div class="row"><span class="t">${esc(r.symbol || "")}</span><span class="c ${r.chg >= 0 ? "up" : "down"}">${r.chg >= 0 ? "+" : ""}${(r.chg || 0).toFixed(1)}%</span></div>`).join("") + "</div>";
-  $("#market-movers").innerHTML = col("Most active", mv.actives) + col("Gainers", mv.gainers) + col("Losers", mv.losers);
+    `<div class="sc tk" data-sym="${esc(sc.etf)}" data-etf="${esc(sc.etf)}" data-chg="${sc.chg}" title="${esc(sc.name)}"><span>${esc(sc.etf)}</span><b>${sc.chg >= 0 ? "+" : ""}${sc.chg.toFixed(1)}</b></div>`).join("");
+  drawHeatmap(m);
+}
+
+// ---- movers heatmap: one squarified treemap of the whole radar, block area ~ dollar volume, colour = % change ----
+let heatBlocks = [], heatRO = null;
+function squarify(items, x, y, w, h, out) {   // items: [{v,...}] sorted desc by v; fills rect with strips of near-square blocks
+  let i = 0;
+  while (i < items.length && w > 0 && h > 0) {
+    const total = items.slice(i).reduce((a, b) => a + b.v, 0);   // area is shared by what is still unplaced
+    if (total <= 0) break;
+    const horiz = w >= h;                        // lay the next strip along the shorter side
+    const side = horiz ? h : w, span = horiz ? w : h;
+    let j = i, sum = 0, worst = Infinity;
+    for (; j < items.length; j++) {              // grow the strip while the worst aspect ratio improves
+      const sum2 = sum + items[j].v, len = (sum2 / total) * span;
+      let wr = 0;
+      for (let k = i; k <= j; k++) { const b = (items[k].v / sum2) * side; wr = Math.max(wr, Math.max(len / b, b / len)); }
+      if (wr > worst && j > i) break;
+      worst = wr; sum = sum2;
+    }
+    const len = (sum / total) * span;
+    let off = 0;
+    for (let k = i; k < j; k++) {
+      const b = (items[k].v / sum) * side;
+      out.push(horiz ? { ...items[k], x, y: y + off, w: len, h: b } : { ...items[k], x: x + off, y, w: b, h: len });
+      off += b;
+    }
+    if (horiz) { x += len; w -= len; } else { y += len; h -= len; }
+    i = j;
+  }
+}
+function drawHeatmap(m) {
+  const host = $("#market-movers"); if (!host) return;
+  let cv = $("canvas", host);
+  if (!cv) {
+    host.innerHTML = ""; cv = document.createElement("canvas"); cv.className = "heatmap"; host.appendChild(cv);
+    cv.addEventListener("mousemove", e => {
+      const b = heatBlocks.find(k => e.offsetX >= k.x && e.offsetX < k.x + k.w && e.offsetY >= k.y && e.offsetY < k.y + k.h);
+      if (!b) { hideTooltip(); cv.style.cursor = "default"; return; }
+      cv.style.cursor = "pointer";
+      showTooltip(e.clientX, e.clientY, `${b.symbol}  ${b.name || ""}\n${b.chg >= 0 ? "+" : ""}${b.chg.toFixed(2)}%  ·  ${fmtPrice(b.price)}\n$${(b.dv / 1e6).toFixed(1)}M traded${b.mcap ? `  ·  cap $${(b.mcap / 1e9).toFixed(1)}B` : ""}  ·  ${b.sector || b.cat}` + "\nclick for details");
+    });
+    cv.addEventListener("mouseleave", hideTooltip);
+    cv.addEventListener("click", e => {
+      const b = heatBlocks.find(k => e.offsetX >= k.x && e.offsetX < k.x + k.w && e.offsetY >= k.y && e.offsetY < k.y + k.h);
+      if (b) openDetail(b.symbol);
+    });
+    if (!heatRO) { heatRO = new ResizeObserver(() => { const mm = state.signals && state.signals.market; if (mm) drawHeatmap(mm); }); heatRO.observe(host); }
+  }
+  const rows = (m.radar || []).filter(r => r.chg != null && r.vol > 0 && r.price > 0);
+  if (!cv.clientWidth || !rows.length) return;
+  const { ctx, w, h } = ctx2d(cv);
+  ctx.clearRect(0, 0, w, h);
+  const cap = 400;                                                     // upper bound; the label test below decides how many actually show
+  const seen = new Set();
+  const area = r => Math.pow(r.mcap > 0 ? r.mcap : r.price * r.vol * 40, 0.6);   // area ~ market cap (fallback: dollar volume, scaled toward cap)
+  const all = rows.filter(r => !seen.has(r.symbol) && seen.add(r.symbol))       // the radar lists a name once per screener; keep one block
+    .map(r => ({ ...r, v: area(r), dv: r.price * r.vol, group: r.sector || "Other" })).sort((a, b) => b.v - a.v).slice(0, cap);
+  const grouped = all.some(r => r.sector);
+  const minW = 34, minH = 22, lh = grouped ? 15 : 0;
+  // sectors first (when the scan knows them), names inside each sector; then show only as many names as
+  // can carry a label: binary-search the largest prefix (biggest first) whose every block fits its ticker
+  const layout = n => {
+    const items = all.slice(0, n), out = [];
+    if (!grouped) { squarify(items, 0, 0, w, h, out); return out; }
+    const by = {}; items.forEach(it => (by[it.group] = by[it.group] || []).push(it));
+    const groups = Object.entries(by).map(([g, it]) => ({ group: g, items: it, v: it.reduce((a, b) => a + b.v, 0) })).sort((a, b) => b.v - a.v);
+    const laid = []; squarify(groups, 0, 0, w, h, laid);
+    for (const g of laid) { const inner = []; squarify(g.items, g.x + 1, g.y + lh, Math.max(0, g.w - 2), Math.max(0, g.h - lh - 1), inner); out.push(...inner); }
+    out.frames = laid;
+    return out;
+  };
+  const fits = n => { const out = layout(n); return out.every(b => b.w >= minW && b.h >= minH) ? out : null; };
+  let lo = 1, hi = all.length, best = fits(1) || layout(1);
+  while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); const out = fits(mid); if (out) { best = out; lo = mid; } else hi = mid - 1; }
+  heatBlocks = best;
+  const mono = getComputedStyle(document.body).getPropertyValue("--mono") || "monospace";
+  const color = c => { const t = Math.max(-1, Math.min(1, c / 5)); const a = 0.22 + 0.7 * Math.abs(t);
+    return t >= 0 ? `rgba(12,163,12,${a})` : `rgba(208,59,59,${a})`; };
+  for (const b of heatBlocks) {
+    ctx.fillStyle = color(b.chg); ctx.fillRect(b.x, b.y, Math.max(0, b.w - 1), Math.max(0, b.h - 1));
+    {
+      const big = b.w > 62 && b.h > 34;
+      ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.font = `${big ? 600 : 500} ${big ? 12 : 10}px ${mono}`;
+      ctx.fillText(b.symbol, b.x + b.w / 2, b.y + b.h / 2 - (big ? 7 : 0), b.w - 6);
+      if (big) { ctx.font = `500 10.5px ${mono}`; ctx.fillStyle = "rgba(255,255,255,0.8)"; ctx.fillText(`${b.chg >= 0 ? "+" : ""}${b.chg.toFixed(1)}%`, b.x + b.w / 2, b.y + b.h / 2 + 8, b.w - 6); }
+    }
+  }
+  for (const g of (heatBlocks.frames || [])) {            // sector frames and labels
+    ctx.fillStyle = "rgba(0,0,0,0.42)"; ctx.fillRect(g.x, g.y, g.w, lh);
+    ctx.fillStyle = "#d8d7cd"; ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.font = "600 10px system-ui, sans-serif";
+    ctx.fillText(g.group.toUpperCase(), g.x + 6, g.y + lh / 2, Math.max(0, g.w - 10));
+    ctx.strokeStyle = "rgba(0,0,0,0.7)"; ctx.lineWidth = 1; ctx.strokeRect(g.x + 0.5, g.y + 0.5, g.w - 1, g.h - 1);
+  }
 }
 
 function renderBriefCtl() {
@@ -1408,7 +1677,7 @@ function guruPanel(g) {
     const w = h.weight, put = h.put;
     return `<div class="hrow"><span class="w">${w < 0 ? "−" : ""}${(Math.abs(w) * 100).toFixed(0)}%</span>` +
       `<span class="${put ? "put" : "long"}">${put ? "PUT" : "LONG"}</span>` +
-      `<span class="nm" title="${esc(h.issuer || "")}">${esc(h.ticker || h.issuer || "")}</span>` +
+      `<span class="nm${h.ticker ? " tk" : ""}"${h.ticker ? ` data-sym="${esc(h.ticker)}"` : ""} title="${esc(h.issuer || "")}">${esc(h.ticker || h.issuer || "")}</span>` +
       `<div class="bar"><i style="width:${(Math.abs(w) / max * 100).toFixed(0)}%;background:${put ? "var(--critical)" : "var(--good)"}"></i></div></div>`;
   }).join("");
   return `<div class="guru ${g.enabled ? "" : "disabled"}">
@@ -1430,7 +1699,7 @@ function renderGuru(id, g, title) {
       return `<div class="hrow">
         <span class="w">${w < 0 ? "−" : ""}${pct}%</span>
         <span class="${put ? "put" : "long"}">${put ? "PUT" : "LONG"}</span>
-        <span class="nm" title="${esc(h.issuer || "")}">${esc(h.ticker || h.issuer || "")}</span>
+        <span class="nm${h.ticker ? " tk" : ""}"${h.ticker ? ` data-sym="${esc(h.ticker)}"` : ""} title="${esc(h.issuer || "")}">${esc(h.ticker || h.issuer || "")}</span>
         <div class="bar"><i style="width:${(Math.abs(w) / max * 100).toFixed(0)}%;background:${put ? "var(--critical)" : "var(--good)"}"></i></div>
       </div>`;
     }).join("");
@@ -1456,6 +1725,7 @@ function renderNews() {
 function handle(msg) {
   switch (msg.type) {
     case "snapshot":
+      if (pendingDetail) setTimeout(() => { const p = pendingDetail; pendingDetail = null; openDetail(p, false); }, 0);
       Object.assign(state, { config: msg.config, status: msg.status, controls: msg.controls, prices: msg.prices, bars: msg.bars,
         latest: msg.latest, gate: msg.gate, outcomes: msg.outcomes, metrics: msg.metrics, history: msg.history, log: msg.log, news: msg.news,
         sources: msg.sources || [], news_sources: msg.news_sources || [], providers: (msg.status && msg.status.providers) || {}, classes: msg.classes || {},
@@ -1516,10 +1786,33 @@ function absorbHistory(h) {
 
 function connect() {
   ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
-  ws.onopen = () => { retry = 1000; $("#conn").classList.add("ok"); };
-  ws.onclose = () => { $("#conn").classList.remove("ok"); updateLoading(true); setTimeout(connect, retry); retry = Math.min(retry * 2, 15000); };
+  ws.onopen = () => { retry = 1000; wsUp = true; renderStatus(); };
+  // activity light on the market pill: its border flashes for 50 ms on every frame
+  let blinkT = null;
+  const blink = () => { const c = $("#market"); c.classList.add("busy"); clearTimeout(blinkT); blinkT = setTimeout(() => c.classList.remove("busy"), 140); };
+  ws.onclose = () => { wsUp = false; renderStatus(); updateLoading(true); setTimeout(connect, retry); retry = Math.min(retry * 2, 15000); };
   ws.onerror = () => ws.close();
-  ws.onmessage = e => handle(JSON.parse(e.data));
+  ws.onmessage = e => { blink(); handle(JSON.parse(e.data)); };
+  // bottom-left jump button: "past the cards" while the symbol grid fills the screen, "back to top"
+  // once the reader is below it; hidden near the top of the page
+  const skip = $("#skip-fab"), cards = $("#cards"), after = $("#market-watch");
+  if (skip && cards && after) {
+    let mode = "";
+    const place = () => {
+      const r = cards.getBoundingClientRect(), vh = window.innerHeight;
+      const shown = cards.offsetParent !== null;
+      let m = "";
+      if (shown && r.top < vh && r.bottom > vh * 1.2) m = "skip";
+      else if (window.scrollY > vh * 0.8) m = "top";
+      if (m !== mode) { mode = m; skip.hidden = !m; skip.textContent = m === "top" ? "↑ Back to top" : "↓ Past the cards"; }
+    };
+    skip.onclick = () => {
+      if (mode === "top") { window.scrollTo({ top: 0, behavior: "smooth" }); return; }
+      const head = $(".top"); const pad = (head ? head.getBoundingClientRect().height : 0) + 14;   // land with the whole Market watch card visible
+      window.scrollTo({ top: after.getBoundingClientRect().top + window.scrollY - pad, behavior: "smooth" });
+    };
+    addEventListener("scroll", place, { passive: true }); addEventListener("resize", place); place();
+  }
 }
 
 function showTab(tab, updateHash) {
@@ -1528,7 +1821,8 @@ function showTab(tab, updateHash) {
   $$(".tabs button").forEach(x => x.classList.toggle("active", x === btn));
   document.body.dataset.view = tab;
   try { localStorage.setItem("flint.view", tab); } catch (e) { /* storage may be unavailable */ }
-  if (updateHash && location.hash.slice(1) !== tab) location.hash = tab;   // reflect the page in the URL so refresh/bookmarks stick
+  if (updateHash && location.hash.split("/")[0].slice(1) !== tab) history.pushState(null, "", "#" + tab);   // a history entry per tab, no jump-to-anchor scroll
+  if (updateHash) { if (detailSym) closeDetail(false); window.scrollTo(0, 0); }   // each tab starts at its top
   if (tab === "consoles") Object.values(consoles).forEach(c => { c.body.scrollTop = c.body.scrollHeight; });
   if (tab === "console") setTermFollow(true);
   renderAll();
@@ -1536,12 +1830,19 @@ function showTab(tab, updateHash) {
   return true;
 }
 $$(".tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab, true));
-window.addEventListener("hashchange", () => { const t = location.hash.slice(1); if (t) showTab(t, false); });
+// routes: #<tab> or #<tab>/<SYMBOL> (symbol detail open). Back/forward and refresh replay them.
+function route() {
+  const [t, sym] = location.hash.slice(1).split("/");
+  if (t) showTab(t, false);
+  if (sym) openDetail(decodeURIComponent(sym), false); else if (detailSym) closeDetail(false);
+}
+window.addEventListener("hashchange", route);
+window.addEventListener("popstate", route);
 // on load the URL hash wins, then the last-used view; dashboard is already active in the markup
 (function () {
   let t = location.hash.slice(1);
   if (!t) { try { t = localStorage.getItem("flint.view") || ""; } catch (e) { t = ""; } }
-  if (t && t !== "dashboard") showTab(t, true);
+  if (t) { const [tab, sym] = t.split("/"); if (tab !== "dashboard") showTab(tab, false); if (sym) pendingDetail = decodeURIComponent(sym); history.replaceState(null, "", "#" + t); }
 })();
 
 document.addEventListener("click", e => { if (e.target.closest && (e.target.closest("#brief-regen") || e.target.closest("#brief-now"))) control({ action: "brief" }); });
@@ -1550,7 +1851,6 @@ document.addEventListener("click", e => { if (e.target.closest && (e.target.clos
 window.addEventListener("resize", () => renderAll());
 setInterval(() => {
   if (state.status && state.status.started) $("#uptime").textContent = fmtDur(Date.now() / 1000 - state.status.started);
-  updateETClock();
   const now = Date.now() / 1000;
   Object.values(consoles).forEach(c => { while (c.times.length && c.times[0] < now - 60) c.times.shift(); c.rate.textContent = `${c.times.length}/min`; });
 }, 1000);
@@ -1558,16 +1858,64 @@ document.addEventListener("input", e => { if (e.target && e.target.id === "radar
 updateLoading();
 const soundBtn = $("#sound-toggle");
 if (soundBtn) {
-  const paint = () => { soundBtn.textContent = soundOn ? "🔔" : "🔕"; soundBtn.classList.toggle("live", soundOn); };
+  const paint = () => { soundBtn.checked = soundOn; };
   paint();
-  soundBtn.onclick = () => {
-    soundOn = !soundOn;
-    try { localStorage.setItem("flint.sound", soundOn ? "1" : "0"); } catch (e) { /* ignore */ }
+  soundBtn.onchange = () => {
+    soundOn = soundBtn.checked;
     if (soundOn) { try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); if (audioCtx.state === "suspended") audioCtx.resume(); beep(880, 0.1); } catch (e) { /* ignore */ } }
     paint();
   };
 }
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(redrawCharts).catch(() => {});
 window.addEventListener("load", redrawCharts);
+// ---- control panel: reorderable sections (drag the grip, or nudge with the arrows); saved per browser ----
+(function () {
+  const host = $("#consoles"); if (!host) return;
+  const KEY = "flint.panel-order";
+  const keyOf = el => el.id || [...el.classList].find(c => c !== "panel") || "section";
+  const sections = () => [...host.children].filter(e => e.tagName === "SECTION");
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(sections().map(keyOf))); } catch (e) { /* storage may be unavailable */ } };
+  const apply = () => {
+    let order = null; try { order = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { order = null; }
+    if (!Array.isArray(order)) return;
+    const byKey = Object.fromEntries(sections().map(e => [keyOf(e), e]));
+    order.forEach(k => { if (byKey[k]) host.appendChild(byKey[k]); });   // known keys in saved order; anything new stays at the end
+  };
+  const move = (el, dir) => {
+    const sib = dir < 0 ? el.previousElementSibling : el.nextElementSibling;
+    if (!sib || sib.tagName !== "SECTION") return;
+    dir < 0 ? host.insertBefore(el, sib) : host.insertBefore(sib, el);
+    save(); el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  };
+  let dragging = null;
+  sections().forEach(el => {
+    const bar = document.createElement("div"); bar.className = "reorder";
+    bar.innerHTML = `<button class="grip" title="drag to reorder" draggable="true">⋮⋮</button><button class="up" title="move up">▲</button><button class="down" title="move down">▼</button>`;
+    el.appendChild(bar);
+    $(".up", bar).onclick = () => move(el, -1);
+    $(".down", bar).onclick = () => move(el, 1);
+    const grip = $(".grip", bar);
+    grip.addEventListener("dragstart", e => { dragging = el; el.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", keyOf(el)); });
+    grip.addEventListener("dragend", () => { dragging = null; sections().forEach(s => s.classList.remove("dragging", "drop-before", "drop-after")); });
+    el.addEventListener("dragover", e => {
+      if (!dragging || dragging === el) return;
+      e.preventDefault();
+      const r = el.getBoundingClientRect(), before = e.clientY < r.top + r.height / 2;
+      el.classList.toggle("drop-before", before); el.classList.toggle("drop-after", !before);
+    });
+    el.addEventListener("dragleave", () => el.classList.remove("drop-before", "drop-after"));
+    el.addEventListener("drop", e => {
+      if (!dragging || dragging === el) return;
+      e.preventDefault();
+      const r = el.getBoundingClientRect(), before = e.clientY < r.top + r.height / 2;
+      host.insertBefore(dragging, before ? el : el.nextSibling);
+      sections().forEach(s => s.classList.remove("drop-before", "drop-after"));
+      save();
+    });
+  });
+  apply();
+})();
+
 connect();
 })();
+

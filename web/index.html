@@ -11,24 +11,19 @@
 <header class="top">
   <div class="brand"><span class="fire">🔥</span> Flint <span class="sub">continuously learning market model</span></div>
   <div class="status">
-    <span class="pill" id="phase">starting</span>
     <span class="pill" id="feed">feed: ?</span>
     <span class="pill" id="learning">learning</span>
     <span class="kv"><label>bars</label><b id="bars">0</b></span>
     <span class="kv"><label>pending</label><b id="pending">0</b></span>
-    <span class="kv"><label>uptime</label><b id="uptime">0s</b></span>
-    <button class="pill sound" id="sound-toggle" title="alerts on major events">🔕</button>
-    <span class="conn" id="conn" title="websocket">●</span>
+    <span class="pill market-nav" id="market" title="market session; the border pulses with live data"><span id="market-label">?</span><label class="alert-dot" title="sound alerts on major events"><input type="checkbox" id="sound-toggle"><i></i></label></span>
   </div>
   <nav class="tabs">
-    <span class="pill market-nav" id="market" title="live trading vs frozen (market closed)">market ?</span>
-    <span class="et-clock" id="et-clock" title="New York time"><span class="seg" id="et-seg">--:--</span> ET</span>
     <button data-tab="brief" hidden>Brief</button>
     <button data-tab="dashboard" class="active">Dashboard</button>
     <button data-tab="paper">Paper</button>
     <button data-tab="portfolio">Portfolio</button>
     <button data-tab="console">Console</button>
-    <button data-tab="consoles">Control panel</button>
+    <button data-tab="consoles"><span class="long">Control panel</span><span class="short">Control</span></button>
   </nav>
 </header>
 
@@ -48,6 +43,7 @@
     </div>
   </section>
   <section class="cards" id="cards"></section>
+  <div class="more-wrap" id="more-wrap" hidden><button id="more-cards">Show 50 more</button><small id="more-meta"></small></div>
   <section class="panel market-watch" id="market-watch">
     <div class="mw-head">
       <h3>Market watch <small id="mw-meta">everything we can see, most urgent first</small></h3>
@@ -69,10 +65,6 @@
       <div class="block">
         <h3>10-90 band coverage <small>target 0.80</small></h3>
         <canvas class="spark" id="spark-coverage"></canvas>
-      </div>
-      <div class="block">
-        <h3>Paper P&amp;L <small>cumulative bps, trusted suggestions only</small></h3>
-        <canvas class="spark" id="spark-pnl"></canvas>
       </div>
     </div>
     <div class="row">
@@ -142,7 +134,7 @@
   </section>
   <section class="panel brief-ctl" hidden>
     <div class="sources-head">
-      <h3>Narrative brief <small>written on-device by local models via Ollama — nothing leaves the machine</small></h3>
+      <h3>Narrative brief <small>written on-device by a local model (llama-server) — nothing leaves the machine</small></h3>
       <label class="overlay-toggle" id="brief-toggle-wrap">auto-write</label>
       <button type="button" id="brief-now">Write now</button>
     </div>
@@ -213,6 +205,14 @@
 </div>
 <div class="tooltip" id="tooltip"></div>
 <button id="inject-fab" title="Inject a note to Flint  (⌘/Ctrl+I)">✎ Tell Flint</button>
+<button id="skip-fab" title="Jump past the symbol cards" hidden>↓ Past the cards</button>
+<div id="detail" class="detail" hidden><div class="detail-card">
+  <header><div class="dtitle"><span class="dsym"></span><span class="dmeta"></span></div><div class="dpx"><span class="dprice num"></span><span class="dchg num"></span></div><span class="dbadge"></span><button class="dclose" title="close (Esc)">×</button></header>
+  <div class="dchart"><canvas id="dcanvas"></canvas></div>
+  <div class="dwhy"></div>
+  <div class="dkpis"></div>
+  <div class="dbody"></div>
+</div></div>
 <div id="inject-pop" hidden>
   <div class="inject-head">Inject input <span>name a watched ticker to nudge it, or just leave a market note</span></div>
   <textarea id="inject-text" rows="3" placeholder="e.g. NVDA looks like a breakout, going long — CPI print at 8:30 — fade the SMCI pop"></textarea>
@@ -220,5 +220,6 @@
 </div>
 
 <script src="/static/app.js"></script>
+<footer class="foot">Flint · uptime <b id="uptime">0s</b></footer>
 </body>
 </html>

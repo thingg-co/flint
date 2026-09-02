@@ -79,15 +79,30 @@ change actually requires it.
   symbol count and the checkpoint still matches. Delete the file to intentionally shrink
   the universe back to the config default.
 - While the market is closed, `_deep_backfill_loop` pages history back in ~10-day chunks
-  (to `deep_backfill_days`, a live control; 0 disables), adds labeled windows to the replay
+  (one every 150 s while there is history left, to `deep_backfill_days`, a live control; 0 disables), adds labeled windows to the replay
   through an isolated bar/feature pipeline, and trains on them. It must never run while the
-  market is open.
+  market is open. `_idle_train_loop` fills the gaps between chunks: while closed it trains on
+  the replay up to `idle_train_epochs` passes per closed session (a live control; 0 disables),
+  a budget bounded by replay size rather than by hours, so a long night cannot overfit it.
+- On CUDA the train step runs under bf16 autocast with TF32 matmuls (loss in fp32); MPS and CPU
+  stay fp32. `FLINT_COMPILE=1` wraps the training forward in `torch.compile` (2.1x on the GB10,
+  same loss range; a two-minute compile on the first step after each start). Prediction and
+  checkpoints use the uncompiled module, so the switch never changes what is saved. The autotune cache key includes the precision mode. Step time grows about linearly
+  with batch size on a bandwidth-bound GPU, so a bigger batch only buys a smaller preset.
+- The market radar keeps each name's market cap from the Yahoo screeners and fills a sector per
+  symbol from Finnhub's company profile (industry folded into GICS-style sectors by `SECTOR_OF`),
+  40 names per scan under the 60/min limit, persisted in `state/sectors.json`. The dashboard treemap
+  groups by sector and sizes by market cap once those fields are present; until then it is one map
+  sized by dollar volume.
 - The narrative brief runs on a **local** LLM backend — Ollama (default) or any OpenAI-compatible
-  server such as vLLM (set `brief_backend=openai` + `brief_openai_base`). Never route it to a cloud API.
+  server such as llama-server or vLLM (set `brief_backend=openai` + `brief_openai_base`). Never route it
+  to a cloud API. On the Spark, start.sh points it at llama-server on 127.0.0.1:8080.
 - User-facing text capitalizes "Flint" as a proper noun.
 - FlintNet returns five tensors (quantiles, up-logit, down-logit, gate, attention). If you change the head, update `flint_loss` AND `autotune._bench` together -- an arity mismatch only surfaces on a re-benchmark (a feature/symbol-count change), not on a cached start.
 - Changing the feature set or the symbol list reshapes the model, so it resets once (guarded; the old checkpoint is backed up to model.pt.bak).
-- Paper shorts are long puts (loss capped at the premium) -- never naked shorts; longs are stock. Paper only trades once the model is `trusted`.
+- No position may carry unlimited risk, ever: no short stock, no written options, no margin. A bearish
+  view is a long put, a volatility view is a long put + long call; max loss is the premium paid and is
+  known at entry. Paper shorts are long puts -- never naked shorts; longs are stock. Paper only trades once the model is `trusted`. With `extended_hours` on (a live control), long stock may enter and exit in Schwab's 4:00-9:30 / 16:00-20:00 ET sessions; puts and straddles stay regular-hours because options do not trade then.
 - The Portfolio tab and account access are strictly read-only; Flint never places, changes, or cancels an order on any provider.
 
 ## Working on it

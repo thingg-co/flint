@@ -30,6 +30,16 @@ def bs_put(spot: float, strike: float, t_years: float, iv: float, r: float = 0.0
     return strike * math.exp(-r * t_years) * _norm_cdf(-d2) - spot * _norm_cdf(-d1)
 
 
+def bs_call(spot: float, strike: float, t_years: float, iv: float, r: float = 0.04) -> float:
+    """Black-Scholes European call price; intrinsic at/after expiry or on degenerate inputs."""
+    if t_years <= 0 or iv <= 0 or spot <= 0 or strike <= 0:
+        return max(0.0, spot - strike)
+    vol = iv * math.sqrt(t_years)
+    d1 = (math.log(spot / strike) + (r + 0.5 * iv * iv) * t_years) / vol
+    d2 = d1 - vol
+    return spot * _norm_cdf(d1) - strike * math.exp(-r * t_years) * _norm_cdf(d2)
+
+
 def years_to(expiry_ts: float, now: float) -> float:
     return max(0.0, (expiry_ts - now) / (365.0 * 86400.0))
 
@@ -69,6 +79,50 @@ async def fetch_put(auth, symbol: str, target_dte: int = 35) -> dict | None:
         return None
     return {"contract": o.get("symbol"), "strike": float(best), "expiry_ts": exp_ts,
             "premium": float(ask), "iv": float(iv) / 100.0, "delta": o.get("delta"), "spot": float(spot)}
+
+
+async def fetch_straddle(auth, symbol: str, target_dte: int = 35) -> dict | None:
+    """Pick the ATM put + call pair (same strike, nearest expiry ~target_dte out) from the live
+    chain, priced to BUY both legs (premium = ask). Returns the pair with IVs and expiry, or None."""
+    token = await auth.token()
+    frm = (date.today() + timedelta(days=max(1, target_dte - 12))).isoformat()
+    to = (date.today() + timedelta(days=target_dte + 18)).isoformat()
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.get(CHAINS_URL, headers={"Authorization": f"Bearer {token}"},
+                            params={"symbol": symbol, "contractType": "ALL", "strikeCount": 8,
+                                    "fromDate": frm, "toDate": to, "includeUnderlyingQuote": "true"})
+        if r.status_code != 200:
+            return None
+        d = r.json()
+    except Exception:  # noqa: BLE001
+        return None
+    spot = (d.get("underlying") or {}).get("last")
+    pem = d.get("putExpDateMap") or {}
+    cem = d.get("callExpDateMap") or {}
+    if not spot or not pem or not cem:
+        return None
+    exp = sorted(pem.keys())[0]
+    if exp not in cem:
+        return None
+    puts, calls = pem[exp], cem[exp]
+    shared = set(puts.keys()) & set(calls.keys())
+    if not shared:
+        return None
+    best = min(shared, key=lambda s: abs(float(s) - spot))
+    po = (puts[best] or [{}])[0]
+    co = (calls[best] or [{}])[0]
+    p_ask, c_ask = po.get("ask") or po.get("mark"), co.get("ask") or co.get("mark")
+    p_iv, c_iv = po.get("volatility"), co.get("volatility")
+    if not p_ask or p_ask <= 0 or not c_ask or c_ask <= 0 or not p_iv or p_iv <= 0 or not c_iv or c_iv <= 0:
+        return None
+    try:
+        exp_ts = datetime.strptime(exp.split(":")[0], "%Y-%m-%d").replace(hour=16, tzinfo=_ET).timestamp()
+    except ValueError:
+        return None
+    return {"strike": float(best), "expiry_ts": exp_ts, "spot": float(spot),
+            "put_premium": float(p_ask), "call_premium": float(c_ask),
+            "put_iv": float(p_iv) / 100.0, "call_iv": float(c_iv) / 100.0}
 
 
 async def fetch_iv_skew(auth, symbol: str, dte: int = 30) -> dict | None:
