@@ -95,7 +95,8 @@
   footer .copy{margin-left:auto;color:var(--muted,#898781)}
   @media(max-width:760px){.showcase{grid-template-columns:1fr}}
   .showcase figure{margin:0;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
-  .showcase img{display:block;width:100%;height:auto}
+  .showcase img{display:block;width:100%;height:300px;object-fit:cover;object-position:top}
+  @media(max-width:760px){.showcase img{height:auto}}
   .showcase figcaption{font-size:13px;color:var(--muted);padding:10px 14px;border-top:1px solid var(--border)}
 
   /* quickstart */

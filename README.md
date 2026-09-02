@@ -135,3 +135,5 @@ web/               dashboard (no build step, plain HTML/CSS/JS)
 
 PolyForm Noncommercial 1.0.0: free for personal, hobby, research and other noncommercial use.
 Commercial use needs a separate license. See LICENSE and NOTICE.
+
+© 2026 thingg LLC · [thingg.co](https://thingg.co)
