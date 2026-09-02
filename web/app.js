@@ -349,28 +349,38 @@ function buildCards() {
   });
 }
 
-// only the top N cards render; the rest wait behind "show more" (urgency ordering puts what matters first)
-let cardLimit = 50;
+// only the top cards render; the rest wait behind "show more". A page is as many cards as fill whole
+// rows at the current width (about 50), so the last row is never ragged; each "more" adds one page.
+let cardPages = 1;
+function cardCols() {
+  const root = $("#cards"); if (!root) return 1;
+  const cols = getComputedStyle(root).gridTemplateColumns.split(" ").filter(x => x && x !== "0px").length;
+  return Math.max(1, cols);
+}
+function cardPageSize() { const c = cardCols(); return Math.max(c, Math.floor(50 / c) * c); }
 function applyCardLimit(order) {
   order = order || [...document.querySelectorAll("#cards .card")].map(c => c.dataset.sym);
   const mutedSet = new Set(state.muted || []);
+  const page = cardPageSize(), limit = cardPages * page;
   let shown = 0, total = 0;
   order.forEach(sym => {
     const c = cards[sym]; if (!c || mutedSet.has(sym)) return;
     total++;
-    const beyond = shown >= cardLimit;
+    const beyond = shown >= limit;
     c.el.classList.toggle("beyond", beyond);
     if (!beyond) shown++;
   });
   const wrap = $("#more-wrap");
   if (wrap) {
     wrap.hidden = total <= shown;
-    $("#more-cards").textContent = `Show ${Math.min(50, total - shown)} more`;
+    $("#more-cards").textContent = `Show ${Math.min(page, total - shown)} more`;
     $("#more-meta").textContent = `${shown} of ${total} cards, most urgent first`;
   }
   redrawCharts();
 }
-document.addEventListener("DOMContentLoaded", () => { const b = $("#more-cards"); if (b) b.onclick = () => { cardLimit += 50; applyCardLimit(); }; });
+document.addEventListener("DOMContentLoaded", () => { const b = $("#more-cards"); if (b) b.onclick = () => { cardPages += 1; applyCardLimit(); }; });
+let cardsResizeT = null;
+addEventListener("resize", () => { clearTimeout(cardsResizeT); cardsResizeT = setTimeout(() => { if (state.config) applyCardLimit(); }, 150); });
 
 // ---- symbol detail overlay: everything the dashboard knows about one name ----
 let detailSym = null, detailCard = null, pendingDetail = null;
@@ -426,12 +436,12 @@ function renderDetail() {
     kpi("10–90 band", q.length ? `${(q[4] - q[0]).toFixed(0)} bps` : "·", q.length ? `${bps(q[0])} … ${bps(q[4])}` : "") +
     kpi("P(up)", pct(L.p_up), `raw ${pct(L.p_raw)}`, L.p_up > 0.5 ? "good" : "") +
     kpi("P(down)", pct(L.p_down), `raw ${pct(L.p_down_raw)}`, L.p_down > 0.5 ? "bad" : "") +
-    kpi("score", num(L.score), "|median| / IQR", sgn(L.score)) +
+    kpi("score", num(L.score), "move ÷ uncertainty", sgn(L.score)) +
     kpi("size", L.size ? `${(L.size * 100).toFixed(1)}%` : "0%", "of the paper book");
   // sections
   const qr = L.q_raw || [];
   const fc = row("calibrated quantiles", q.length ? q.map(x => x.toFixed(0)).join(" / ") : "·") + row("raw quantiles", qr.length ? qr.map(x => x.toFixed(0)).join(" / ") : "·")
-    + row("IQR", bps(L.iqr)) + row("band scale", num(L.band_scale)) + row("temperature", num(L.p_scale))
+    + row("middle-50% width", bps(L.iqr)) + row("band scale", num(L.band_scale)) + row("P(up) scaling", num(L.p_scale))
     + row("fat tails", L.straddle ? "yes — straddle candidate" : "no") + (L.base_action && L.base_action !== L.action ? row("model said", esc(L.base_action)) : "")
     + (L.overlay && L.overlay.length ? row("overlay", esc(L.overlay.join("; "))) : "") + (L.muted ? row("muted", "yes") : "");
   const outs = state.outcomes[sym] || [];
@@ -557,8 +567,8 @@ function renderTiles() {
     { label: "live pinball", value: f2(m.live_pinball), small: "bps, out of sample" },
     { label: "hit rate", value: fmtPct(m.hit_rate), small: m.decisions ? `n=${m.decisions}` : "", cls: m.hit_rate > 0.55 ? "good" : (m.hit_rate < 0.45 && m.decisions > 50) ? "bad" : "" },
     { label: "10-90 coverage", value: fmtPct(m.coverage), small: `raw ${fmtPct(m.coverage_raw)}` },
-    { label: "band scale", value: m.band_scale != null ? m.band_scale.toFixed(2) + "x" : "·", small: "conformal" },
-    { label: "P(up) temper", value: f2(m.p_scale), small: "1 = raw" },
+    { label: "band scale", value: m.band_scale != null ? m.band_scale.toFixed(2) + "x" : "·", small: "widened to hit 80%" },
+    { label: "P(up) scaling", value: f2(m.p_scale), small: "1 = as forecast" },
     { label: "paper P&L", value: fmtBps(m.pnl_bps), small: m.suggestions ? `${m.suggestions} calls, ${fmtPct(m.win_rate)} won` : "no calls yet", cls: m.pnl_bps > 0 ? "good" : m.pnl_bps < 0 ? "bad" : "" },
   ];
   $("#tiles").innerHTML = tiles.map(t => `<div class="tile ${t.cls || ""}"><label>${t.label}</label><b class="num">${t.value ?? "·"}</b>${t.small ? `<small>${t.small}</small>` : ""}</div>`).join("");
@@ -1428,44 +1438,59 @@ function renderPortfolio() {
 }
 
 let paperTradesAll = false;
+const paperSort = {};   // table -> { col, dir }; a header click sorts, a second click flips
+document.addEventListener("click", e => {
+  const h = e.target.closest && e.target.closest(".hsort[data-table]"); if (!h) return;
+  const t = h.dataset.table, c = h.dataset.col, st = paperSort[t];
+  paperSort[t] = st && st.col === c ? { col: c, dir: -st.dir } : { col: c, dir: c === "sym" || c === "label" ? 1 : -1 };
+  renderPaper();
+});
 document.addEventListener("DOMContentLoaded", () => { const b = $("#p-tr-more"); if (b) b.onclick = () => { paperTradesAll = !paperTradesAll; renderPaper(); }; });
 function renderPaper() {
   const p = state.paper; if (!p || !$("#paper")) return;
   paintPaperEquity();
   $("#p-stats").innerHTML = [
-    ["cash", fmtUSD(p.cash)], ["gross exposure", fmtUSD(p.gross)], ["net", fmtUSD(p.net_exposure)],
+    ["cash", fmtUSD(p.cash)], ["invested", fmtUSD(p.gross)], ["net long", fmtUSD(p.net_exposure)],
     ["realized", fmtUSD(p.realized)], ["unrealized", fmtUSD(p.unrealized)], ["fees", fmtUSD(p.fees)], ["option fees", fmtUSD(p.option_fees || 0)], ["spread paid", fmtUSD(p.spread_cost || 0)], ["trades", p.n_trades],
     ["Sharpe", (p.sharpe || 0).toFixed(2)], ["max drawdown", (p.max_drawdown || 0).toFixed(1) + "%"],
   ].map(([k, v]) => `<div class="pstat"><label>${esc(k)}</label><b>${esc(String(v))}</b></div>`).join("");
   const all = p.positions || [];
-  const pos = all.filter(x => x.kind !== "put" && x.kind !== "straddle"), opts = all.filter(x => x.kind === "put" || x.kind === "straddle");
-  const pnlCell = x => `<span class="${x.upnl >= 0 ? "up" : "down"}">${x.upnl >= 0 ? "+" : ""}${fmtUSD(x.upnl)}</span>`;
+  const gain = x => { const cost = (x.value || 0) - (x.upnl || 0); return cost ? (x.upnl / Math.abs(cost)) * 100 : 0; };
+  const pos = all.filter(x => x.kind !== "put" && x.kind !== "straddle").map(x => ({ ...x, gain: gain(x) }));
+  const opts = all.filter(x => x.kind === "put" || x.kind === "straddle").map(x => ({ ...x, gain: gain(x) }));
+  const srt = (rows, key) => { const st = paperSort[key]; if (!st) return rows;
+    return rows.slice().sort((a, b) => { const va = a[st.col], vb = b[st.col]; const r = typeof va === "number" || typeof vb === "number" ? (va || 0) - (vb || 0) : String(va || "").localeCompare(String(vb || "")); return st.dir * r; }); };
+  const head = (table, cols) => `<div class="prow ${table === "trades" ? "ptr" : table === "options" ? "popt" : ""} phead">` +
+    cols.map(([col, label, cls]) => { const st = paperSort[table]; const on = st && st.col === col;
+      return `<span class="hsort${on ? " on" : ""}${cls ? " " + cls : ""}" data-table="${table}" data-col="${col}">${label}${on ? (st.dir > 0 ? " ▲" : " ▼") : ""}</span>`; }).join("") + `</div>`;
+  const pnlCell = x => `<span class="${x.upnl >= 0 ? "up" : "down"} c-unreal">${x.upnl >= 0 ? "+" : ""}${fmtUSD(x.upnl)}</span>`;
+  const gainCell = x => `<span class="${x.gain >= 0 ? "up" : "down"} c-gain">${x.gain >= 0 ? "+" : ""}${x.gain.toFixed(1)}%</span>`;
   $("#p-pos-meta").textContent = pos.length ? `${pos.length} open` : "";
   $("#p-positions").innerHTML = pos.length
-    ? `<div class="prow phead"><span>sym</span><span>side</span><span>weight</span><span>value</span><span>unreal</span></div>` +
-      pos.map(x => `<div class="prow"><span class="psym tk" data-sym="${esc(x.sym)}">${esc(base(x.sym))}</span>` +
+    ? head("positions", [["sym", "sym"], ["shares", "side"], ["weight", "weight", "c-weight"], ["value", "value", "c-value"], ["upnl", "unrealized", "c-unreal"], ["gain", "gain", "c-gain"]]) +
+      srt(pos, "positions").map(x => `<div class="prow"><span class="psym tk" data-sym="${esc(x.sym)}">${esc(base(x.sym))}</span>` +
         `<span class="${x.shares >= 0 ? "up" : "down"}">${x.shares >= 0 ? "long" : "short"}</span>` +
-        `<span>${(x.weight * 100).toFixed(1)}%</span><span>${fmtUSD(x.value)}</span>${pnlCell(x)}</div>`).join("")
+        `<span class="c-weight">${(x.weight * 100).toFixed(1)}%</span><span class="c-value">${fmtUSD(x.value)}</span>${pnlCell(x)}${gainCell(x)}</div>`).join("")
     : `<div class="why">no stock held — all cash${state.metrics && !state.metrics.trusted ? " (model still warming up)" : ""}</div>`;
   const exp = e => { const m = /^([A-Za-z]{3})(\d{1,2})$/.exec(e || ""); return m ? `${MONTHS[m[1]] || m[1]}/${Number(m[2])}` : (e || ""); };
   $("#p-opt-meta").textContent = opts.length ? `${opts.length} open, loss capped at premium` : "";
   $("#p-options").innerHTML = opts.length
-    ? `<div class="prow popt phead"><span>sym</span><span>contract</span><span>weight</span><span>value</span><span>unreal</span></div>` +
-      opts.map(x => `<div class="prow popt"><span class="psym tk" data-sym="${esc(x.sym)}">${esc(base(x.sym))}</span>` +
+    ? head("options", [["sym", "sym"], ["strike", "contract"], ["weight", "weight", "c-weight"], ["value", "value", "c-value"], ["upnl", "unrealized", "c-unreal"], ["gain", "gain", "c-gain"]]) +
+      srt(opts, "options").map(x => `<div class="prow popt"><span class="psym tk" data-sym="${esc(x.sym)}">${esc(base(x.sym))}</span>` +
         (x.kind === "put"
           ? `<span class="down" title="bearish via long put — loss capped at the premium">Put ${x.strike} ${exp(x.expiry)}</span>`
           : `<span title="big move expected, direction unclear — long put + call, loss capped at the premium">Straddle ${x.strike} ${exp(x.expiry)}</span>`) +
-        `<span>${(x.weight * 100).toFixed(1)}%</span><span>${fmtUSD(x.value)}</span>${pnlCell(x)}</div>`).join("")
+        `<span class="c-weight">${(x.weight * 100).toFixed(1)}%</span><span class="c-value">${fmtUSD(x.value)}</span>${pnlCell(x)}${gainCell(x)}</div>`).join("")
     : `<div class="why">no options open</div>`;
-  const tr = p.trades || [];
+  const tr = (p.trades || []).map(t => ({ ...t, label: tradeLabel(t) }));
   const N = 10, showAll = paperTradesAll;
   $("#p-tr-meta").textContent = p.n_trades ? `${p.n_trades} total` : "";
   const more = $("#p-tr-more"); if (more) { more.hidden = tr.length <= N; more.textContent = showAll ? "Show fewer" : `Show all ${tr.length}`; }
   $("#p-trades").innerHTML = tr.length
-    ? `<div class="prow ptr phead"><span>time</span><span>action</span><span>sym</span><span>qty</span><span>price</span><span>notional</span></div>` +
-      tr.slice(0, showAll ? tr.length : N).map(t => `<div class="prow ptr"><span>${fmtTime(t.t)}</span>` +
-        `<span class="${(t.side || "").startsWith("buy") ? "up" : "down"}">${esc(tradeLabel(t))}</span>` +
-        `<span class="psym tk" data-sym="${esc(t.sym)}">${esc(base(t.sym))}</span><span>${t.shares}</span><span>${fmtPrice(t.price)}</span><span>${t.notional != null ? fmtUSD(t.notional) : ""}</span></div>`).join("")
+    ? head("trades", [["t", "time"], ["label", "action"], ["sym", "sym"], ["shares", "qty", "c-qty"], ["price", "price", "c-price"], ["notional", "value"]]) +
+      srt(tr, "trades").slice(0, showAll ? tr.length : N).map(t => `<div class="prow ptr"><span>${fmtTime(t.t)}</span>` +
+        `<span class="${(t.side || "").startsWith("buy") ? "up" : "down"}">${esc(t.label)}</span>` +
+        `<span class="psym tk" data-sym="${esc(t.sym)}">${esc(base(t.sym))}</span><span class="c-qty">${t.shares}</span><span class="c-price">${fmtPrice(t.price)}</span><span>${t.notional != null ? fmtUSD(t.notional) : ""}</span></div>`).join("")
     : `<div class="why">no trades yet${state.metrics && !state.metrics.trusted ? " — the model is still warming up" : ""}</div>`;
   drawEquityCurve(p);
 }

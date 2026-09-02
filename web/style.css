@@ -61,7 +61,7 @@ button.active { background: var(--blue); border-color: var(--blue); color: #fff;
 .market-nav.down { border-color: var(--critical) !important; color: var(--critical) !important; animation: none; }
 @media (prefers-reduced-motion: reduce) { .market-nav.up { animation: none; } }
 .card.beyond { display: none; }
-.more-wrap { display: flex; align-items: center; gap: 12px; margin: -6px 0 16px; }
+.more-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: -6px 0 16px; }
 .more-wrap small { color: var(--muted); font-size: 12px; }
 
 .view { display: none; padding: 16px 18px 40px; }
@@ -634,7 +634,9 @@ ul.headlines li.new a { color: #fff; } ul.headlines li:not(.new) a { color: var(
 .pstat b { font-family: var(--mono); font-size: 15px; color: var(--ink-2); }
 .pcurve { width: 100%; height: 220px; display: block; }
 .ptable { font-family: var(--mono); font-size: 12.5px; }
-.prow { display: grid; grid-template-columns: 1.1fr .8fr .9fr 1fr 1fr; gap: 8px; padding: 5px 2px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.prow { display: grid; grid-template-columns: 1fr 1.5fr .9fr 1fr 1fr .8fr; gap: 8px; padding: 5px 2px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.prow > span:nth-child(n+3) { text-align: right; font-variant-numeric: tabular-nums; }   /* numeric columns right-aligned so digits line up */
+.prow.ptr > span:nth-child(n+4) { text-align: right; } .prow.ptr > span:nth-child(3) { text-align: left; }
 .prow.phead { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--ink-2); }
 .prow .psym { font-weight: 700; color: var(--ink); }
 .prow .up { color: var(--good); } .prow .down { color: var(--serious); }
@@ -691,12 +693,23 @@ ul.headlines li.new a { color: #fff; } ul.headlines li:not(.new) a { color: var(
 .tk { cursor: pointer; }
 .tk:hover { color: var(--blue); text-decoration: underline dotted; }
 /* paper tab: holdings and options side by side, trades full width below */
-.prow.ptr { grid-template-columns: 90px 1.6fr 1fr 1fr 1.2fr 1.2fr; }   /* full width: time, action, sym, qty, price, notional */
-.prow.popt { grid-template-columns: 1fr 1.6fr .8fr 1fr 1fr; }
+.prow.ptr { grid-template-columns: 84px 1.6fr 1fr 1fr 1fr 1fr; }   /* full width: time, action, sym, qty, price, notional */
+.prow.popt { grid-template-columns: 1fr 1.5fr .9fr 1fr 1fr .8fr; }   /* same template as holdings so the two cards line up */
 h3 .mini { float: right; padding: 2px 10px; font-size: 11px; margin-top: -2px; }
 @media (max-width: 700px) { .prow.ptr { grid-template-columns: 62px 1.3fr 1fr .7fr 1fr; font-size: 12px; } }
 /* paper tab as cards: two on top, the curve, trades, then holdings and options */
 #paper .row.pcards { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
+#paper .row.pcards:first-child { grid-template-columns: minmax(min(280px, 100%), 1fr) 2fr; }   /* equity card narrow, the book stats get the room */
+@media (max-width: 760px) { #paper .row.pcards:first-child { grid-template-columns: 1fr; } }
 #paper .row.pcards .panel { margin-bottom: 0; }
 #paper .panel .peq { padding: 4px 2px; }
-#paper .pstats { padding-top: 2px; gap: 16px 22px; }
+#paper .pstats { padding-top: 2px; display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 12px 16px; }   /* fills the card, no ragged gaps */
+/* sortable headers */
+.phead .hsort { cursor: pointer; user-select: none; } .phead .hsort:hover { color: var(--ink); } .phead .hsort.on { color: var(--ink); }
+/* phones: fewer columns — symbol, side, and gain */
+@media (max-width: 700px) {
+  .prow, .prow.popt { grid-template-columns: 1fr 1.6fr 1fr; }
+  .prow .c-weight, .prow .c-value, .prow .c-unreal { display: none; }
+  .prow.ptr { grid-template-columns: 62px 1.4fr 1fr 1fr; }
+  .prow.ptr .c-qty, .prow.ptr .c-price { display: none; }
+}
