@@ -1,6 +1,6 @@
 [project]
 name = "flint"
-version = "0.4.0"
+version = "0.4.1"
 description = "Continuously learning market model with a live web dashboard"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"

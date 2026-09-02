@@ -168,14 +168,15 @@
   </div>
 </div>
 <main id="paper" class="view">
-  <div class="paper-head">
-    <div class="peq"><span class="peq-label">paper equity</span><span class="peq-val" id="p-equity">$100,000</span><span class="peq-ret" id="p-return">+0.00%</span></div>
-    <div class="pstats" id="p-stats"></div>
+  <div class="row pcards">
+    <section class="panel"><div class="peq"><span class="peq-label">paper equity</span><span class="peq-val" id="p-equity">$100,000</span><span class="peq-ret" id="p-return">+0.00%</span></div></section>
+    <section class="panel"><h3>Book</h3><div class="pstats" id="p-stats"></div></section>
   </div>
-  <div class="block"><h3>Equity curve <small>$100k book, compounding</small></h3><canvas id="p-curve" class="pcurve"></canvas></div>
-  <div class="row">
-    <div class="block"><h3>Positions <small id="p-pos-meta"></small></h3><div class="ptable" id="p-positions"></div></div>
-    <div class="block"><h3>Recent trades <small id="p-tr-meta"></small></h3><div class="ptable" id="p-trades"></div></div>
+  <section class="panel"><h3>Equity curve <small>$100k book, compounding</small></h3><canvas id="p-curve" class="pcurve"></canvas></section>
+  <section class="panel"><h3>Recent trades <small id="p-tr-meta"></small><button class="mini" id="p-tr-more" hidden>Show all</button></h3><div class="ptable" id="p-trades"></div></section>
+  <div class="row pcards">
+    <section class="panel"><h3>Holdings <small id="p-pos-meta"></small></h3><div class="ptable" id="p-positions"></div></section>
+    <section class="panel"><h3>Options <small id="p-opt-meta"></small></h3><div class="ptable" id="p-options"></div></section>
   </div>
   <div class="why">Simulated. The model runs a $100k long/short book, rebalancing to its own suggestions with no leverage and a small cost per trade. It compounds continuously and persists across restarts. These are not real orders.</div>
 </main>
@@ -220,6 +221,6 @@
 </div>
 
 <script src="/static/app.js"></script>
-<footer class="foot">Flint · uptime <b id="uptime">0s</b></footer>
+<footer class="foot">Flint · uptime <b id="uptime">0s</b> · © 2026 <a href="https://thingg.co" target="_blank" rel="noopener">thingg.co</a></footer>
 </body>
 </html>

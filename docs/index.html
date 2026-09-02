@@ -90,7 +90,9 @@
   .step p{font-size:14.5px;margin:0}
 
   /* showcase */
-  .showcase{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:40px}
+  .showcase{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:40px}
+  @media(max-width:1000px){.showcase{grid-template-columns:1fr 1fr}}
+  footer .copy{margin-left:auto;color:var(--muted,#898781)}
   @media(max-width:760px){.showcase{grid-template-columns:1fr}}
   .showcase figure{margin:0;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
   .showcase img{display:block;width:100%;height:auto}
@@ -176,6 +178,7 @@
     </div>
     <div class="showcase">
       <figure><img src="img/card.png" alt="A single stock card with candlesticks, MACD, forecast fan and a plain-English rationale"><figcaption>Each card shows the forecast, the band, and why the call is a buy, sell or hold.</figcaption></figure>
+      <figure><img src="img/detail.png" alt="The symbol detail view: a large chart, the calibrated forecast, track record, signals, fundamentals, news and positions for one stock"><figcaption>Click any ticker for everything Flint knows about it, with a URL you can share.</figcaption></figure>
       <figure><img src="img/console.png" alt="The Console tab: a terminal-style stream of everything the model is doing"><figcaption>The Console tab tails every channel the model runs through, live.</figcaption></figure>
     </div>
   </div>
@@ -216,6 +219,7 @@ llama-server -m model.gguf --port 8080   <span class="c"># or llama.cpp, with FL
     <span class="brand"><span class="fire">🔥</span> Flint</span>
     <span>a self-hosted market model</span>
     <a href="https://github.com/thingg-co/flint">github.com/thingg-co/flint ↗</a>
+    <span class="copy">© 2026 <a href="https://thingg.co">thingg.co</a> · PolyForm Noncommercial</span>
   </div>
 </footer>
 </body>

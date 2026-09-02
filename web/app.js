@@ -595,6 +595,18 @@ function linkTicker(text) {
   if (!sym) return esc(text);
   return `<span class="tk" data-sym="${esc(sym)}">${esc(m[1])}</span>${esc(text.slice(m[1].length))}`;
 }
+// compact trade label: "Buy", "Sell", "Put 315 9/26", "Close put 315 9/26", "Straddle 315 9/26"
+const MONTHS = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12 };
+function tradeLabel(t) {
+  const side = t.side || "";
+  const m = /^([PS])(\d+(?:\.\d+)?)\s+([A-Za-z]{3})(\d{1,2})$/.exec(t.note || "");
+  const contract = m ? `${Number(m[2])} ${MONTHS[m[3]] || m[3]}/${Number(m[4])}` : (t.note || "");
+  if (side === "buy put") return `Put ${contract}`.trim();
+  if (side === "sell put") return `Close put ${contract}`.trim();
+  if (side === "buy straddle") return `Straddle ${contract}`.trim();
+  if (side === "sell straddle") return `Close straddle ${contract}`.trim();
+  return (side.charAt(0).toUpperCase() + side.slice(1) + (t.note ? " " + t.note : "")).trim();
+}
 function renderLog() {
   $("#log").innerHTML = state.log.slice().reverse().map(l =>
     `<li class="${esc(l.kind)}"><span class="t">${fmtTime(l.t)}</span><span>${linkTicker(l.text)}</span></li>`).join("")
@@ -1415,6 +1427,8 @@ function renderPortfolio() {
   ) : "";
 }
 
+let paperTradesAll = false;
+document.addEventListener("DOMContentLoaded", () => { const b = $("#p-tr-more"); if (b) b.onclick = () => { paperTradesAll = !paperTradesAll; renderPaper(); }; });
 function renderPaper() {
   const p = state.paper; if (!p || !$("#paper")) return;
   paintPaperEquity();
@@ -1423,25 +1437,35 @@ function renderPaper() {
     ["realized", fmtUSD(p.realized)], ["unrealized", fmtUSD(p.unrealized)], ["fees", fmtUSD(p.fees)], ["option fees", fmtUSD(p.option_fees || 0)], ["spread paid", fmtUSD(p.spread_cost || 0)], ["trades", p.n_trades],
     ["Sharpe", (p.sharpe || 0).toFixed(2)], ["max drawdown", (p.max_drawdown || 0).toFixed(1) + "%"],
   ].map(([k, v]) => `<div class="pstat"><label>${esc(k)}</label><b>${esc(String(v))}</b></div>`).join("");
-  const pos = p.positions || [];
+  const all = p.positions || [];
+  const pos = all.filter(x => x.kind !== "put" && x.kind !== "straddle"), opts = all.filter(x => x.kind === "put" || x.kind === "straddle");
+  const pnlCell = x => `<span class="${x.upnl >= 0 ? "up" : "down"}">${x.upnl >= 0 ? "+" : ""}${fmtUSD(x.upnl)}</span>`;
   $("#p-pos-meta").textContent = pos.length ? `${pos.length} open` : "";
   $("#p-positions").innerHTML = pos.length
     ? `<div class="prow phead"><span>sym</span><span>side</span><span>weight</span><span>value</span><span>unreal</span></div>` +
       pos.map(x => `<div class="prow"><span class="psym tk" data-sym="${esc(x.sym)}">${esc(base(x.sym))}</span>` +
+        `<span class="${x.shares >= 0 ? "up" : "down"}">${x.shares >= 0 ? "long" : "short"}</span>` +
+        `<span>${(x.weight * 100).toFixed(1)}%</span><span>${fmtUSD(x.value)}</span>${pnlCell(x)}</div>`).join("")
+    : `<div class="why">no stock held — all cash${state.metrics && !state.metrics.trusted ? " (model still warming up)" : ""}</div>`;
+  const exp = e => { const m = /^([A-Za-z]{3})(\d{1,2})$/.exec(e || ""); return m ? `${MONTHS[m[1]] || m[1]}/${Number(m[2])}` : (e || ""); };
+  $("#p-opt-meta").textContent = opts.length ? `${opts.length} open, loss capped at premium` : "";
+  $("#p-options").innerHTML = opts.length
+    ? `<div class="prow popt phead"><span>sym</span><span>contract</span><span>weight</span><span>value</span><span>unreal</span></div>` +
+      opts.map(x => `<div class="prow popt"><span class="psym tk" data-sym="${esc(x.sym)}">${esc(base(x.sym))}</span>` +
         (x.kind === "put"
-          ? `<span class="down" title="bearish via long put — loss capped at the premium">put ${x.strike}${x.expiry ? " " + esc(x.expiry) : ""}</span>`
-          : x.kind === "straddle"
-          ? `<span title="big move expected, direction unclear — long put + call, loss capped at the premium">straddle ${x.strike}${x.expiry ? " " + esc(x.expiry) : ""}</span>`
-          : `<span class="${x.shares >= 0 ? "up" : "down"}">${x.shares >= 0 ? "long" : "short"}</span>`) +
-        `<span>${(x.weight * 100).toFixed(1)}%</span><span>${fmtUSD(x.value)}</span>` +
-        `<span class="${x.upnl >= 0 ? "up" : "down"}">${x.upnl >= 0 ? "+" : ""}${fmtUSD(x.upnl)}</span></div>`).join("")
-    : `<div class="why">no open positions — all cash${state.metrics && !state.metrics.trusted ? " (model still warming up)" : ""}</div>`;
+          ? `<span class="down" title="bearish via long put — loss capped at the premium">Put ${x.strike} ${exp(x.expiry)}</span>`
+          : `<span title="big move expected, direction unclear — long put + call, loss capped at the premium">Straddle ${x.strike} ${exp(x.expiry)}</span>`) +
+        `<span>${(x.weight * 100).toFixed(1)}%</span><span>${fmtUSD(x.value)}</span>${pnlCell(x)}</div>`).join("")
+    : `<div class="why">no options open</div>`;
   const tr = p.trades || [];
+  const N = 10, showAll = paperTradesAll;
   $("#p-tr-meta").textContent = p.n_trades ? `${p.n_trades} total` : "";
+  const more = $("#p-tr-more"); if (more) { more.hidden = tr.length <= N; more.textContent = showAll ? "Show fewer" : `Show all ${tr.length}`; }
   $("#p-trades").innerHTML = tr.length
-    ? tr.slice(0, 40).map(t => `<div class="prow"><span>${fmtTime(t.t)}</span>` +
-        `<span class="${(t.side || "").startsWith("buy") ? "up" : "down"}">${esc(t.side)}${t.note ? " " + esc(t.note) : ""}</span>` +
-        `<span class="psym tk" data-sym="${esc(t.sym)}">${esc(base(t.sym))}</span><span>${t.shares}</span><span>@ ${fmtPrice(t.price)}</span></div>`).join("")
+    ? `<div class="prow ptr phead"><span>time</span><span>action</span><span>sym</span><span>qty</span><span>price</span><span>notional</span></div>` +
+      tr.slice(0, showAll ? tr.length : N).map(t => `<div class="prow ptr"><span>${fmtTime(t.t)}</span>` +
+        `<span class="${(t.side || "").startsWith("buy") ? "up" : "down"}">${esc(tradeLabel(t))}</span>` +
+        `<span class="psym tk" data-sym="${esc(t.sym)}">${esc(base(t.sym))}</span><span>${t.shares}</span><span>${fmtPrice(t.price)}</span><span>${t.notional != null ? fmtUSD(t.notional) : ""}</span></div>`).join("")
     : `<div class="why">no trades yet${state.metrics && !state.metrics.trusted ? " — the model is still warming up" : ""}</div>`;
   drawEquityCurve(p);
 }
