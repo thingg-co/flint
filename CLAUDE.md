@@ -100,9 +100,11 @@ change actually requires it.
 - User-facing text capitalizes "Flint" as a proper noun.
 - FlintNet returns five tensors (quantiles, up-logit, down-logit, gate, attention). If you change the head, update `flint_loss` AND `autotune._bench` together -- an arity mismatch only surfaces on a re-benchmark (a feature/symbol-count change), not on a cached start.
 - Changing the feature set or the symbol list reshapes the model, so it resets once (guarded; the old checkpoint is backed up to model.pt.bak).
-- No position may carry unlimited risk, ever: no short stock, no written options, no margin. A bearish
-  view is a long put, a volatility view is a long put + long call; max loss is the premium paid and is
-  known at entry. Paper shorts are long puts -- never naked shorts; longs are stock. Paper only trades once the model is `trusted`. With `extended_hours` on (a live control), long stock may enter and exit in Schwab's 4:00-9:30 / 16:00-20:00 ET sessions; puts and straddles stay regular-hours because options do not trade then.
+- No position may carry unlimited risk, ever. Defined risk is the rule, not premium-capped: long
+  options, debit and credit spreads, covered calls on held stock and cash-secured puts are all fine,
+  because the worst case is a known finite number at entry. Naked short stock and naked written
+  options are not. Today a bearish view is a long put and a volatility view is a long straddle; paper
+  shorts are long puts -- never naked shorts; longs are stock. Paper only trades once the model is `trusted`. With `extended_hours` on (a live control), long stock may enter and exit in Schwab's 4:00-9:30 / 16:00-20:00 ET sessions; puts and straddles stay regular-hours because options do not trade then.
 - The Portfolio tab and account access are strictly read-only; Flint never places, changes, or cancels an order on any provider.
 
 ## Working on it

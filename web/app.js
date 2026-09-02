@@ -41,7 +41,7 @@ let ws, retry = 1000, drawQueued = false;
 let audioCtx = null, soundOn = false;
 let demoLoading = /[?&#]loading\b/i.test(location.href);
 const prevAction = {};
-// sound alerts always start off; turning them on lasts for this page load only
+try { soundOn = localStorage.getItem("flint.sound") === "1"; } catch (e) { /* off unless this browser turned it on before */ }
 
 function beep(freq, dur, when = 0, type = "sine", gain = 0.14) {
   if (!soundOn || !audioCtx) return;
@@ -1473,7 +1473,7 @@ function renderPaper() {
         `<span class="c-weight">${(x.weight * 100).toFixed(1)}%</span><span class="c-value">${fmtUSD(x.value)}</span>${pnlCell(x)}${gainCell(x)}</div>`).join("")
     : `<div class="why">no stock held — all cash${state.metrics && !state.metrics.trusted ? " (model still warming up)" : ""}</div>`;
   const exp = e => { const m = /^([A-Za-z]{3})(\d{1,2})$/.exec(e || ""); return m ? `${MONTHS[m[1]] || m[1]}/${Number(m[2])}` : (e || ""); };
-  $("#p-opt-meta").textContent = opts.length ? `${opts.length} open, loss capped at premium` : "";
+  $("#p-opt-meta").textContent = opts.length ? `${opts.length} open, defined risk` : "";
   $("#p-options").innerHTML = opts.length
     ? head("options", [["sym", "sym"], ["strike", "contract"], ["weight", "weight", "c-weight"], ["value", "value", "c-value"], ["upnl", "unrealized", "c-unreal"], ["gain", "gain", "c-gain"]]) +
       srt(opts, "options").map(x => `<div class="prow popt"><span class="psym tk" data-sym="${esc(x.sym)}">${esc(base(x.sym))}</span>` +
@@ -1911,6 +1911,7 @@ if (soundBtn) {
   paint();
   soundBtn.onchange = () => {
     soundOn = soundBtn.checked;
+    try { localStorage.setItem("flint.sound", soundOn ? "1" : "0"); } catch (e) { /* ignore */ }
     if (soundOn) { try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); if (audioCtx.state === "suspended") audioCtx.resume(); beep(880, 0.1); } catch (e) { /* ignore */ } }
     paint();
   };
