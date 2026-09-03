@@ -24,6 +24,8 @@ const CONTROL_FIELDS = [
   ["min_labels", "labels before trusted", 1], ["news_minutes", "news every (min)", 1],
   ["kelly_fraction", "Kelly fraction", 0.01], ["move_floor_bps", "move floor (bps)", 1], ["min_hit_rate", "min hit rate", 0.01],
   ["deep_backfill_days", "backfill depth (days)", 1], ["idle_train_epochs", "idle training (passes)", 0.5], ["extended_hours", "extended hours (0/1)", 1], ["train_in_session", "train while open (0/1)", 1],
+  ["skill_min_n", "calls before a name trades", 1], ["confirm_bars", "bars to confirm a signal", 1], ["stock_min_hold_bars", "min hold (bars)", 1],
+  ["max_spread_bps", "max spread (bps)", 1], ["min_price", "min price ($)", 0.5], ["option_max_frac", "max option premium (frac)", 0.005], ["size_by_coverage", "size by coverage (0/1)", 1],
 ];
 
 let wsUp = false;

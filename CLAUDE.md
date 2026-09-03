@@ -107,6 +107,13 @@ change actually requires it.
   because the worst case is a known finite number at entry. Naked short stock and naked written
   options are not. Today a bearish view is a long put and a volatility view is a long straddle; paper
   shorts are long puts -- never naked shorts; longs are stock. Paper only trades once the model is `trusted`. With `extended_hours` on (a live control), long stock may enter and exit in Schwab's 4:00-9:30 / 16:00-20:00 ET sessions; puts and straddles stay regular-hours because options do not trade then.
+- Risk gates in the policy (all live controls; the model is untouched): a name needs `skill_min_n`
+  matured direction calls at or above `min_hit_rate` before it may trade; the same side must persist
+  `confirm_bars` bars; a stock position is held `stock_min_hold_bars` unless the signal reverses; the
+  live bid/ask spread replaces `cost_bps` when larger and `max_spread_bps` / `min_price` block
+  illiquid and penny names; size scales with band coverage / 0.8; option premium per position is
+  capped at `option_max_frac` of equity. These exist because of the 2026-09-02 session (churn and a
+  $1 stock cost 7% in a night).
 - The Portfolio tab and account access are strictly read-only; Flint never places, changes, or cancels an order on any provider.
 
 ## Working on it

@@ -37,7 +37,10 @@ TUNABLE = {"score_threshold": float, "prob_margin": float, "cost_bps": float, "m
            "kelly_fraction": float, "move_floor_bps": float, "min_hit_rate": float,
            "deep_backfill_days": float, "idle_train_epochs": float,
            "extended_hours": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
-           "train_in_session": lambda v: str(v).lower() in ("1", "true", "yes", "on")}
+           "train_in_session": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
+           "skill_min_n": int, "confirm_bars": int, "stock_min_hold_bars": int, "max_spread_bps": float,
+           "min_price": float, "option_max_frac": float,
+           "size_by_coverage": lambda v: str(v).lower() in ("1", "true", "yes", "on")}
 
 
 def clean(o):
@@ -230,8 +233,11 @@ class Engine:
         self.prices = {s: {"price": None, "bid": None, "ask": None, "ts": None} for s in self.symbols}
         self.tick_counts = {s: 0 for s in self.symbols}
         self.bars: dict[str, deque[Bar]] = {s: deque(maxlen=cfg.chart_bars) for s in self.symbols}
+        self._streak: dict[str, tuple[int, int]] = {}    # symbol -> (raw side, consecutive bars) for the confirmation gate
+        self._held_since: dict[str, int] = {}             # symbol -> bar index a nonzero paper target began
+        self._last_target: dict[str, float] = {}
         self.paper = PaperBook(cfg.paper_start, cfg.cost_bps, min_trade_frac=cfg.paper_min_trade_frac,
-                               option_commission=cfg.option_commission,
+                               option_commission=cfg.option_commission, option_max_frac=cfg.option_max_frac,
                                put_min_hold_s=cfg.put_min_hold_bars * cfg.bar_seconds,
                                straddle_min_hold_s=cfg.straddle_hold_bars * cfg.bar_seconds)   # $100k paper book (shorts via puts)
         self.portfolio: dict = {}                               # Schwab account positions (read-only), for the Portfolio tab
@@ -574,6 +580,9 @@ class Engine:
             if int(md.get("calib_v") or 1) < self.CALIB_V:
                 m.band_scale, m.p_scale = 2.0, 0.3
                 m.hit_ema = m.coverage_ema = None
+            for s, outs in (extra.get("outcomes") or {}).items():   # per-name track records survive a restart (the skill gate needs them)
+                if s in self.outcomes:
+                    self.outcomes[s] = deque(list(outs)[-40:], maxlen=40)
             for sym, v in (md.get("pnl_by_symbol") or {}).items():
                 if sym in m.pnl_by_symbol:
                     m.pnl_by_symbol[sym] = v
@@ -865,7 +874,8 @@ class Engine:
             metrics["pnl_by_symbol"] = dict(m.pnl_by_symbol)
             metrics["calib_v"] = self.CALIB_V
             self.learner.save(self.cfg.state_dir, extra={"norm": self.features.norm.state(), "metrics": metrics,
-                                                          "paper": self.paper.to_state()})
+                                                          "paper": self.paper.to_state(),
+                                                          "outcomes": {s: list(d) for s, d in self.outcomes.items() if d}})
             tmp = os.path.join(self.cfg.state_dir, "universe.json.tmp")
             with open(tmp, "w") as f:
                 json.dump({"symbols": list(self.all_symbols)}, f)
@@ -950,6 +960,17 @@ class Engine:
             # trade only once the model is trusted AND has shown real directional skill (not just tenure)
             tradeable = self.metrics.trusted and (self.metrics.hit_ema or 0.0) > cfg.min_hit_rate
             targets = {s: (self.latest[s]["side"] * self.latest[s]["size"] if tradeable else 0.0) for s in self.symbols}
+            # minimum hold: a fading signal does not close a young position; a reversed one does
+            for s in self.symbols:
+                t, prev = targets[s], self._last_target.get(s, 0.0)
+                if t == 0.0 and prev != 0.0:
+                    held = self.bar_index - self._held_since.get(s, self.bar_index)
+                    reversed_ = ((self.latest[s].get("score") or 0.0) > 0) != (prev > 0)
+                    if held < cfg.stock_min_hold_bars and not reversed_ and tradeable:
+                        targets[s] = t = prev
+                if t != 0.0 and prev == 0.0:
+                    self._held_since[s] = self.bar_index
+                self._last_target[s] = t
             put_quotes = {}                                    # a short is opened as a long put (bounded loss), priced off a live chain
             need = [s for s in self.symbols if targets[s] < 0 and s not in self.paper.puts]
             if need and self.schwab_auth.authenticated:
@@ -1074,7 +1095,11 @@ class Engine:
         q10, q25, q50, q75, q90 = qc
         iqr = max(q75 - q25, 1e-3)
         score = q50 / iqr
-        edge = abs(q50) - cfg.cost_bps
+        # the live spread is the real cost of a round trip; a flat cost_bps only sets the floor
+        pr = self.prices.get(s) or {}
+        bid, ask = pr.get("bid"), pr.get("ask")
+        spread_bps = (ask - bid) / ((ask + bid) / 2) * 1e4 if bid and ask and ask > bid > 0 else None
+        edge = abs(q50) - max(cfg.cost_bps, spread_bps or 0.0)
         conviction = abs(2 * p - 1)
         reasons = []
         if abs(score) < cfg.score_threshold:
@@ -1082,7 +1107,20 @@ class Engine:
         if conviction < 2 * cfg.prob_margin:
             reasons.append(f"direction is near a coin flip ({p * 100:.0f}% up)")
         if edge <= 0:
-            reasons.append("the expected move does not cover trading cost")
+            reasons.append("the expected move does not cover trading cost" + (f" ({spread_bps:.0f} bps spread)" if spread_bps else ""))
+        if spread_bps is not None and spread_bps > cfg.max_spread_bps:
+            reasons.append(f"spread {spread_bps:.0f} bps is wider than the {cfg.max_spread_bps:.0f} bps limit")
+        px = pr.get("price") or (self.bars[s][-1].close if self.bars.get(s) else None)
+        if px and px < cfg.min_price:
+            reasons.append(f"price {px:.2f} is below the {cfg.min_price:.0f} floor")
+        # per-name skill: a name earns the right to trade with its own record, not the book's
+        judged = [o for o in (self.outcomes.get(s) or []) if o.get("hit") is not None]
+        if len(judged) < cfg.skill_min_n:
+            reasons.append(f"no track record on this name yet ({len(judged)}/{cfg.skill_min_n} calls)")
+        else:
+            hr = sum(1 for o in judged if o["hit"]) / len(judged)
+            if hr < cfg.min_hit_rate:
+                reasons.append(f"its record on this name is {hr * 100:.0f}% over {len(judged)} calls")
         if abs(q50) < cfg.move_floor_bps:
             reasons.append(f"expected move {abs(q50):.0f} bps is below the {cfg.move_floor_bps:.0f} bps floor")
         bar = self.bars[s][-1] if self.bars.get(s) else None
@@ -1094,12 +1132,21 @@ class Engine:
             reasons.append("shorts are puts, and options only trade in regular hours")
         if (score > 0) != (p > 0.5):
             reasons.append("its trend and direction signals disagree")
-        side = 0 if reasons else (1 if score > 0 else -1)
+        # confirmation: the same side has to persist before the book acts on it
+        raw_side = 0 if reasons else (1 if score > 0 else -1)
+        prev = self._streak.get(s)
+        run = prev[1] + 1 if prev and prev[0] == raw_side else 1
+        self._streak[s] = (raw_side, run)
+        if raw_side and run < cfg.confirm_bars:
+            reasons.append(f"waiting for the signal to persist ({run}/{cfg.confirm_bars} bars)")
+        side = 0 if reasons else raw_side
         # Compounding-oriented sizing: allocate by risk-adjusted edge (|q50|/IQR = |score|, a
         # Sharpe-like fractional-Kelly proxy), so capital concentrates where edge-per-unit-risk is
         # highest -- the direction/conviction checks above still gate entry. Fractional and hard-capped,
         # because edge estimates are noisy and drawdowns erode compounding faster than wins build it.
         size = cfg.max_size * min(1.0, cfg.kelly_fraction * abs(score)) if side else 0.0
+        if side and cfg.size_by_coverage and m.coverage_ema is not None:
+            size *= max(0.25, min(1.0, m.coverage_ema / 0.8))   # overconfident bands -> smaller positions
         why = "holding: " + "; ".join(reasons) if reasons else f"leaning in: {q50:+.0f} bps expected, {p * 100:.0f}% up / {p_down * 100:.0f}% down"
         fat_tails = p > 0.5 and p_down > 0.5
         width = q90 - q10

@@ -242,7 +242,15 @@ class Config:
     covered_call_otm: float = _env("COVERED_CALL_OTM", 0.05)   # target out-of-the-money fraction for the suggested covered-call strike
     covered_call_delta: float = _env("COVERED_CALL_DELTA", 0.30)  # target call delta (~assignment probability) for covered-call selection
     max_size: float = _env("MAX_SIZE", 1.0)
-    move_floor_bps: float = _env("MOVE_FLOOR_BPS", 8.0)     # min |expected move| (bps) to take a side; kills false confidence from flat/degenerate-IQR series
+    move_floor_bps: float = _env("MOVE_FLOOR_BPS", 8.0)
+    # Risk gates (policy only; the model is untouched). All live controls.
+    skill_min_n: int = _env("SKILL_MIN_N", 8)                # matured direction calls a name needs before it may trade
+    confirm_bars: int = _env("CONFIRM_BARS", 2)              # the same side must persist this many bars before entry
+    stock_min_hold_bars: int = _env("STOCK_MIN_HOLD_BARS", 6)  # a stock position is kept at least this long unless the signal reverses
+    max_spread_bps: float = _env("MAX_SPREAD_BPS", 25.0)     # names quoting wider than this do not trade; the live spread also replaces cost_bps when larger
+    min_price: float = _env("MIN_PRICE", 5.0)                # names under this price do not trade (penny names: fake spreads, fake fills)
+    size_by_coverage: bool = _env("SIZE_BY_COVERAGE", "1") not in ("0", "false", "no")  # scale size by band coverage / 0.8, so an overconfident model trades small
+    option_max_frac: float = _env("OPTION_MAX_FRAC", 0.02)   # premium per option position, as a fraction of equity     # min |expected move| (bps) to take a side; kills false confidence from flat/degenerate-IQR series
     min_hit_rate: float = _env("MIN_HIT_RATE", 0.5)         # only trade once directional skill (hit_ema) beats a coin flip
     paper_min_trade_frac: float = _env("PAPER_MIN_TRADE_FRAC", 0.015)  # skip paper rebalances smaller than this share of equity (anti-churn)
     put_min_hold_bars: int = _env("PUT_MIN_HOLD_BARS", 3)   # hold a paper put at least this many bars before closing (anti-churn)

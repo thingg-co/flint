@@ -15,7 +15,7 @@ from .options import bs_call, bs_put, years_to
 class PaperBook:
     def __init__(self, start: float = 100_000.0, cost_bps: float = 1.0, max_weight: float = 0.15,
                  min_trade_frac: float = 0.004, option_commission: float = 0.65, put_min_hold_s: float = 0.0,
-                 straddle_min_hold_s: float = 3600.0):
+                 straddle_min_hold_s: float = 3600.0, option_max_frac: float = 0.02):
         self.start = float(start)
         self.cash = float(start)
         self.cost_bps = float(cost_bps)
@@ -23,7 +23,8 @@ class PaperBook:
         self.min_trade_frac = float(min_trade_frac)  # skip rebalances smaller than this share of equity
         self.option_commission = float(option_commission)
         self.put_min_hold_s = float(put_min_hold_s)   # hold a put at least this long before closing (anti-churn)
-        self.straddle_min_hold_s = float(straddle_min_hold_s)  # give the forecast horizon time to play out
+        self.straddle_min_hold_s = float(straddle_min_hold_s)
+        self.option_max_frac = float(option_max_frac)   # premium per option position, as a share of equity  # give the forecast horizon time to play out
         self.pos: dict[str, float] = {}              # signed shares (longs only, in practice)
         self.avg: dict[str, float] = {}              # average entry price
         self.puts: dict[str, dict] = {}              # sym -> {contracts, strike, expiry_ts, entry_prem, iv}
@@ -47,7 +48,8 @@ class PaperBook:
         spot = self._px(s, prices) if pt else None
         if not pt or not spot:
             return 0.0
-        return bs_put(spot, pt["strike"], years_to(pt["expiry_ts"], now), pt["iv"]) * pt["contracts"] * 100.0
+        per = max(bs_put(spot, pt["strike"], years_to(pt["expiry_ts"], now), pt["iv"]), pt["strike"] - spot, 0.0)   # never below intrinsic
+        return per * pt["contracts"] * 100.0
 
     def _straddle_value(self, s, prices, now) -> float:
         st = self.straddles.get(s)
@@ -112,11 +114,11 @@ class PaperBook:
                 if cur > 0:                                 # close any long stock first
                     self._fill(s, cur, -cur, self._exec_price(s, -cur, ref, quotes), ts)
                 if s not in self.puts and s in put_quotes:
-                    self._open_put(s, eq * abs(w) * scale, ref, put_quotes[s], ts)
+                    self._open_put(s, eq * abs(w) * scale, ref, put_quotes[s], ts, eq)
                 # already holding a put -> hold it (marked); wanted-short-but-no-chain -> stay flat
         for s, frac in straddle_targets.items():
             if frac > 0 and s not in self.straddles and s in straddle_quotes:
-                self._open_straddle(s, eq * frac, straddle_quotes[s], ts)
+                self._open_straddle(s, eq * min(frac, self.option_max_frac), straddle_quotes[s], ts)
         for s in list(self.straddles):
             held = ts - self.straddles[s].get("opened", 0.0)
             if straddle_targets.get(s, 0.0) <= 0 and held >= self.straddle_min_hold_s:
@@ -157,12 +159,14 @@ class PaperBook:
                                 "shares": round(abs(delta), 2), "price": round(p, 4),
                                 "notional": round(abs(notional), 2)})
 
-    def _open_put(self, s, notional, spot, pq, ts) -> None:
+    def _open_put(self, s, notional, spot, pq, ts, eq: float | None = None) -> None:
         prem = pq.get("premium")
         if not prem or prem <= 0 or not spot:
             return
         dl = max(0.1, abs(pq.get("delta") or 0.5))          # size to delta-equivalent short exposure
         contracts = notional / (100.0 * spot * dl)
+        if eq:                                              # premium at risk capped as a share of equity
+            contracts = min(contracts, eq * self.option_max_frac / (prem * 100.0))
         if contracts < 0.01:
             return
         cost = contracts * prem * 100.0
@@ -170,8 +174,11 @@ class PaperBook:
         self.cash -= cost + fee
         self.option_fees += fee
         self.n_trades += 1
+        iv = float(pq.get("iv") or 0.0)
+        if not (0.05 <= iv <= 5.0):                        # a missing or absurd chain IV would mark the put at nonsense
+            iv = 0.8
         self.puts[s] = {"contracts": contracts, "strike": float(pq["strike"]), "expiry_ts": float(pq["expiry_ts"]),
-                        "entry_prem": float(prem), "iv": float(pq["iv"]), "opened": ts}
+                        "entry_prem": float(prem), "iv": iv, "opened": ts}
         self.trades.appendleft({"t": ts, "sym": s, "side": "buy put", "shares": round(contracts, 2),
                                 "price": round(prem, 2), "notional": round(cost, 2),
                                 "note": f"P{pq['strike']:.0f} {self._exp(pq['expiry_ts'])}"})
@@ -180,7 +187,8 @@ class PaperBook:
         pt = self.puts.pop(s, None)
         if not pt:
             return
-        val = bs_put(spot, pt["strike"], years_to(pt["expiry_ts"], ts), pt["iv"]) * pt["contracts"] * 100.0
+        per = max(bs_put(spot, pt["strike"], years_to(pt["expiry_ts"], ts), pt["iv"]), pt["strike"] - spot, 0.0)
+        val = per * pt["contracts"] * 100.0
         fee = pt["contracts"] * self.option_commission
         self.cash += val - fee
         self.option_fees += fee
