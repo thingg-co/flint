@@ -1110,9 +1110,6 @@ class Engine:
             reasons.append("the expected move does not cover trading cost" + (f" ({spread_bps:.0f} bps spread)" if spread_bps else ""))
         if spread_bps is not None and spread_bps > cfg.max_spread_bps:
             reasons.append(f"spread {spread_bps:.0f} bps is wider than the {cfg.max_spread_bps:.0f} bps limit")
-        px = pr.get("price") or (self.bars[s][-1].close if self.bars.get(s) else None)
-        if px and px < cfg.min_price:
-            reasons.append(f"price {px:.2f} is below the {cfg.min_price:.0f} floor")
         # per-name skill: a name earns the right to trade with its own record, not the book's
         judged = [o for o in (self.outcomes.get(s) or []) if o.get("hit") is not None]
         if len(judged) < cfg.skill_min_n:
@@ -1126,6 +1123,9 @@ class Engine:
         bar = self.bars[s][-1] if self.bars.get(s) else None
         if not (bar and bar.volume > 0):
             reasons.append("no live trade this bar (stale/flat price)")
+        px = pr.get("price") or (self.bars[s][-1].close if self.bars.get(s) else None)
+        if px and px > 0 and (bar and bar.volume > 0 or pr.get("price")) and px < cfg.min_price:   # a real quote or a traded bar, never a flat-seeded zero
+            reasons.append(f"price {px:.2f} is below the {cfg.min_price:.0f} floor")
         if not self._stock_session():
             reasons.append("outside trading hours")
         elif score < 0 and not self._regular_session():

@@ -34,7 +34,7 @@ class PaperBook:
         self.option_fees = 0.0
         self.n_trades = 0
         self.spread_cost = 0.0
-        self.trades: deque = deque(maxlen=250)
+        self.trades: deque = deque(maxlen=1000)      # a whole session's fills; the API returns all of them
         self.curve: deque = deque(maxlen=3000)
         self.last: dict[str, float] = {}
         self.started = None
@@ -329,4 +329,4 @@ class PaperBook:
                 "n_trades": self.n_trades, "started": self.started, "n_puts": len(self.puts),
                 "n_straddles": len(self.straddles),
                 "sharpe": round(sharpe, 3), "max_drawdown": round(mdd * 100, 2),
-                "positions": positions, "trades": list(self.trades)[:50], "curve": list(self.curve)}
+                "positions": positions, "trades": list(self.trades), "curve": list(self.curve)}
