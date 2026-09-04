@@ -427,7 +427,9 @@ class Engine:
         return {"phase": self.status, "feed": ", ".join(active) or "none", "providers": providers,
                 "started": self.started, "now": time.time(), "bar_index": self.bar_index,
                 "pending": len(self.pending), "learning": self.learning_enabled, "subscribers": len(self.subs),
-                "market_status": self.market_status}
+                "market_status": self.market_status,
+                "stalled": bool(getattr(self, "_stalled", False)),
+                "last_bar_age": round(time.time() - getattr(self, "_last_row_at", time.time()))}
 
     def controls(self) -> dict:
         return {k: getattr(self.cfg, k) for k in TUNABLE} | {"learning": self.learning_enabled, "burry": self.burry_enabled, "brief_enabled": self.brief_enabled}
@@ -868,11 +870,42 @@ class Engine:
         if live:
             self.tick_counts[t.symbol] += 1
 
+    STALL_BARS = 3   # no bar for this many intervals while the market is open = no source is delivering trades
+
     async def _clock(self) -> None:
+        self._last_row_at = time.time()
+        self._stalled = False
         while True:
             await asyncio.sleep(0.25)
             for row in self.builder.roll(time.time()):
-                await self._process_row(row)
+                try:
+                    await self._process_row(row)
+                except Exception:  # noqa: BLE001 -- one bad bar must not kill the clock for the rest of the session
+                    log.exception("bar #%d failed; the clock keeps running", self.bar_index)
+                    self.trace.emit("system", f"bar #{self.bar_index} failed; see the log", "warn")
+                self._last_row_at = time.time()
+                if self._stalled:
+                    self._stalled = False
+                    self.trace.emit("system", "bars are forming again", "info")
+            self._check_stall(time.time())
+
+    def _check_stall(self, now: float) -> None:
+        """Quotes can keep every price ticking while no candle forms (2026-09-04: the one trade
+        websocket died and Flint sat blind all session). Say so, loudly, once per stall."""
+        gap = now - self._last_row_at
+        if self._stalled or gap < self.STALL_BARS * self.cfg.bar_seconds:
+            return
+        open_now = self.market_status.get("isOpen")
+        if open_now is None:
+            open_now = clock.regular_session()
+        if not open_now:
+            return
+        self._stalled = True
+        srcs = ", ".join(f"{p['id']} ({p.get('note') or 'ok'})" for p in self.sources.status() if p.get("enabled") and p.get("ticks"))
+        msg = (f"no bar for {gap / 60:.0f} minutes while the market is open: prices tick but no source is "
+               f"delivering trades, so nothing forecasts or trades. Sources: {srcs}")
+        log.warning(msg)
+        self.trace.emit("system", msg, "warn")
 
     async def _ticker(self) -> None:
         period = 1.0 / max(self.cfg.tick_hz, 0.2)
