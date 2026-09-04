@@ -3,6 +3,8 @@ Description=Start Flint market model before market open
 
 [Service]
 Type=oneshot
+# Skip when Flint is already up: a restart re-runs warmup and resets the trusted count.
+ExecCondition=/bin/sh -c '! ss -ltn | grep -q ":8000 "'
 ExecStart=%h/.local/bin/flint-start
 WorkingDirectory=%h/Development/flint
 

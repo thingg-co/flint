@@ -32,9 +32,10 @@ change actually requires it.
 
 On the Spark (192.168.1.15), a systemd user timer starts Flint each weekday at 19:45 local
 (08:45 ET, 45 minutes before the 09:30 ET market open) via `deploy/spark/flint.service` and
-`flint.timer`. The `install.sh` script in that directory handles the one-time setup (it checks
-for `loginctl enable-linger` and prints the command if missing). The timer unloads any
-llama-server unit before starting Flint, so daytime cl sessions end cleanly at 19:45.
+`flint.timer`, and does nothing when Flint is already listening on :8000, so a running model is
+never restarted. The `install.sh` script in that directory handles the one-time setup (it checks
+for `loginctl enable-linger` and prints the command if missing). A start unloads any
+llama-server unit first, so a daytime cl session ends at 19:45 unless Flint is already up.
 
 ## Layout
 
