@@ -4,14 +4,14 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+from pathlib import Path
 
 
 def _schwab_auth() -> None:
     """Interactive one-time Schwab OAuth login to mint a refresh token."""
     import asyncio
-    import os
     import webbrowser
-    from urllib.parse import urlparse, parse_qs, unquote
+    from urllib.parse import parse_qs, urlparse, unquote
 
     from .config import Config
     from .schwab import SchwabAuth
@@ -57,7 +57,6 @@ def _schwab_auth() -> None:
 def _etrade_auth() -> None:
     """Interactive one-time E*TRADE OAuth 1.0a login (out-of-band verifier code)."""
     import asyncio
-    import os
     import webbrowser
 
     from .config import Config
@@ -102,6 +101,72 @@ def _etrade_auth() -> None:
     print("The E*TRADE source is now enabled for equity symbols. Start flint normally: `uv run flint`.")
 
 
+def _check() -> None:
+    """Print what a start would do without loading a model or opening the port."""
+    import json
+    import sys
+
+    from .autotune import (
+        NotEnoughMemory,
+        _check_start_memory,
+        free_memory_gb,
+        other_gpu_tenants,
+        pick_device,
+    )
+    from .config import Config
+    from .features import N_FEATURES
+
+    cfg = Config()
+    device = pick_device(cfg.device)
+
+    # Device
+    print(f"device: {device}")
+
+    # Free memory
+    free_gb = free_memory_gb(device)
+    print(f"free memory: {free_gb:.1f} GB" if free_gb is not None else "free memory: unknown")
+
+    # Other GPU tenants (llama-server units)
+    tenants = other_gpu_tenants()
+    if tenants:
+        print(f"llama-server units: {', '.join(tenants)}")
+    else:
+        print("llama-server units: none")
+
+    # Check for cached machine.json
+    cache_path = Path(cfg.state_dir) / "machine.json"
+    if cache_path.exists():
+        try:
+            c = json.loads(cache_path.read_text())
+            choice = c.get("choice", {})
+            preset = choice.get("preset", "unknown")
+            params = choice.get("params", 0)
+            ms_per_step = choice.get("ms_per_step", 0)
+            peak_gb = choice.get("peak_gb", 0)
+
+            print(f"cache exists: {cache_path}")
+            print(f"  preset: {preset}")
+            print(f"  params: {params / 1e6:.1f}M")
+            print(f"  ms_per_step: {ms_per_step}")
+            print(f"  peak_gb: {peak_gb:.1f}")
+
+            # Check memory and print verdict
+            try:
+                _check_start_memory(cfg, N_FEATURES, choice, say=print)
+                print("verdict: would start")
+            except NotEnoughMemory as e:
+                print(f"verdict: {e}")
+                sys.exit(2)
+        except (OSError, ValueError, KeyError):
+            print(f"cache exists: {cache_path} (read error)")
+            print("next start: will run autotune")
+            return
+    else:
+        print(f"cache: {cache_path} does not exist")
+        print("next start: will run autotune ladder")
+        print(f"free memory for autotune: {free_gb:.1f} GB" if free_gb is not None else "free memory for autotune: unknown")
+
+
 def main() -> None:
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "schwab-auth":
@@ -109,6 +174,9 @@ def main() -> None:
         return
     if len(sys.argv) > 1 and sys.argv[1] == "etrade-auth":
         _etrade_auth()
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "check":
+        _check()
         return
     ap = argparse.ArgumentParser(prog="flint", description="continuously learning market model with a live dashboard")
     ap.add_argument("--feed", choices=["auto", "coinbase", "sim"], help="market data source (default: auto)")
