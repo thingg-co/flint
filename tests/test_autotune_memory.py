@@ -64,8 +64,8 @@ def test_free_memory_gb_cpu_unreadable_meminfo(monkeypatch):
         return open(*args, **kwargs)
 
     monkeypatch.setattr('builtins.open', mock_open)
+    monkeypatch.setattr('flint.autotune.sys.platform', 'linux')   # a Mac would fall back to sysctl
 
-    # For CPU, we don't need to mock anything else
     result = free_memory_gb("cpu")
     assert result is None
 
