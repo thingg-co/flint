@@ -129,7 +129,12 @@ flint/news.py      news hub: headless-browser skimmer + Alpha Vantage sentiment
 flint/engine.py    orchestration, policy + council overlay, universe, metrics, controls
 flint/server.py    FastAPI app, websocket, control + keys endpoints
 web/               dashboard (no build step, plain HTML/CSS/JS)
+tests/             pytest suite: risk rules, gates, checkpoints, bars, features, sources, routes
 ```
+
+`uv run pytest -q tests` runs the suite without a model or a feed. `uv run flint check` reports
+what a start would do on this machine (device, free memory, the cached model size) and exits
+non-zero when the model would not fit.
 
 ## License
 
