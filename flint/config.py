@@ -217,6 +217,7 @@ class Config:
     lr: float = _env("LR", 5e-4)
     weight_decay: float = _env("WEIGHT_DECAY", 1e-2)
     label_smoothing: float = _env("LABEL_SMOOTHING", 0.1)   # softens the P(up)/P(down) targets so the net cannot claim ~99% certainty
+    label_cap_bps: float = _env("LABEL_CAP_BPS", 2000.0)    # cap on label magnitude in bps (0 = off); treats labels exceeding cap as carry-forward bars
     direction_threshold_bps: float = _env("DIRECTION_THRESHOLD_BPS", 10.0)  # deadband: P(up)=P(ret>+t), P(down)=P(ret<-t); the gap is P(flat)
     batch_size: int = _env("BATCH_SIZE", 16)   # step time grows ~linearly with batch (activation-bandwidth bound, even on a GPU), so a bigger batch only buys a smaller model under the step budget
     steps_per_label: int = _env("STEPS_PER_LABEL", 2)

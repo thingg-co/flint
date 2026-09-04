@@ -96,6 +96,14 @@ class OnlineLearner:
 
     def add(self, x: np.ndarray, y: np.ndarray, mask: np.ndarray | None = None) -> None:
         self.rx[self.ptr] = x
+        # Apply label cap: mask out symbols with labels exceeding the cap (treat as carry-forward bar)
+        cap = self.cfg.label_cap_bps
+        if cap > 0:
+            label_mask = np.abs(y) <= cap
+            if mask is None:
+                mask = label_mask.astype(np.float32)
+            else:
+                mask = mask * label_mask.astype(np.float32)
         self.ry[self.ptr] = y
         self.rmask[self.ptr] = 1.0 if mask is None else mask
         self.ptr = (self.ptr + 1) % self.rx.shape[0]
