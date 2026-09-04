@@ -1,0 +1,10 @@
+[Unit]
+Description=Start Flint market model before market open
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/flint-start
+WorkingDirectory=%h/Development/flint
+
+[Install]
+WantedBy=default.target
