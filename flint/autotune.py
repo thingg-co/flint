@@ -108,17 +108,44 @@ def _memory_message(need_gb: float, free_gb: float, what: str) -> str:
     return msg
 
 
-def _peak_gb(device: str) -> float:
-    if device == "cuda":
-        return torch.cuda.max_memory_allocated() / 1e9
-    if device == "mps":
-        return torch.mps.driver_allocated_memory() / 1e9
-    return 0.0
+class PeakMemory:
+    """Track peak memory allocation across devices.
 
+    On CUDA, uses torch.cuda's built-in peak tracking.
+    On MPS, samples repeatedly and tracks the maximum since reset.
+    On CPU, is a no-op (returns 0).
+    """
 
-def _reset_peak(device: str) -> None:
-    if device == "cuda":
-        torch.cuda.reset_peak_memory_stats()
+    def __init__(self, device: str):
+        self.device = device
+        self.peak = 0.0
+        self.reset()
+
+    def reset(self) -> None:
+        """Reset peak tracking. On CUDA, this resets the internal stats."""
+        self.peak = 0.0
+        if self.device == "cuda":
+            torch.cuda.reset_peak_memory_stats()
+
+    def sample(self) -> None:
+        """Sample current memory usage and update peak.
+
+        On MPS, we must sample repeatedly because driver_allocated_memory()
+        returns the current allocation, not the peak.
+        """
+        if self.device == "mps":
+            current = torch.mps.driver_allocated_memory() / 1e9
+            self.peak = max(self.peak, current)
+        # On CUDA, we read max_memory_allocated() directly in gb()
+        # On CPU, there's nothing to track
+
+    def gb(self) -> float:
+        """Return peak memory in GB."""
+        if self.device == "cuda":
+            return torch.cuda.max_memory_allocated() / 1e9
+        if self.device == "mps":
+            return self.peak
+        return 0.0
 
 
 def pick_device(pref: str = "auto") -> str:
@@ -165,7 +192,7 @@ def _bench(device: str, preset, n_assets: int, n_features: int, batch: int, n_qu
     opt = torch.optim.AdamW(m.parameters(), 1e-3)
     x = torch.randn(batch, n_assets, win, n_features, device=dev)
     y = torch.randn(batch, n_assets, device=dev)
-    _reset_peak(device)
+    pk = PeakMemory(device)
 
     def step():
         with autocast(device):
@@ -174,6 +201,7 @@ def _bench(device: str, preset, n_assets: int, n_features: int, batch: int, n_qu
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
+        pk.sample()
     step(); step()
     _sync(device)
     t = time.time()
@@ -182,7 +210,7 @@ def _bench(device: str, preset, n_assets: int, n_features: int, batch: int, n_qu
     _sync(device)
     ms = (time.time() - t) / iters * 1000
     n = sum(p.numel() for p in m.parameters())
-    peak = _peak_gb(device)
+    peak = pk.gb()
     del m, opt, x, y
     if device == "mps":
         torch.mps.empty_cache()
