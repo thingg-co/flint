@@ -11,105 +11,42 @@ from flint.config import Config
 
 def make_fake(**overrides):
     """Create a fake Engine instance with all attributes _suggest touches."""
-    fake = types.SimpleNamespace()
-    cfg = Config()
-    cfg.cost_bps = 8.0
-    cfg.confirm_bars = 2
-    cfg.skill_min_n = 8
-    cfg.min_hit_rate = 0.5
-    cfg.max_spread_bps = 25.0
-    cfg.min_price = 5.0
-    cfg.size_by_coverage = True
-    cfg.extended_hours = False
-    cfg.move_floor_bps = 8.0
-    cfg.score_threshold = 0.35
-    cfg.prob_margin = 0.06
-    cfg.kelly_fraction = 0.15
-    cfg.max_size = 1.0
-    cfg.straddle_enabled = True
-    cfg.straddle_band_bps = 120.0
-    cfg.straddle_max = 3
-    cfg.straddle_min_coverage = 0.55
-    cfg.straddle_hold_bars = 12
-    cfg.muted_symbols = ""
-    cfg.burry_enabled = False
+    # Build defaults dict with all attributes
+    defaults = {
+        "cfg": Config(),
+        "metrics": types.SimpleNamespace(
+            trusted=True, hit_ema=0.6, coverage_ema=0.8, band_scale=1.0, p_scale=1.0
+        ),
+        "prices": {"AAPL": {"price": 200.0, "bid": 199.9, "ask": 200.1, "ts": 0.0}},
+        "bars": {"AAPL": collections.deque([Bar(
+            ts=1_800_000_000.0, open=200.0, high=200.5, low=199.8, close=200.0,
+            volume=1000.0, buy_volume=600.0, sell_volume=400.0, trades=15, spread_bps=5.0
+        )])},
+        "outcomes": {"AAPL": [{"hit": True}] * 7 + [{"hit": False}] * 3},
+        "_streak": {},
+        "muted": set(),
+        "burry_enabled": False,
+        "crowding": {},
+        "guru_tilt": {},
+        "_calibrate": lambda q, p_raw: ([float(v) for v in q], p_raw),
+        "_temper": lambda p: p,
+        "_regular_session": lambda: True,
+        "_extended_session": lambda: True,
+        "_stock_session": lambda: True,
+    }
 
-    # Apply overrides to cfg
-    if 'cfg' in overrides:
-        for k, v in overrides.pop('cfg').items():
-            setattr(cfg, k, v)
+    # Apply cfg overrides: merge dict onto Config with setattr
+    if "cfg" in overrides:
+        cfg_overrides = overrides.pop("cfg")
+        for k, v in cfg_overrides.items():
+            setattr(defaults["cfg"], k, v)
+
+    # Apply non-cfg overrides
     for k, v in overrides.items():
-        if k == 'cfg':
-            continue
-        if k == 'metrics':
-            continue
-        if k == 'prices':
-            continue
-        if k == 'bars':
-            continue
-        if k == 'outcomes':
-            continue
-        if k == '_streak':
-            continue
-        if k == 'muted':
-            continue
-        if k == 'burry_enabled':
-            continue
-        if k == 'crowding':
-            continue
-        if k == 'guru_tilt':
-            continue
-        if k == '_calibrate':
-            continue
-        if k == '_temper':
-            continue
-        if k == '_regular_session':
-            continue
-        if k == '_extended_session':
-            continue
-        if k == '_stock_session':
-            continue
-        setattr(fake, k, v)
+        defaults[k] = v
 
-    fake.cfg = cfg
-    fake.metrics = types.SimpleNamespace(
-        trusted=True,
-        hit_ema=0.6,
-        coverage_ema=0.8,
-        band_scale=1.0,
-        p_scale=1.0
-    )
-    fake.prices = {"AAPL": {"price": 200.0, "bid": 199.9, "ask": 200.1, "ts": 0.0}}
-    bar = Bar(
-        ts=1_800_000_000.0,
-        open=200.0,
-        high=200.5,
-        low=199.8,
-        close=200.0,
-        volume=1000.0,
-        buy_volume=600.0,
-        sell_volume=400.0,
-        trades=15,
-        spread_bps=5.0
-    )
-    fake.bars = {"AAPL": collections.deque([bar])}
-    fake.outcomes = {"AAPL": [{"hit": True}] * 7 + [{"hit": False}] * 3}
-    fake._streak = {}
-    fake.muted = set()
-    fake.burry_enabled = False
-    fake.crowding = {}
-    fake.guru_tilt = {}
-    fake._calibrate = lambda q, p_raw: ([float(v) for v in q], p_raw)
-    fake._temper = lambda p: p
-    fake._regular_session = lambda: True
-    fake._extended_session = lambda: True
-    fake._stock_session = lambda: True
-
-    # Apply remaining overrides
-    for k, v in overrides.items():
-        setattr(fake, k, v)
-
-    return fake
+    # Return SimpleNamespace with merged defaults
+    return types.SimpleNamespace(**defaults)
 
 
 def make_pred(q, p_up, p_down):
