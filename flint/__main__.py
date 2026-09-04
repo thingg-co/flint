@@ -101,6 +101,144 @@ def _etrade_auth() -> None:
     print("The E*TRADE source is now enabled for equity symbols. Start flint normally: `uv run flint`.")
 
 
+def _replay() -> None:
+    """Print a short report about the saved training state without starting the server."""
+    import sys
+    import os
+    from datetime import datetime
+    from pathlib import Path
+
+    import numpy as np
+    import torch
+
+    from .config import Config
+
+    # Read state_dir from environment first, then default to "state"
+    state_dir_str = os.environ.get("FLINT_STATE_DIR", "state")
+    state_dir = Path(state_dir_str)
+
+    cfg = Config()
+    model_path = state_dir / "model.pt"
+    replay_path = state_dir / "replay.npz"
+
+    # Check if model.pt exists
+    if not model_path.exists():
+        print(f"model.pt: {model_path} does not exist")
+        print("No checkpoint found")
+        sys.exit(1)
+
+    # Try to load the checkpoint
+    try:
+        ck = torch.load(model_path, map_location="cpu", weights_only=False)
+    except Exception as e:
+        print(f"model.pt: {model_path} exists but is unreadable ({type(e).__name__}: {e})")
+        print("Corrupt checkpoint")
+        sys.exit(2)
+
+    # Load replay.npz
+    replay_info = None
+    if replay_path.exists():
+        try:
+            z = np.load(replay_path, allow_pickle=False)
+            replay_info = {
+                "x_shape": z["x"].shape,
+                "y_shape": z["y"].shape,
+                "mask_shape": z["mask"].shape if "mask" in z else None,
+                "ptr": int(z.get("ptr", 0)),
+            }
+        except Exception as e:
+            replay_info = {"error": str(e)}
+
+    # Extract saved info
+    saved_shape = tuple(ck.get("shape", ()))
+    saved_symbols = ck.get("symbols", [])
+    saved_steps = ck.get("steps", 0)
+    saved_labels = ck.get("labels", 0)
+
+    # Current config
+    current_symbols = cfg.symbols
+    current_shape = (cfg.n_assets, cfg.window, 3)  # n_assets, window, n_features
+
+    # Check if checkpoint would load or backup
+    shape_matches = saved_shape == current_shape
+    symbols_match = saved_symbols == current_symbols
+    would_load = shape_matches and symbols_match
+
+    print(f"state_dir: {state_dir}")
+    print(f"model.pt: {model_path} exists")
+
+    # File age in hours
+    try:
+        mtime = model_path.stat().st_mtime
+        age_hours = (datetime.now().timestamp() - mtime) / 3600
+        print(f"checkpoint age: {age_hours:.1f} hours")
+    except Exception:
+        print("checkpoint age: unknown")
+
+    print(f"saved symbols: {len(saved_symbols)}")
+    print(f"saved shape: {saved_shape}")
+    print(f"current symbols: {len(current_symbols)}")
+    print(f"current shape: {current_shape}")
+
+    if would_load:
+        print("config match: yes — would load checkpoint")
+    else:
+        print("config match: no — would back up to model.pt.bak")
+
+    print(f"steps: {saved_steps}")
+    print(f"labels: {saved_labels}")
+
+    if replay_info:
+        if "error" in replay_info:
+            print(f"replay.npz: unreadable ({replay_info['error']})")
+            print("replay windows: 0")
+            print("zero labels: N/A")
+            print("label mean (bps): N/A")
+            print("label std (bps): N/A")
+        else:
+            x_shape = replay_info["x_shape"]
+            # replay_size = x_shape[0], windows stored = size (capped at replay_size)
+            replay_size = cfg.replay_size
+            windows_stored = min(x_shape[0], replay_size)
+            print(f"replay.npz: {replay_path} exists")
+            print(f"replay windows: {windows_stored}")
+
+            # Calculate zero label fraction and stats
+            try:
+                y = z["y"][:x_shape[0]]
+                total_labels = y.size
+                zero_count = np.sum(y == 0.0)
+                zero_frac = zero_count / total_labels if total_labels > 0 else 0
+
+                # Convert to bps for mean/std
+                y_bps = y[y != 0.0]  # exclude fake zeros for stats
+                if len(y_bps) > 0:
+                    y_bps = y_bps * 100  # convert to bps (returns are already in decimal form)
+                    label_mean = np.mean(y_bps)
+                    label_std = np.std(y_bps)
+                else:
+                    label_mean = 0.0
+                    label_std = 0.0
+
+                print(f"zero labels: {zero_count:,} / {total_labels:,} ({zero_frac * 100:.1f}%)")
+                print(f"label mean (bps): {label_mean:.2f}")
+                print(f"label std (bps): {label_std:.2f}")
+            except Exception as e:
+                print(f"label stats: could not compute ({e})")
+    else:
+        print("replay.npz: none")
+        print("replay windows: 0")
+        print("zero labels: N/A")
+        print("label mean (bps): N/A")
+        print("label std (bps): N/A")
+
+    if would_load:
+        sys.exit(0)
+    else:
+        # Even if config mismatch, we could read the checkpoint
+        sys.exit(0)
+
+
 def _check() -> None:
     """Print what a start would do without loading a model or opening the port."""
     import json
@@ -177,6 +315,9 @@ def main() -> None:
         return
     if len(sys.argv) > 1 and sys.argv[1] == "check":
         _check()
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "replay":
+        _replay()
         return
     ap = argparse.ArgumentParser(prog="flint", description="continuously learning market model with a live dashboard")
     ap.add_argument("--feed", choices=["auto", "coinbase", "sim"], help="market data source (default: auto)")
