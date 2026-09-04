@@ -653,8 +653,21 @@ function marketState() {
   return { label: "market closed", cls: "closed" };
 }
 
+// Quotes can keep every price moving while no candle forms; the engine flags that and the
+// dashboard must not look healthy when it happens.
+function renderStall(s) {
+  let el = $("#stall");
+  if (!el) {
+    el = document.createElement("div"); el.id = "stall"; el.className = "stall"; el.hidden = true;
+    document.body.prepend(el);
+  }
+  el.hidden = !s.stalled;
+  if (s.stalled) el.textContent = `No candle for ${Math.round((s.last_bar_age || 0) / 60)} minutes while the market is open: prices tick but no source is delivering trades, so nothing forecasts or trades.`;
+}
+
 function renderStatus() {
   const s = state.status || {};
+  renderStall(s);
   const phase = $("#phase");   // the phase pill is gone from the header; the session pill and loading bar carry it
   if (phase) { phase.textContent = s.phase || "?"; phase.className = "pill " + (s.phase === "live" ? "live" : s.phase === "error" ? "err" : "warn"); }
   $("#feed").textContent = "feed: " + (s.feed || "?");
@@ -1456,6 +1469,25 @@ document.addEventListener("click", e => {
   renderPaper();
 });
 document.addEventListener("DOMContentLoaded", () => { const b = $("#p-tr-more"); if (b) b.onclick = () => { paperTradesAll = !paperTradesAll; renderPaper(); }; });
+// Fills from before this process started are an earlier session's: the book persists across
+// restarts, and an old loss must not read as today's. Dim them, and mark the boundary once.
+function tradeRows(rows) {
+  const started = (state.status || {}).started || 0;
+  let divided = false;
+  return rows.map((t, i) => {
+    const earlier = t.t < started;
+    let divider = "";
+    if (earlier && !divided) {
+      divided = true;
+      const prevEarlier = i > 0 && rows[i - 1].t < started;
+      if (!prevEarlier) divider = `<div class="prow ptr pdivider"><span>earlier sessions</span></div>`;
+    }
+    return divider + `<div class="prow ptr${earlier ? " earlier" : ""}"><span>${fmtTime(t.t)}</span>` +
+      `<span class="${(t.side || "").startsWith("buy") ? "up" : "down"}">${esc(t.label)}</span>` +
+      `<span class="psym tk" data-sym="${esc(t.sym)}">${esc(base(t.sym))}</span><span class="c-qty">${t.shares}</span><span class="c-price">${fmtPrice(t.price)}</span><span>${t.notional != null ? fmtUSD(t.notional) : ""}</span></div>`;
+  }).join("");
+}
+
 function renderPaper() {
   const p = state.paper; if (!p || !$("#paper")) return;
   paintPaperEquity();
@@ -1497,9 +1529,7 @@ function renderPaper() {
   const more = $("#p-tr-more"); if (more) more.hidden = true;
   $("#p-trades").innerHTML = tr.length
     ? head("trades", [["t", "time"], ["label", "action"], ["sym", "sym"], ["shares", "qty", "c-qty"], ["price", "price", "c-price"], ["notional", "value"]]) +
-      srt(tr, "trades").map(t => `<div class="prow ptr"><span>${fmtTime(t.t)}</span>` +
-        `<span class="${(t.side || "").startsWith("buy") ? "up" : "down"}">${esc(t.label)}</span>` +
-        `<span class="psym tk" data-sym="${esc(t.sym)}">${esc(base(t.sym))}</span><span class="c-qty">${t.shares}</span><span class="c-price">${fmtPrice(t.price)}</span><span>${t.notional != null ? fmtUSD(t.notional) : ""}</span></div>`).join("")
+      tradeRows(srt(tr, "trades"))
     : `<div class="why">no trades yet${state.metrics && !state.metrics.trusted ? " — the model is still warming up" : ""}</div>`;
   drawEquityCurve(p);
 }
