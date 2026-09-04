@@ -259,6 +259,15 @@ def _replay() -> None:
         sys.exit(0)
 
 
+def _version() -> None:
+    """Print the installed package version and exit."""
+    try:
+        from importlib.metadata import version
+        print(version("flint"))
+    except Exception:
+        print("unknown")
+
+
 def _check() -> None:
     """Print what a start would do without loading a model or opening the port."""
     import json
@@ -338,6 +347,9 @@ def main() -> None:
         return
     if len(sys.argv) > 1 and sys.argv[1] == "replay":
         _replay()
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "version":
+        _version()
         return
     ap = argparse.ArgumentParser(prog="flint", description="continuously learning market model with a live dashboard")
     ap.add_argument("--feed", choices=["auto", "coinbase", "sim"], help="market data source (default: auto)")
