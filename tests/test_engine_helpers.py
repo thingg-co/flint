@@ -143,7 +143,7 @@ class TestRegularSession:
 
     @pytest.fixture
     def patch_datetime(self, monkeypatch):
-        """Patch flint.engine.datetime to return a fixed time."""
+        """Patch flint.clock.datetime to return a fixed time."""
 
         def at(year, month, day, hour, minute):
             fake_dt = datetime(year, month, day, hour, minute, tzinfo=ZoneInfo("America/New_York"))
@@ -153,7 +153,7 @@ class TestRegularSession:
                 def now(cls, tz=None):
                     return fake_dt
 
-            monkeypatch.setattr(eng, "datetime", FakeDateTime)
+            monkeypatch.setattr(eng.clock, "datetime", FakeDateTime)
 
         return at
 
@@ -208,7 +208,7 @@ class TestExtendedSession:
 
     @pytest.fixture
     def patch_datetime(self, monkeypatch):
-        """Patch flint.engine.datetime to return a fixed time."""
+        """Patch flint.clock.datetime to return a fixed time."""
 
         def at(year, month, day, hour, minute):
             fake_dt = datetime(year, month, day, hour, minute, tzinfo=ZoneInfo("America/New_York"))
@@ -218,7 +218,7 @@ class TestExtendedSession:
                 def now(cls, tz=None):
                     return fake_dt
 
-            monkeypatch.setattr(eng, "datetime", FakeDateTime)
+            monkeypatch.setattr(eng.clock, "datetime", FakeDateTime)
 
         return at
 
@@ -276,7 +276,7 @@ class TestStockSession:
 
     @pytest.fixture
     def patch_datetime(self, monkeypatch):
-        """Patch flint.engine.datetime to return a fixed time."""
+        """Patch flint.clock.datetime to return a fixed time."""
 
         def at(year, month, day, hour, minute, extended_hours=False):
             fake_dt = datetime(year, month, day, hour, minute, tzinfo=ZoneInfo("America/New_York"))
@@ -286,7 +286,7 @@ class TestStockSession:
                 def now(cls, tz=None):
                     return fake_dt
 
-            monkeypatch.setattr(eng, "datetime", FakeDateTime)
+            monkeypatch.setattr(eng.clock, "datetime", FakeDateTime)
 
             # Mock session methods to return the actual time-based values for the patched time
             mins = hour * 60 + minute

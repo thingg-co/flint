@@ -28,6 +28,7 @@ from .etrade import ETradeAuth
 from .signals import SignalHub
 from .sources import AlphaVantage, SourceManager, asset_class
 from .trace import Trace
+from . import clock
 
 log = logging.getLogger(__name__)
 
@@ -1091,25 +1092,17 @@ class Engine:
     def _regular_session(self) -> bool:
         """Regular US equity session by the wall clock (9:30-16:00 ET, weekdays). Gates trading;
         a no-trade (volume 0) bar additionally covers holidays and early closes."""
-        now = datetime.now(ZoneInfo("America/New_York"))
-        if now.weekday() >= 5:
-            return False
-        mins = now.hour * 60 + now.minute
-        return 570 <= mins < 960
+        return clock.regular_session()
 
     def _extended_session(self) -> bool:
         """Schwab's extended sessions by the wall clock: 4:00-9:30 and 16:00-20:00 ET, weekdays.
         Stock only -- options do not trade here, so puts and straddles keep the regular gate."""
-        now = datetime.now(ZoneInfo("America/New_York"))
-        if now.weekday() >= 5:
-            return False
-        mins = now.hour * 60 + now.minute
-        return 240 <= mins < 570 or 960 <= mins < 1200
+        return clock.extended_session()
 
     def _stock_session(self) -> bool:
         """When a long-stock entry or exit is allowed: the regular session, plus the extended
         sessions when `extended_hours` is on."""
-        return self._regular_session() or (self.cfg.extended_hours and self._extended_session())
+        return clock.stock_session(self.cfg.extended_hours)
 
     def _suggest(self, i: int, s: str, pred: Prediction) -> dict:
         cfg = self.cfg
