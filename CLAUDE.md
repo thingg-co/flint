@@ -91,6 +91,12 @@ change actually requires it.
   same loss range; a two-minute compile on the first step after each start). Prediction and
   checkpoints use the uncompiled module, so the switch never changes what is saved. The autotune cache key includes the precision mode. Step time grows about linearly
   with batch size on a bandwidth-bound GPU, so a bigger batch only buys a smaller preset.
+- The autotune records each rung's peak memory and refuses to start (`NotEnoughMemory`, exit 2)
+  when the box cannot hold the tuned model plus the replay buffer, naming any `llama-server@*`
+  unit sharing the memory. A ladder cut short by memory is never cached, so a transient squeeze
+  cannot downgrade the model for good. On unified memory the kernel's MemAvailable is the truth;
+  CUDA's own free figure counts page cache as used. Exists because the 2026-09-04 5XL benchmark
+  next to an 84 GB llama-server hung the Spark.
 - The market radar keeps each name's market cap from the Yahoo screeners and fills a sector per
   symbol from Finnhub's company profile (industry folded into GICS-style sectors by `SECTOR_OF`),
   40 names per scan under the 60/min limit, persisted in `state/sectors.json`. The dashboard treemap
