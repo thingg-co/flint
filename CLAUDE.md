@@ -127,5 +127,13 @@ change actually requires it.
 - Inspect live state over the JSON API: `curl -s localhost:8000/api/state` (phase, metrics,
   bars, paper), plus `/api/sources`, `/api/signals`, `/api/keys`.
 - Frontend edits are static — hard-reload the tab, no restart. Backend edits need a restart.
+- `uv run flint check` prints what a start would do without loading a model or touching the port:
+  device, free memory, any llama-server unit on the same memory, the cached preset and its peak,
+  and whether the model plus replay fits. Exit 2 means a start would refuse. Run it with the same
+  `FLINT_*` environment the launcher uses, or the replay size and universe will be the defaults.
+- Tests: `uv run pytest -q tests`. They cover the memory guard, the paper book's defined-risk
+  rules, the policy gates in `_suggest`, checkpoint mismatch handling, bar building, features and
+  source failover, all without loading a model or opening a feed. Add a test when you touch one
+  of those.
 - Python ≥3.11, managed with uv. Brokerage logins: `uv run flint schwab-auth`,
   `uv run flint etrade-auth`.
