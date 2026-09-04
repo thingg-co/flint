@@ -1,0 +1,10 @@
+[Unit]
+Description=Timer to start Flint before US market open
+
+[Timer]
+OnCalendar=Mon..Fri 19:45
+Persistent=false
+Unit=flint.service
+
+[Install]
+WantedBy=timers.target

@@ -30,6 +30,12 @@ Every restart re-runs warmup and resets progress toward "trusted" (48 live, out-
 labels), and live labels only accrue while the market is open. Avoid restarting unless a
 change actually requires it.
 
+On the Spark (192.168.1.15), a systemd user timer starts Flint each weekday at 19:45 local
+(08:45 ET, 45 minutes before the 09:30 ET market open) via `deploy/spark/flint.service` and
+`flint.timer`. The `install.sh` script in that directory handles the one-time setup (it checks
+for `loginctl enable-linger` and prints the command if missing). The timer unloads any
+llama-server unit before starting Flint, so daytime cl sessions end cleanly at 19:45.
+
 ## Layout
 
 - `flint/engine.py` — orchestrator: bar clock, forecasting, online training, the periodic
