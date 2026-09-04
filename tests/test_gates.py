@@ -7,13 +7,20 @@ import numpy as np
 from flint.bars import Bar
 from flint.learner import Prediction
 from flint.config import Config
+from flint.engine import Engine
+
+KNOBS = dict(cost_bps=8.0, confirm_bars=2, skill_min_n=8, min_hit_rate=0.5, max_spread_bps=25.0, min_price=5.0,
+             size_by_coverage=True, extended_hours=False, move_floor_bps=8.0, score_threshold=0.35,
+             prob_margin=0.06, kelly_fraction=0.15, max_size=1.0)   # pinned so the tests ignore FLINT_* env
 
 
 def make_fake(**overrides):
     """Create a fake Engine instance with all attributes _suggest touches."""
-    # Build defaults dict with all attributes
+    cfg = Config()
+    for k, v in KNOBS.items():
+        setattr(cfg, k, v)
     defaults = {
-        "cfg": Config(),
+        "cfg": cfg,
         "metrics": types.SimpleNamespace(
             trusted=True, hit_ema=0.6, coverage_ema=0.8, band_scale=1.0, p_scale=1.0
         ),
@@ -183,6 +190,3 @@ class TestSuggestGates:
         assert result["action"] == "HOLD"
         assert result["muted"] is True
 
-
-# Import Engine after defining test classes so it can find them
-from flint.engine import Engine
