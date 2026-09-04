@@ -65,6 +65,31 @@ def _ema(prev: float | None, value: float, a: float) -> float:
     return value if prev is None else (1 - a) * prev + a * value
 
 
+def summarize_holds(suggestions: dict[str, dict]) -> list[dict]:
+    """Summarize why Flint is holding for each symbol into a count-by-reason list.
+
+    Takes per-symbol suggestion dicts (with "reasons" and "muted" keys) and returns
+    a list of {"reason": label, "n": count} sorted by count descending. Parenthesised
+    suffixes like "(3/8 calls)" are stripped from the label.
+
+    A muted symbol (muted: True with reasons ["muted"]) counts under "muted".
+    """
+    counts: dict[str, int] = {}
+    for sym, sug in suggestions.items():
+        if not isinstance(sug, dict):
+            continue
+        if sug.get("muted") is True and sug.get("reasons") == ["muted"]:
+            counts["muted"] = counts.get("muted", 0) + 1
+            continue
+        reasons = sug.get("reasons") or []
+        for r in reasons:
+            # Strip parenthesised suffix: "no track record (3/8 calls)" -> "no track record"
+            label = re.sub(r"\s*\([^)]*\)\s*$", "", r).strip()
+            counts[label] = counts.get(label, 0) + 1
+    # Sort by count descending
+    return [{"reason": r, "n": n} for r, n in sorted(counts.items(), key=lambda x: -x[1])]
+
+
 KEY_SERVICES = [
     {"id": "alphavantage", "name": "Alpha Vantage", "file": "keys", "kind": "token",
      "url": "https://www.alphavantage.co/support/#api-key",
@@ -521,6 +546,7 @@ class Engine:
                       "safety": self.cfg.burry_safety},
             "classes": {s: asset_class(s) for s in self.all_symbols},
             "muted": sorted(self.muted),
+            "holds": summarize_holds(self.latest),
             "universe": self.all_symbols,
             "prices": self.prices,
             "bars": {s: [b.to_json() for b in self.bars.get(s, ())] for s in self.symbols},
@@ -1170,7 +1196,7 @@ class Engine:
                 "straddle": straddle and not muted, "width": round(width, 1),
                 "size": round(size, 3), "score": score, "p_up": p, "p_raw": p_raw, "p_down": p_down, "p_down_raw": p_down_raw, "q": qc,
                 "q_raw": [float(v) for v in pred.q[i]], "iqr": iqr, "band_scale": m.band_scale, "p_scale": m.p_scale,
-                "trusted": m.trusted, "why": why,
+                "trusted": m.trusted, "why": why, "reasons": reasons,
                 "crowding": round(self.crowding.get(s, 0.0), 3), "guru_tilt": round(self.guru_tilt.get(s, 0.0), 3),
                 "base_action": "BUY" if base_side > 0 else "SELL" if base_side < 0 else "HOLD",
                 "overlay": overlay["notes"] if overlay else [], "muted": muted}

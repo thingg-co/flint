@@ -625,6 +625,14 @@ function renderLog() {
     || `<li class="empty"><span>no resolved suggestions yet</span></li>`;
 }
 
+function renderHolds() {
+  const holds = state.holds || [];
+  const el = $("#holds-list");
+  if (!el) return;
+  el.closest(".row").hidden = !holds.length;          // nothing blocked: no panel
+  el.innerHTML = holds.slice(0, 8).map(r => `<li><span class="reason">${esc(r.reason)}</span><span class="count">${r.n}</span></li>`).join("");
+}
+
 function marketState() {
   // Prefer Finnhub's holiday-aware status; fall back to the Eastern clock if it hasn't loaded.
   const ms = (state.status || {}).market_status;
@@ -712,7 +720,7 @@ function renderAll() {
   syncControls();
   if (document.body.dataset.view === "dashboard") {
     state.config.symbols.forEach(updateCard);
-    renderTiles(); renderSparks(); renderGate(); renderArch(); renderLog(); renderMarket(); renderWatch(); reorderCards(true);
+    renderTiles(); renderSparks(); renderGate(); renderArch(); renderLog(); renderHolds(); renderMarket(); renderWatch(); reorderCards(true);
   }
   renderNews();
   if (document.body.dataset.view === "consoles") { renderUniverse(); renderKeys(); renderSources(); renderSignals(); renderRadar(); renderBriefCtl(); }
@@ -1779,7 +1787,7 @@ function handle(msg) {
       Object.assign(state, { config: msg.config, status: msg.status, controls: msg.controls, prices: msg.prices, bars: msg.bars,
         latest: msg.latest, gate: msg.gate, outcomes: msg.outcomes, metrics: msg.metrics, history: msg.history, log: msg.log, news: msg.news,
         sources: msg.sources || [], news_sources: msg.news_sources || [], providers: (msg.status && msg.status.providers) || {}, classes: msg.classes || {},
-        signals: msg.signals || null, signal_providers: msg.signal_providers || [], brief: msg.brief || null, paper: msg.paper || null, portfolio: msg.portfolio || null, burry: msg.burry || { enabled: true }, keys: msg.keys || [], muted: msg.muted || [], universe: msg.universe || (msg.config ? msg.config.symbols : []) });
+        signals: msg.signals || null, signal_providers: msg.signal_providers || [], brief: msg.brief || null, paper: msg.paper || null, portfolio: msg.portfolio || null, burry: msg.burry || { enabled: true }, keys: msg.keys || [], muted: msg.muted || [], universe: msg.universe || (msg.config ? msg.config.symbols : []), holds: msg.holds || [] });
       buildCards(); buildConsoles(); buildControls(); applyMuted();
       Object.values(msg.trace || {}).forEach(evs => evs.forEach(ev => appendTrace(ev, false)));
       Object.values(consoles).forEach(c => { c.body.scrollTop = c.body.scrollHeight; });

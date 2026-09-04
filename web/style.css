@@ -399,6 +399,14 @@ ul.headlines li.new a { color: #fff; } ul.headlines li:not(.new) a { color: var(
 .sig-asset .frow { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 4px; }
 .keyrow input.kmask { -webkit-text-security: disc; text-security: disc; }
 
+/* holds panel: why Flint is holding */
+.holds { margin-top: 16px; }
+.holds-list { list-style: none; padding: 0; margin: 0; }
+.holds-list li { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--grid); }
+.holds-list li:last-child { border-bottom: none; }
+.holds-list .reason { color: var(--ink); font-size: 12px; }
+.holds-list .count { background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
+
 
 /* loading: sparks in the dark */
 .sparks { position: relative; width: 260px; height: 160px; margin-bottom: 6px; }
