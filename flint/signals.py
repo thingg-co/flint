@@ -301,7 +301,7 @@ class Guru13F:
         return {"holdings": self.holdings, "asof": self.asof}
 
     def _parse(self, xml: str) -> list[dict]:
-        xml = re.sub(r"<(\w+):", "<", xml).replace("</ns1:", "</").replace("</n1:", "</")
+        xml = re.sub(r"<(/?)\w+:", r"<\1", xml)          # drop any namespace prefix, opening and closing tags alike
         out = []
         for block in re.findall(r"<infoTable>(.*?)</infoTable>", xml, re.S | re.I):
             def grab(tag):

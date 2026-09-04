@@ -132,10 +132,8 @@ class TestGuru13FParse:
         assert g._parse("") == []
         assert g._parse("<html>nope</html>") == []
 
-    def test_parse_handles_mixed_namespaces(self):
-        """Parse with different namespace prefixes."""
-        # Note: The code only strips ns1: and n1: prefixes, not ns2:
-        # This test documents actual behavior - ns2: will not be stripped
+    def test_parse_handles_any_namespace_prefix(self):
+        """A filing that uses a prefix other than ns1 parses the same way."""
         xml = """<?xml version="1.0"?>
 <ns2:superRoot xmlns:ns2="http://www.sec.gov">
     <ns2:infoTable>
@@ -144,12 +142,10 @@ class TestGuru13FParse:
         <ns2:value>1,000</ns2:value>
     </ns2:infoTable>
 </ns2:superRoot>"""
-        g = Guru13F("t", "Test", "123")
-        rows = g._parse(xml)
-
-        # With ns2: prefix, the regex doesn't strip it, so infoTable won't be found
-        # This documents actual behavior - only ns1: and n1: work
-        assert rows == []
+        rows = Guru13F("t", "Test", "123")._parse(xml)
+        assert len(rows) == 1
+        assert rows[0]["ticker"] == "AAPL"
+        assert rows[0]["value"] == 1000.0
 
 
 class TestGuru13FSignal:
