@@ -105,6 +105,7 @@ def _replay() -> None:
     """Print a short report about the saved training state without starting the server."""
     import sys
     import os
+    import json
     from datetime import datetime
     from pathlib import Path
 
@@ -112,6 +113,7 @@ def _replay() -> None:
     import torch
 
     from .config import Config
+    from .features import N_FEATURES
 
     # Read state_dir from environment first, then default to "state"
     state_dir_str = os.environ.get("FLINT_STATE_DIR", "state")
@@ -155,9 +157,27 @@ def _replay() -> None:
     saved_steps = ck.get("steps", 0)
     saved_labels = ck.get("labels", 0)
 
-    # Current config
-    current_symbols = cfg.symbols
-    current_shape = (cfg.n_assets, cfg.window, 3)  # n_assets, window, n_features
+    # Get the current window: from machine.json cache if it exists, else cfg.window
+    machine_path = state_dir / "machine.json"
+    if machine_path.exists():
+        try:
+            machine = json.loads(machine_path.read_text())
+            current_window = machine.get("choice", {}).get("window", cfg.window)
+        except (OSError, ValueError, KeyError):
+            current_window = cfg.window
+    else:
+        current_window = cfg.window
+
+    # Get the current symbol list: merge universe.json into config symbols like Engine does
+    try:
+        saved_universe = json.loads((state_dir / "universe.json").read_text()).get("symbols", [])
+        extra_syms = [s for s in saved_universe if s not in set(cfg.symbols)]
+        room = cfg.max_universe - len(cfg.symbols)
+        current_symbols = cfg.symbols + extra_syms[:max(0, room)]
+    except (OSError, ValueError):
+        current_symbols = cfg.symbols
+
+    current_shape = (len(current_symbols), current_window, N_FEATURES)
 
     # Check if checkpoint would load or backup
     shape_matches = saved_shape == current_shape
