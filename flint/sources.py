@@ -656,7 +656,8 @@ class FinnhubSource(Source):
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
-                self.note = f"ws {type(e).__name__}; reconnecting"
+                code = getattr(getattr(e, "response", None), "status_code", None)
+                self.note = f"ws {type(e).__name__}{f' {code}' if code else ''}; reconnecting"
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)
 
@@ -974,8 +975,10 @@ class IBKRSource(Source):
 
 
 class AlpacaSource(Source):
-    """Alpaca market data: real-time quotes (bid/ask) + 5-min bars. Free API keys give the
-    IEX feed; a paid plan gives full SIP. Market data only -- no trading endpoints used."""
+    """Alpaca market data: real-time quotes (bid/ask) plus the latest 1-minute bar per symbol,
+    emitted once complete as a pre-aggregated tick so candles build even when no trade
+    websocket is alive (2026-09-04: Finnhub's died and Flint sat blind all session). Free API
+    keys give the IEX feed; a paid plan gives full SIP. Market data only -- no trading endpoints."""
 
     id = "alpaca"
     name = "Alpaca"
@@ -991,6 +994,8 @@ class AlpacaSource(Source):
         self.kid, self.sec = cfg.alpaca_creds
         self.feed = getattr(cfg, "alpaca_feed", "iex")
         self.poll_interval = max(2.0, cfg.alpaca_seconds)
+        self._pending_bar: dict[str, dict] = {}     # latest (possibly still forming) 1-min bar per symbol
+        self._emitted_t: dict[str, str] = {}        # last bar start emitted per symbol, so none goes out twice
         if not (self.kid and self.sec):
             self.note = "no API keys (set alpaca.json or FLINT_ALPACA_KEY_ID / _SECRET_KEY)"
 
@@ -1045,6 +1050,9 @@ class AlpacaSource(Source):
                 self.note = f"quotes {r.status_code}" + (" (plan?)" if r.status_code in (401, 403) else "")
                 return
             quotes = r.json().get("quotes") or {}
+            rb = await c.get(f"{self.DATA}/stocks/bars/latest", headers=self._headers(),
+                             params={"symbols": ",".join(self.symbols), "feed": self.feed})
+        bars = rb.json().get("bars") or {} if rb.status_code == 200 else {}
         n = 0
         for sym, d in quotes.items():
             bid = d.get("bp") or None
@@ -1054,7 +1062,50 @@ class AlpacaSource(Source):
                 self._emit(emit, Tick(sym, time.time(), float(price), 0.0, None,
                                       float(bid) if bid else None, float(ask) if ask else None, quote=True))
                 n += 1
-        self.note = f"real-time quotes ({self.feed}) for {n} symbols"
+        nb = self._emit_bars(emit, bars, time.time())
+        self.note = (f"real-time quotes ({self.feed}) for {n} symbols, {nb} bars"
+                     + ("" if rb.status_code == 200 else f", bars {rb.status_code}"))
+
+    @staticmethod
+    def _bar_start(b: dict) -> float | None:
+        try:
+            from datetime import datetime, timezone
+            return datetime.strptime(b["t"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _emit_bars(self, emit, bars: dict, now: float) -> int:
+        """Emit each symbol's 1-minute bar once it is complete: when a newer minute shows up, or
+        when the minute ended more than 90 s ago and nothing newer came. Never the same bar twice."""
+        nb = 0
+        for sym, b in bars.items():
+            if not b.get("t"):
+                continue
+            pend = self._pending_bar.get(sym)
+            if pend and pend.get("t") != b["t"]:
+                nb += self._emit_bar(emit, sym, pend)
+            self._pending_bar[sym] = b
+        for sym, b in list(self._pending_bar.items()):
+            start = self._bar_start(b)
+            if start is None or now - start > 90.0:
+                if start is not None:
+                    nb += self._emit_bar(emit, sym, b)
+                del self._pending_bar[sym]
+        return nb
+
+    def _emit_bar(self, emit, sym: str, b: dict) -> int:
+        t = b.get("t")
+        if not t or self._emitted_t.get(sym) == t:
+            return 0
+        self._emitted_t[sym] = t
+        start = self._bar_start(b)
+        c = float(b.get("c") or 0.0)
+        if start is None or c <= 0:
+            return 0
+        # start + 59: the tick lands in the 5-minute bucket that contains this minute, not the next one
+        self._emit(emit, Tick(sym, start + 59.0, c, float(b.get("v") or 0.0), None,
+                              o=float(b.get("o") or c), h=float(b.get("h") or c), l=float(b.get("l") or c)))
+        return 1
 
 
 class TradierSource(Source):
