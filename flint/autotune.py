@@ -12,6 +12,7 @@ import fcntl
 import json
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -65,12 +66,13 @@ def free_memory_gb(device: str) -> float | None:
                 return free / 1e9
         except Exception:  # noqa: BLE001
             pass
-    if host is None and device == "mps":
+    if host is None and sys.platform == "darwin":       # no /proc on a Mac: total minus what MPS holds, minus 8 GB for everything else
         try:
             import subprocess
             out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=2).stdout
             total = int(out.strip()) / 1e9
-            host = max(0.0, total - torch.mps.driver_allocated_memory() / 1e9 - 8.0)   # rough: leave 8 GB for everything else
+            held = torch.mps.driver_allocated_memory() / 1e9 if device == "mps" else 0.0
+            host = max(0.0, total - held - 8.0)
         except Exception:  # noqa: BLE001
             pass
     return host
