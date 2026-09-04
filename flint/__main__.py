@@ -133,6 +133,7 @@ def main() -> None:
 
     import uvicorn
 
+    from .autotune import NotEnoughMemory
     from .config import Config
     from .engine import Engine
     from .server import create_app
@@ -147,7 +148,12 @@ def main() -> None:
               f"(it would thrash the GPU during tuning). Stop it first:  pkill -9 -f 'python -m flint'")
         raise SystemExit(1)
     _probe.close()
-    app = create_app(Engine(cfg))
+    try:
+        engine = Engine(cfg)
+    except NotEnoughMemory as e:
+        print(f"\n{e}")
+        raise SystemExit(2)
+    app = create_app(engine)
     print(f"Flint listening on http://{cfg.host}:{cfg.port}  (feed={cfg.feed}, symbols={','.join(cfg.symbols)})")
     uvicorn.run(app, host=cfg.host, port=cfg.port, log_level="warning")
 
