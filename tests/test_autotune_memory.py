@@ -1,7 +1,6 @@
 import pytest
-from unittest.mock import patch, MagicMock
-import torch
-from flint.autotune import free_memory_gb, _check_start_memory, NotEnoughMemory, other_gpu_tenants
+from unittest.mock import patch
+from flint.autotune import free_memory_gb, _check_start_memory, NotEnoughMemory
 
 
 def test_free_memory_gb_cuda_unified_memory(monkeypatch):
@@ -126,7 +125,7 @@ def test_check_start_memory_does_not_raise_when_enough(monkeypatch):
         "preset": "XL"
     }
 
-    # With the same calculation as above, need is 28.3 GB
+    # With the same calculation as above, need is 15.5 GB
     # Patch free_memory_gb to return a high value (e.g., 30.0 GB)
     with patch('flint.autotune.free_memory_gb', return_value=30.0):
         # Patch other_gpu_tenants to return empty list
@@ -190,3 +189,45 @@ def test_check_start_memory_message_names_tenant(monkeypatch):
             # Check that the message includes the tenant
             assert "llama-server@super.service" in msg
             assert "Running on the same memory:" in msg
+
+
+def test_ladder_refuses_when_memory_short(monkeypatch, tmp_path):
+    """Test that autotune ladder refuses before benchmarking when memory is short."""
+    from flint.autotune import autotune, NotEnoughMemory
+
+    # Patch free_memory_gb to return 2.0 GB (very low)
+    monkeypatch.setattr("flint.autotune.free_memory_gb", lambda d: 2.0)
+
+    # Patch _bench so the test fails if it's ever called
+    def fail_bench(*args, **kwargs):
+        raise RuntimeError("_bench should not be called when memory is insufficient")
+
+    monkeypatch.setattr("flint.autotune._bench", fail_bench)
+
+    # Patch _best_threads to return 1
+    monkeypatch.setattr("flint.autotune._best_threads", lambda *args, **kwargs: 1)
+
+    # Patch pick_device to return "cpu"
+    monkeypatch.setattr("flint.autotune.pick_device", lambda *args: "cpu")
+
+    # Patch other_gpu_tenants to return empty list
+    monkeypatch.setattr("flint.autotune.other_gpu_tenants", lambda: [])
+
+    # Build a cfg object with the attributes autotune() reads
+    class Cfg:
+        state_dir = str(tmp_path)
+        n_assets = 10
+        bar_seconds = 300
+        batch_size = 16
+        autotune_util = 0.5
+        max_warmup_seconds = 300
+        warmup_steps = 10
+        steps_per_label = 1
+        n_quantiles = 5
+        device = "cpu"
+
+    cfg = Cfg()
+
+    # Assert autotune(cfg, 5) raises NotEnoughMemory
+    with pytest.raises(NotEnoughMemory):
+        autotune(cfg, 5)
