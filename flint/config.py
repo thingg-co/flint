@@ -247,7 +247,8 @@ class Config:
     # Risk gates (policy only; the model is untouched). All live controls.
     skill_min_n: int = _env("SKILL_MIN_N", 8)                # matured direction calls a name needs before it may trade
     confirm_bars: int = _env("CONFIRM_BARS", 2)              # the same side must persist this many bars before entry
-    stock_min_hold_bars: int = _env("STOCK_MIN_HOLD_BARS", 6)  # a stock position is kept at least this long unless the signal reverses
+    stock_min_hold_bars: int = _env("STOCK_MIN_HOLD_BARS", 6)  # a stock position is kept at least this many session bars unless the signal reverses
+    hold_through_close: bool = _env("HOLD_THROUGH_CLOSE", "1") not in ("0", "false", "no")  # a closed market is not a signal: positions ride through the close (no fills at stale prices) until a live signal fades past its minimum hold or reverses; off = flatten on the first bar after the close
     max_spread_bps: float = _env("MAX_SPREAD_BPS", 25.0)     # names quoting wider than this do not trade; the live spread also replaces cost_bps when larger
     min_price: float = _env("MIN_PRICE", 5.0)                # names under this price do not trade (penny names: fake spreads, fake fills)
     size_by_coverage: bool = _env("SIZE_BY_COVERAGE", "1") not in ("0", "false", "no")  # scale size by band coverage / 0.8, so an overconfident model trades small

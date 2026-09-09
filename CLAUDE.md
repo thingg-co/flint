@@ -127,6 +127,14 @@ llama-server unit first, so a daytime cl session ends at 19:45 unless Flint is a
   illiquid and penny names; size scales with band coverage / 0.8; option premium per position is
   capped at `option_max_frac` of equity. These exist because of the 2026-09-02 session (churn and a
   $1 stock cost 7% in a night).
+- A closed market is not a signal. With `hold_through_close` on (a live control, the default) a
+  position is carried untouched outside its instrument's session: no exit, no resize, no fill at a
+  stale price, and straddles keep their budget. It rides through the close and across days until a
+  live signal fades past `stock_min_hold_bars` (counted in session bars) or reverses. The book
+  passes those names to `PaperBook.rebalance` as `frozen`. A restart seeds each restored position's
+  target from its current weight, so the first bar after a start carries it. Off restores the old
+  behaviour: every target zeroes on the first bar after 16:00 ET and the book sells at whatever the
+  closed market last printed (2026-09-09: a 15:50 buy went at 16:15; straddles once went at 22:35).
 - The Portfolio tab and account access are strictly read-only; Flint never places, changes, or cancels an order on any provider.
 
 ## Working on it

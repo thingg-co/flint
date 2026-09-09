@@ -41,6 +41,7 @@ TUNABLE = {"score_threshold": float, "prob_margin": float, "cost_bps": float, "m
            "train_in_session": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
            "skill_min_n": int, "confirm_bars": int, "stock_min_hold_bars": int, "max_spread_bps": float,
            "min_price": float, "option_max_frac": float,
+           "hold_through_close": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
            "size_by_coverage": lambda v: str(v).lower() in ("1", "true", "yes", "on")}
 
 
@@ -260,7 +261,8 @@ class Engine:
         self.tick_counts = {s: 0 for s in self.symbols}
         self.bars: dict[str, deque[Bar]] = {s: deque(maxlen=cfg.chart_bars) for s in self.symbols}
         self._streak: dict[str, tuple[int, int]] = {}    # symbol -> (raw side, consecutive bars) for the confirmation gate
-        self._held_since: dict[str, int] = {}             # symbol -> bar index a nonzero paper target began
+        self._session_bars = 0                            # bars seen while stock trades; minimum holds count these, so a night does not spend them
+        self._held_since: dict[str, int] = {}             # symbol -> session-bar count when a nonzero paper target began
         self._last_target: dict[str, float] = {}
         self.paper = PaperBook(cfg.paper_start, cfg.cost_bps, min_trade_frac=cfg.paper_min_trade_frac,
                                option_commission=cfg.option_commission, option_max_frac=cfg.option_max_frac,
@@ -618,6 +620,7 @@ class Engine:
             m.trusted = m.live_labels >= cfg.min_labels
             if extra.get("paper"):
                 self.paper.load_state(extra["paper"], set(self.symbols))
+                self._seed_targets()
             self.trace.emit("system", f"restored checkpoint from {cfg.state_dir}: {self.learner.steps} steps, "
                                       f"{self.learner.labels} labels, {m.live_labels}/{cfg.min_labels} live labels, "
                                       f"{self.learner.size} windows in replay")
@@ -1019,18 +1022,7 @@ class Engine:
                 self.latest[s] = {**sugg[s], "price": float(closes[i]), "ts": ts}
             # trade only once the model is trusted AND has shown real directional skill (not just tenure)
             tradeable = self.metrics.trusted and (self.metrics.hit_ema or 0.0) > cfg.min_hit_rate
-            targets = {s: (self.latest[s]["side"] * self.latest[s]["size"] if tradeable else 0.0) for s in self.symbols}
-            # minimum hold: a fading signal does not close a young position; a reversed one does
-            for s in self.symbols:
-                t, prev = targets[s], self._last_target.get(s, 0.0)
-                if t == 0.0 and prev != 0.0:
-                    held = self.bar_index - self._held_since.get(s, self.bar_index)
-                    reversed_ = ((self.latest[s].get("score") or 0.0) > 0) != (prev > 0)
-                    if held < cfg.stock_min_hold_bars and not reversed_ and tradeable:
-                        targets[s] = t = prev
-                if t != 0.0 and prev == 0.0:
-                    self._held_since[s] = self.bar_index
-                self._last_target[s] = t
+            targets, frozen = self._targets(tradeable)
             put_quotes = {}                                    # a short is opened as a long put (bounded loss), priced off a live chain
             need = [s for s in self.symbols if targets[s] < 0 and s not in self.paper.puts]
             if need and self.schwab_auth.authenticated:
@@ -1044,28 +1036,22 @@ class Engine:
             # skill, so they gate on calibrated coverage instead of hit rate.
             vol_tradeable = (self.metrics.trusted and cfg.straddle_enabled
                              and (self.metrics.coverage_ema or 0.0) >= cfg.straddle_min_coverage)
-            straddle_targets: dict[str, float] = {}
+            straddle_targets, new = self._straddle_plan(vol_tradeable)
             straddle_quotes: dict[str, dict] = {}
-            if vol_tradeable:
-                flagged = sorted((s for s in self.symbols if self.latest[s].get("straddle")),
-                                 key=lambda s: -(self.latest[s].get("width") or 0.0))
-                keep = [s for s in flagged if s in self.paper.straddles]
-                room = max(0, cfg.straddle_max - len(self.paper.straddles))
-                new = [s for s in flagged if s not in self.paper.straddles][:room]
-                straddle_targets = {s: cfg.straddle_budget for s in (*keep, *new)}
-                if new and self.schwab_auth.authenticated:
-                    from .options import fetch_straddle
-                    sres = await asyncio.gather(*[fetch_straddle(self.schwab_auth, s, self.cfg.option_dte) for s in new],
-                                                return_exceptions=True)
-                    for s, sq in zip(new, sres):
-                        if isinstance(sq, dict):
-                            straddle_quotes[s] = sq
+            if new and self.schwab_auth.authenticated:
+                from .options import fetch_straddle
+                sres = await asyncio.gather(*[fetch_straddle(self.schwab_auth, s, self.cfg.option_dte) for s in new],
+                                            return_exceptions=True)
+                for s, sq in zip(new, sres):
+                    if isinstance(sq, dict):
+                        straddle_quotes[s] = sq
             self.paper.rebalance(targets,
                                  {s: float(closes[i]) for i, s in enumerate(self.symbols)}, ts,
                                  quotes={s: {"bid": self.prices[s].get("bid"), "ask": self.prices[s].get("ask")}
                                          for s in self.symbols},
                                  put_quotes=put_quotes,
-                                 straddle_targets=straddle_targets, straddle_quotes=straddle_quotes)
+                                 straddle_targets=straddle_targets, straddle_quotes=straddle_quotes,
+                                 frozen=frozen)
             self.trace.emit("model", f"bar #{self.bar_index}: regime gate " + " ".join(
                 f"E{k + 1}={g:.2f}" for k, g in enumerate(self.gate)) +
                 f" | band scale x{self.metrics.band_scale:.2f}, P(up) temper {self.metrics.p_scale:.2f}")
@@ -1121,6 +1107,75 @@ class Engine:
         q50 = float(q[2])
         qc = [q50 + m.band_scale * (float(v) - q50) for v in q]
         return qc, self._temper(p_raw)
+
+    def _targets(self, tradeable: bool) -> tuple[dict[str, float], set[str]]:
+        """Paper targets for this bar, and the names the book must leave alone.
+
+        A closed market is not a signal. Outside an instrument's session (stock: regular hours,
+        plus extended hours when enabled; a short is a put, so regular hours only) a position is
+        carried as it is: no exit, no resize, no fill at a stale price. It rides through the close
+        and across days until a live signal fades past its minimum hold or reverses. Before this
+        the first bar after 16:00 ET zeroed every target and the book sold at whatever the closed
+        market last printed. `hold_through_close` off restores that. Minimum holds count session
+        bars, so a night does not spend them.
+        """
+        cfg = self.cfg
+        stock_open = self._stock_session()
+        options_open = self._regular_session()
+        if stock_open:
+            self._session_bars += 1
+        targets: dict[str, float] = {}
+        frozen: set[str] = set()
+        for s in self.symbols:
+            prev = self._last_target.get(s, 0.0)
+            want = self.latest[s]["side"] * self.latest[s]["size"] if tradeable else 0.0
+            open_now = options_open if prev < 0 else stock_open
+            if cfg.hold_through_close and prev != 0.0 and not open_now:
+                t = prev
+                frozen.add(s)
+            else:
+                t = want
+                # minimum hold: a fading signal does not close a young position; a reversed one does
+                if t == 0.0 and prev != 0.0:
+                    held = self._session_bars - self._held_since.get(s, self._session_bars)
+                    reversed_ = ((self.latest[s].get("score") or 0.0) > 0) != (prev > 0)
+                    if held < cfg.stock_min_hold_bars and not reversed_ and tradeable:
+                        t = prev
+            if t != 0.0 and prev == 0.0:
+                self._held_since[s] = self._session_bars
+            self._last_target[s] = t
+            targets[s] = t
+        return targets, frozen
+
+    def _straddle_plan(self, vol_tradeable: bool) -> tuple[dict[str, float], list[str]]:
+        """Straddle budgets for this bar and the names that need a fresh chain quote.
+
+        Options only trade in regular hours, so outside them every open straddle keeps its budget
+        (a target of zero is what closes one) and nothing new is opened.
+        """
+        cfg = self.cfg
+        if cfg.hold_through_close and not self._regular_session():
+            return {s: cfg.straddle_budget for s in self.paper.straddles}, []
+        if not vol_tradeable:
+            return {}, []
+        flagged = sorted((s for s in self.symbols if self.latest[s].get("straddle")),
+                         key=lambda s: -(self.latest[s].get("width") or 0.0))
+        keep = [s for s in flagged if s in self.paper.straddles]
+        room = max(0, cfg.straddle_max - len(self.paper.straddles))
+        new = [s for s in flagged if s not in self.paper.straddles][:room]
+        return {s: cfg.straddle_budget for s in (*keep, *new)}, new
+
+    def _seed_targets(self) -> None:
+        """A restart restores the book but not the policy's memory of why it holds what it holds.
+        Give every restored position a target equal to its current weight, so the first bar carries
+        it instead of selling it at whatever the closed market last printed."""
+        book = self.paper
+        eq = book.equity(book.last) or 1.0
+        for s, shares in book.pos.items():
+            if shares > 0 and book.last.get(s):
+                self._last_target[s] = max(0.01, min(book.max_weight, shares * book.last[s] / eq))
+        for s in book.puts:
+            self._last_target.setdefault(s, -0.01)
 
     def _regular_session(self) -> bool:
         """Regular US equity session by the wall clock (9:30-16:00 ET, weekdays). Gates trading;
