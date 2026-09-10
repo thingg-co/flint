@@ -184,7 +184,7 @@ wheels = [
 
 [[package]]
 name = "flint"
-version = "0.5.7"
+version = "0.5.8"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

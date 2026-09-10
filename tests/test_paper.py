@@ -190,28 +190,3 @@ class TestPaperBook:
         assert b2.cash == pytest.approx(book.cash)
         assert b2.pos == book.pos
         assert b2.puts["AAPL"]["contracts"] == pytest.approx(book.puts["AAPL"]["contracts"])
-
-
-class TestFrozen:
-    def test_frozen_names_are_left_alone(self):
-        # a long carried through the close: neither the target change nor the price move may fill
-        book = PaperBook(start=100_000.0, cost_bps=0.0)
-        book.rebalance({"AAPL": 0.10}, {"AAPL": 200.0}, ts)
-        held = book.pos["AAPL"]
-        assert held > 0
-        book.rebalance({"AAPL": 0.0}, {"AAPL": 150.0}, ts + 300, frozen={"AAPL"})
-        assert book.pos["AAPL"] == held
-        assert len(book.trades) == 1
-        # the same bar, not frozen: it sells
-        book.rebalance({"AAPL": 0.0}, {"AAPL": 150.0}, ts + 600)
-        assert book.pos.get("AAPL", 0.0) == 0.0
-
-    def test_frozen_put_is_not_closed(self):
-        book = PaperBook(start=100_000.0, cost_bps=0.0, option_max_frac=0.02, put_min_hold_s=0.0)
-        pq = {"premium": 5.0, "delta": -0.45, "strike": 195.0, "expiry_ts": ts + 30 * 86400, "iv": 0.4}
-        book.rebalance({"AAPL": -0.1}, {"AAPL": 200.0}, ts, put_quotes={"AAPL": pq})
-        assert "AAPL" in book.puts
-        book.rebalance({"AAPL": 0.0}, {"AAPL": 210.0}, ts + 3600, frozen={"AAPL"})
-        assert "AAPL" in book.puts
-        book.rebalance({"AAPL": 0.0}, {"AAPL": 210.0}, ts + 7200)
-        assert "AAPL" not in book.puts

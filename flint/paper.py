@@ -75,19 +75,16 @@ class PaperBook:
 
     def rebalance(self, targets: dict, prices: dict, ts: float, quotes: dict | None = None,
                   put_quotes: dict | None = None, straddle_targets: dict | None = None,
-                  straddle_quotes: dict | None = None, frozen: set | None = None) -> None:
+                  straddle_quotes: dict | None = None) -> None:
         """targets: symbol -> desired signed weight (side * size). A negative weight is a short,
         opened as a delta-equivalent long put from put_quotes[sym] (fetched from a live chain).
         straddle_targets: symbol -> premium budget as a fraction of equity (0/absent = no signal);
         an ATM put+call pair is opened from straddle_quotes[sym] and closed once the signal is gone
-        (after a minimum hold so the forecast horizon can play out).
-        frozen: names whose stock and put legs are left exactly as they are this bar (their market
-        is closed); their weights still count against leverage."""
+        (after a minimum hold so the forecast horizon can play out)."""
         quotes = quotes or {}
         put_quotes = put_quotes or {}
         straddle_targets = straddle_targets or {}
         straddle_quotes = straddle_quotes or {}
-        frozen = frozen or set()
         self._now = ts
         for s, p in prices.items():
             if p:
@@ -101,8 +98,6 @@ class PaperBook:
         scale = (1.0 / gross) if gross > 1 else 1.0        # no leverage
         min_notional = max(200.0, eq * self.min_trade_frac)
         for s, w in tw.items():
-            if s in frozen:
-                continue
             ref = self._px(s, prices)
             if not ref or ref <= 0:
                 continue
