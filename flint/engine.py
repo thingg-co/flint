@@ -180,6 +180,7 @@ def pick_universe(core: list[str], held, current: list[str], candidates: dict[st
             fixed.append(s)
     fixed = fixed[:max_universe]
     room = max(0, min(int(count), max_universe - len(fixed)))
+    record = {s: v for s, v in (record or {}).items() if s in current}   # names that never made it in carry no record
     ranked = [s for s, _ in sorted(candidates.items(), key=lambda kv: -kv[1]) if s not in fixed]
     band = set(ranked[:int(room * 1.5)])
     today_d = datetime.fromisoformat(today).date()
@@ -311,6 +312,7 @@ class Engine:
         self._held: set[str] = set()                           # latest holdings (portfolio loop): always modeled
         self._universe_refreshed = ""                          # ET date of the last promotion/demotion pass
         self._interesting: dict = {}                           # name -> {since, last_hit} for promoted names
+        self._built_universe: list[str] = []                   # the full list the current model was built for
         # Merge the persisted universe (state/universe.json): symbols added at runtime by the
         # portfolio/movers/news loops must survive a restart, or the rebuilt
         # engine starts at the config default, mismatches the checkpoint's symbol list, and
@@ -462,7 +464,7 @@ class Engine:
                 await asyncio.sleep(1)
             self._tasks = []
             self.status = "starting"
-            prev = (list(self.symbols), list(self.all_symbols), dict(self.base), list(self.cfg.symbols))
+            prev = (list(self.symbols), list(self._built_universe or self.all_symbols), dict(self.base), list(self.cfg.symbols))
             try:
                 await asyncio.to_thread(self._save, True)           # the replay in memory is hours of paging; keep it
             except Exception:  # noqa: BLE001
@@ -471,6 +473,7 @@ class Engine:
             self.learner.release_cache()
             try:
                 await asyncio.to_thread(self._build, self._active())   # benchmark/build off the event loop
+                self._built_universe = list(self.all_symbols)          # the full list the model now matches
                 self.trace.emit("system", f"universe rebuilt: {len(self.symbols)} active "
                                           f"({len(self.muted)} muted) — {', '.join(self.base[s] for s in self.symbols)}", "act")
             except Exception as e:  # noqa: BLE001
@@ -480,6 +483,7 @@ class Engine:
                 log.exception("universe rebuild failed")
                 self.symbols, self.all_symbols, self.base, self.cfg.symbols = prev
                 self.muted &= set(self.all_symbols)
+                self._interesting = {k: v for k, v in self._interesting.items() if k in self.all_symbols}
                 self.trace.emit("system", f"universe rebuild failed: {type(e).__name__}: {str(e)[:160]}; "
                                           f"keeping the previous {len(self.symbols)} names", "error")
             self._publish(self.snapshot())                         # UI rebuilds cards for the new set
@@ -803,6 +807,7 @@ class Engine:
             self.trace.emit("system", f"restored checkpoint from {cfg.state_dir}: {self.learner.steps} steps, "
                                       f"{self.learner.labels} labels, {m.live_labels}/{cfg.min_labels} live labels, "
                                       f"{self.learner.size} windows in replay")
+        self._built_universe = list(self.all_symbols)
         ai = self.autotune_info
         dev = cfg.device + (f", {ai['preset']} preset, {ai['ms_per_step']} ms/step" if ai else "")
         self.trace.emit("system", f"FlintNet: {self.learner.n_params:,} parameters on {dev}; {cfg.n_assets} assets, "

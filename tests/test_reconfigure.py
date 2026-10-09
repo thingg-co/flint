@@ -25,7 +25,7 @@ def make(fail: bool):
 
     e = SimpleNamespace(
         _reconfiguring=False, _backtesting=False, _backtest_stop=False, muted=set(),
-        symbols=["A", "B"], all_symbols=["A", "B", "C"], base={"A": "A", "B": "B"},
+        symbols=["A", "B"], all_symbols=["A", "B", "C"], base={"A": "A", "B": "B"}, _built_universe=["A", "B"], _interesting={"C": {"since": "2026-10-10", "last_hit": "2026-10-10"}},
         cfg=SimpleNamespace(symbols=["A", "B"]), _tasks=[], _lifecycle=None, status="live",
         sources=SimpleNamespace(stop=stop), learner=SimpleNamespace(release_cache=lambda: log.__setitem__("cache", log["cache"] + 1),
                                                                      release_replay=lambda: log.__setitem__("released", True)),
@@ -42,7 +42,8 @@ def make(fail: bool):
 def test_failed_rebuild_keeps_previous_universe_and_resumes():
     e = make(fail=True)
     asyncio.run(e.reconfigure())
-    assert e.symbols == ["A", "B"] and e.cfg.symbols == ["A", "B"] and e.all_symbols == ["A", "B", "C"]
+    assert e.symbols == ["A", "B"] and e.cfg.symbols == ["A", "B"]
+    assert e.all_symbols == ["A", "B"] and e._interesting == {}      # the full list the model matches, not the one that failed
     assert e._lifecycle is not None                                   # the engine runs on
     assert any(lvl == "error" and "rebuild failed" in t for lvl, t in e.log["trace"])
     assert e.log["saved"] == [True] and e.log["cache"] == 1          # saved first, cache released for the benchmark
@@ -52,7 +53,7 @@ def test_failed_rebuild_keeps_previous_universe_and_resumes():
 def test_successful_rebuild_still_works():
     e = make(fail=False)
     asyncio.run(e.reconfigure())
-    assert e.symbols == ["A", "B", "C"] and e.log["built"] == [["A", "B", "C"]]
+    assert e.symbols == ["A", "B", "C"] and e.log["built"] == [["A", "B", "C"]] and e._built_universe == ["A", "B", "C"]
     assert any("universe rebuilt" in t for _, t in e.log["trace"]) and e._lifecycle is not None
 
 
