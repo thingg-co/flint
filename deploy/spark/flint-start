@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Start Flint detached on the Spark. Run by deploy/spark/flint.service (a oneshot timer
+# unit) and by hand. This file is the launcher's source of truth: install.sh copies it to
+# ~/.local/bin/flint-start, and the FLINT_* environment for this box lives here.
+#
+#   follow logs:   journalctl --user -u flint-run -f
+#   stop:          systemctl --user stop flint-run   (or: pkill -9 -f "python -m flint")
+set -euo pipefail
+
+cd "$HOME/Development/flint"
+export PATH="$HOME/.local/bin:$PATH"
+
+if ss -ltn | grep -q ':8000 '; then
+    echo "Flint is already listening on :8000; not restarting (a restart resets the trusted count)."
+    exit 0
+fi
+if [[ ! -x .venv/bin/python ]]; then
+    echo "no .venv: run  uv sync  first" >&2
+    exit 1
+fi
+
+# The Spark's environment. Every knob in flint/config.py can go here as FLINT_<NAME>.
+ENV=(
+    FLINT_HOST=0.0.0.0                                 # reachable from the LAN and the mobile app
+    FLINT_COMPILE=1                                    # torch.compile the train step: 2.1x on the GB10
+    FLINT_BRIEF_BACKEND=openai                         # the brief, when enabled, talks to a LOCAL
+    FLINT_BRIEF_OPENAI_BASE=http://127.0.0.1:8080/v1   # llama-server on :8080 -- never a cloud API
+)
+
+if command -v systemd-run >/dev/null 2>&1 && systemctl --user is-system-running >/dev/null 2>&1; then
+    # A transient user unit of its own, so it outlives the oneshot timer service that calls us
+    # and logs to the journal.
+    systemd-run --user --unit=flint-run --collect --quiet \
+        -p WorkingDirectory="$PWD" -p KillMode=mixed \
+        env "${ENV[@]}" "$PWD/.venv/bin/python" -m flint
+    echo "Flint starting as user unit flint-run (journalctl --user -u flint-run -f)"
+else
+    mkdir -p state
+    nohup env "${ENV[@]}" "$PWD/.venv/bin/python" -m flint >> state/flint.log 2>&1 &
+    echo "Flint starting, pid $!, log state/flint.log"
+fi

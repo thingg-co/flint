@@ -190,6 +190,43 @@ class TestWebsocket:
             # After the with block, unsubscribe should have been called
             assert len(engine._unsubscribed) == 1
 
+    def test_websocket_handler_returns_on_disconnect_without_being_cancelled(self):
+        """uvicorn's graceful shutdown closes every socket and then waits for each handler
+        task to *return*; it cancels nothing. A handler that only pushes would sit on its
+        queue until the next publish, which with an idle or dead engine is never, and
+        SIGTERM would hang until systemd's SIGKILL. Drive the ASGI app directly (TestClient
+        cancels the handler on exit, so it cannot see this): connect, let it push, send the
+        disconnect, and require the coroutine to finish on its own."""
+        engine = make_engine()
+        app = create_app(engine)
+
+        async def run():
+            sent = []
+            pushed = asyncio.Event()
+            inbox = asyncio.Queue()
+            inbox.put_nowait({"type": "websocket.connect"})
+
+            async def receive():
+                return await inbox.get()
+
+            async def send(msg):
+                sent.append(msg)
+                if sum(m["type"] == "websocket.send" for m in sent) == 2:
+                    pushed.set()
+
+            scope = {"type": "websocket", "asgi": {"version": "3.0"}, "path": "/ws", "raw_path": b"/ws",
+                     "root_path": "", "scheme": "ws", "query_string": b"", "headers": [],
+                     "client": ("testclient", 50000), "server": ("testserver", 80), "subprotocols": []}
+            handler = asyncio.create_task(app(scope, receive, send))
+            await asyncio.wait_for(pushed.wait(), 2)              # snapshot and the one queued update
+            inbox.put_nowait({"type": "websocket.disconnect", "code": 1012})
+            await asyncio.wait_for(handler, 2)                    # returns by itself: nothing cancels it
+            return sent
+
+        sent = asyncio.run(run())
+        assert [m["type"] for m in sent][:3] == ["websocket.accept", "websocket.send", "websocket.send"]
+        assert len(engine._unsubscribed) == 1
+
 
 class TestCORS:
     def test_cors_allows_any_origin(self):

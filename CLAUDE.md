@@ -30,12 +30,19 @@ Every restart re-runs warmup and resets progress toward "trusted" (48 live, out-
 labels), and live labels only accrue while the market is open. Avoid restarting unless a
 change actually requires it.
 
-On the Spark (192.168.1.15), a systemd user timer starts Flint each weekday at 19:45 local
-(08:45 ET, 45 minutes before the 09:30 ET market open) via `deploy/spark/flint.service` and
-`flint.timer`, and does nothing when Flint is already listening on :8000, so a running model is
-never restarted. The `install.sh` script in that directory handles the one-time setup (it checks
-for `loginctl enable-linger` and prints the command if missing). A start unloads any
-llama-server unit first, so a daytime cl session ends at 19:45 unless Flint is already up.
+On the Spark (hostname `omega`, 192.168.1.128 since the 2026-10 reinstall), a systemd user timer
+starts Flint each weekday at 19:45 local (08:45 ET, 45 minutes before the 09:30 ET market open) via
+`deploy/spark/flint.service` and `flint.timer`, and does nothing when Flint is already listening on
+:8000, so a running model is never restarted. The service runs `deploy/spark/flint-start`, which
+`install.sh` copies to `~/.local/bin/flint-start`: it holds the Spark's `FLINT_*` environment
+(`FLINT_HOST=0.0.0.0`, `FLINT_COMPILE=1`, the local llama-server brief backend) and launches
+`.venv/bin/python -m flint` as a transient user unit `flint-run`, so the launcher is also the way
+to start by hand: `flint-start`, then `journalctl --user -u flint-run -f` for the log, and
+`systemctl --user stop flint-run` to stop; a stop returns in seconds and saves the checkpoint on
+the way out. The `install.sh` script handles the one-time setup (it checks for `loginctl
+enable-linger` and for the venv Python's dev headers, and prints the command for whichever is
+missing). A start unloads any llama-server unit first, so a daytime cl session ends at 19:45
+unless Flint is already up.
 
 ## Layout
 
@@ -80,7 +87,16 @@ llama-server unit first, so a daytime cl session ends at 19:45 unless Flint is a
   quote fabricates flat bars.
 - Sources live in `REGISTRY` (sources.py); their keys live in `KEY_SERVICES` (engine.py).
   `KEY_SERVICES` drives onboarding and the Control panel, so adding a provider there makes
-  it appear as a skippable setup step with no frontend code.
+  it appear as a skippable setup step with no frontend code. `set_key` writes the service's
+  gitignored file, the one the config reads on the next start, and `_apply_key` pushes the key
+  into everything that copied it at construction (the source; for Finnhub also the radar and the
+  fundamentals signal), so a key saved in the panel works without a restart. A new consumer that
+  copies a key at construction must be added there; `tests/test_keys.py` checks the Finnhub set.
+- The `/ws` handler reads its socket as well as pushing to it. uvicorn's graceful shutdown closes
+  every socket and then waits for each handler to return, cancelling nothing, so a push-only
+  handler parked on its queue held SIGTERM until systemd's SIGKILL 90 s later and the final save
+  never ran (the 2026-10-10 "stop hangs"). `timeout_graceful_shutdown=10` in `__main__` is a
+  backstop, not the fix; `tests/test_server.py` drives the ASGI app directly to check the return.
 - The universe grown at runtime (portfolio holdings, movers, news adds) persists in
   `state/universe.json` and is merged back on start, so a restart rebuilds at the same
   symbol count and the checkpoint still matches. Delete the file to intentionally shrink
@@ -92,11 +108,18 @@ llama-server unit first, so a daytime cl session ends at 19:45 unless Flint is a
   the replay up to `idle_train_epochs` passes per closed session (a live control; 0 disables),
   a budget bounded by replay size rather than by hours, so a long night cannot overfit it. With
   `train_in_session` on (a live control, off by default) it also runs through the open session with
-  its own budget; a step can delay a forecast by at most one step.
+  its own budget; a step can delay a forecast by at most one step. Both loops wait on the Finnhub
+  market status (holiday-aware; unknown counts as neither open nor closed), so without a Finnhub key
+  neither runs and the GPU idles all night. The status poll checks for a key on every pass, so one
+  saved in the Control panel starts it without a restart; a rejected key is reported in the trace.
 - On CUDA the train step runs under bf16 autocast with TF32 matmuls (loss in fp32); MPS and CPU
   stay fp32. `FLINT_COMPILE=1` wraps the training forward in `torch.compile` (2.1x on the GB10,
   same loss range; a two-minute compile on the first step after each start). Prediction and
-  checkpoints use the uncompiled module, so the switch never changes what is saved. The autotune cache key includes the precision mode. Step time grows about linearly
+  checkpoints use the uncompiled module, so the switch never changes what is saved. On that first
+  step Triton builds a CUDA helper against `Python.h`, so the venv's Python needs its dev headers
+  (`python3.12-dev`; the 2026-10 Spark reinstall dropped it and `install.sh` warns when it is
+  missing). If the first compiled step fails for any reason the learner logs the cause once and
+  trains eager for the rest of the run; the engine never dies over it. The autotune cache key includes the precision mode. Step time grows about linearly
   with batch size on a bandwidth-bound GPU, so a bigger batch only buys a smaller preset.
 - The autotune records each rung's peak memory and refuses to start (`NotEnoughMemory`, exit 2)
   when the box cannot hold the tuned model plus the replay buffer, naming any `llama-server@*`
@@ -133,6 +156,10 @@ llama-server unit first, so a daytime cl session ends at 19:45 unless Flint is a
 
 - Inspect live state over the JSON API: `curl -s localhost:8000/api/state` (phase, metrics,
   bars, paper), plus `/api/sources`, `/api/signals`, `/api/keys`.
+- Judge memory on the Spark from `free -g` system used, never from the process RSS or the unit's
+  `MemoryCurrent`: the CUDA allocations live outside both, so a live 4XL run reads about 3 GB by
+  RSS and 30+ GB by system used, and a dead engine (phase `error`, steps not moving) looks the
+  same by RSS.
 - Frontend edits are static — hard-reload the tab, no restart. Backend edits need a restart.
 - `uv run flint check` prints what a start would do without loading a model or touching the port:
   device, free memory, any llama-server unit on the same memory, the cached preset and its peak,
@@ -140,7 +167,8 @@ llama-server unit first, so a daytime cl session ends at 19:45 unless Flint is a
   `FLINT_*` environment the launcher uses, or the replay size and universe will be the defaults.
 - Tests: `uv run pytest -q tests`. They cover the memory guard, the paper book's defined-risk
   rules, the policy gates in `_suggest`, checkpoint mismatch handling, bar building, features and
-  source failover, all without loading a model or opening a feed. Add a test when you touch one
-  of those.
+  source failover, key saving and live application, the eager fallback when a compiled step
+  fails, and the websocket handler returning on disconnect, all without loading a model or
+  opening a feed. Add a test when you touch one of those.
 - Python ≥3.11, managed with uv. Brokerage logins: `uv run flint schwab-auth`,
   `uv run flint etrade-auth`.

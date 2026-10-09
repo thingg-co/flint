@@ -396,7 +396,10 @@ def main() -> None:
         raise SystemExit(2)
     app = create_app(engine)
     print(f"Flint listening on http://{cfg.host}:{cfg.port}  (feed={cfg.feed}, symbols={','.join(cfg.symbols)})")
-    uvicorn.run(app, host=cfg.host, port=cfg.port, log_level="warning")
+    # Graceful shutdown waits for in-flight requests and websocket handlers to return; cap it
+    # so a stuck handler can never hold SIGTERM past systemd's stop timeout (the save in
+    # the lifespan shutdown still runs after the cap).
+    uvicorn.run(app, host=cfg.host, port=cfg.port, log_level="warning", timeout_graceful_shutdown=10)
 
 
 if __name__ == "__main__":

@@ -38,6 +38,7 @@ class OnlineLearner:
         self.model = FlintNet(n_features, cfg.n_assets, cfg.n_quantiles, cfg.d_model, cfg.dilations,
                               cfg.n_experts, cfg.n_heads, cfg.dropout).to(self.device)
         self.opt = torch.optim.AdamW(self.model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+        self.compile_broken = False       # set when a compiled step fails; eager for the rest of the run
         self.train_model = self._compiled(self.model)
         self.lock = threading.Lock()
         cap = cfg.replay_size
@@ -71,8 +72,9 @@ class OnlineLearner:
     def _compiled(self, model):
         """torch.compile wrapper for the training step (shares weights with `model`, so
         checkpoints and predict are untouched). Eager on non-CUDA devices, when disabled, or
-        if compilation fails."""
-        if not getattr(self.cfg, "compile", False) or self.device.type != "cuda":
+        once a compile has failed: torch.compile is lazy, so the wrap here always succeeds and
+        the real compile runs on the first forward, where train_steps catches it."""
+        if not getattr(self.cfg, "compile", False) or self.device.type != "cuda" or self.compile_broken:
             return model
         try:
             t = time.time()
@@ -135,7 +137,20 @@ class OnlineLearner:
                 if self.cfg.input_noise > 0:
                     x = x + self.cfg.input_noise * torch.randn_like(x)
                 with autocast(self.device.type):
-                    q, up_logit, down_logit, gate, _ = self.train_model(x)
+                    try:
+                        q, up_logit, down_logit, gate, _ = self.train_model(x)
+                    except Exception:  # noqa: BLE001
+                        if self.train_model is self.model:
+                            raise
+                        # The first compiled forward is where torch.compile really compiles. A
+                        # toolchain problem there (a missing Python.h for Triton's CUDA helper,
+                        # a driver mismatch) must cost speed, not the engine: log it once and
+                        # train eager from here. An error in the eager retry propagates as before.
+                        log.warning("torch.compile failed on its first train step; training eager for the rest "
+                                    "of this run (the FLINT_COMPILE speedup is lost). Cause:", exc_info=True)
+                        self.compile_broken = True
+                        self.train_model = self.model
+                        q, up_logit, down_logit, gate, _ = self.train_model(x)
                 loss, parts = flint_loss(q.float(), up_logit.float(), down_logit.float(), gate.float(), y, self.cfg.quantiles,
                                          label_smoothing=self.cfg.label_smoothing,
                                          threshold=self.cfg.direction_threshold_bps, mask=mask)

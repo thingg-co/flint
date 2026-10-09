@@ -12,6 +12,7 @@ import httpx
 import time
 from collections import deque
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 from dataclasses import dataclass, field
 
@@ -25,7 +26,7 @@ from .news import NewsHub
 from .paper import PaperBook
 from .schwab import SchwabAuth
 from .etrade import ETradeAuth
-from .signals import SignalHub
+from .signals import FundamentalsProvider, SignalHub
 from .sources import AlphaVantage, SourceManager, asset_class
 from .trace import Trace
 from . import clock
@@ -217,6 +218,7 @@ class Engine:
         self.brief_enabled = cfg.brief_enabled
         self.news: dict = {"t": None, "method": None, "status": {}, "headlines": [], "per_asset": {}, "ideas": [], "new": 0}
         self.market_status: dict = {"isOpen": None, "session": None, "holiday": None, "t": None}  # from Finnhub, holiday-aware
+        self._status_http: int | None = None     # last market-status HTTP code, so a rejected key is reported once
         self.brief: dict = {"text": None, "takes": {}, "models": {}, "t": None, "generating": False, "error": None}
         self.autotune_info = None
         self._skimming = False
@@ -459,7 +461,7 @@ class Engine:
         vals = {f["id"]: str(values.get(f["id"], "")).strip() for f in svc["fields"]}
         if not any(vals.values()):
             return {"error": "no value provided"}
-        path = pathlib.Path(svc["file"])
+        path = Path(svc["file"])
         try:
             if svc["kind"] == "token":
                 path.write_text(vals["key"] + "\n")
@@ -500,6 +502,14 @@ class Engine:
                 src.key = vals["key"]
                 src.note = "key set; polling"
                 self.sources.toggle(service, True)
+            if service == "finnhub":
+                # Everything else that copied the key at construction: the market radar (sector
+                # fill, index and sector ETF quotes) and the fundamentals signal. The market-status
+                # poll reads cfg on every pass, so it starts by itself.
+                self.signals.market.finnhub_key = vals["key"]
+                for p in self.signals.providers.values():
+                    if isinstance(p, FundamentalsProvider):
+                        p.key = vals["key"]
         elif service == "schwab":
             ak = vals.get("app_key") or self.schwab_auth.app_key
             asec = vals.get("app_secret") or self.schwab_auth.app_secret
@@ -1680,24 +1690,40 @@ class Engine:
             await asyncio.sleep(max(20.0, self.cfg.portfolio_seconds))
 
     async def _market_status_loop(self) -> None:
-        """Poll Finnhub for the holiday-aware US market status (open/pre/post/closed)."""
-        if not self.cfg.finnhub_key:
-            return
+        """Poll Finnhub for the holiday-aware US market status (open/pre/post/closed). The
+        deep-backfill and idle-training loops wait on this status, so the poll checks for a
+        key on every pass: one saved from the Control panel starts it without a restart."""
         while True:
-            try:
-                async with httpx.AsyncClient(timeout=10) as c:
-                    r = await c.get("https://finnhub.io/api/v1/stock/market-status",
-                                    params={"exchange": "US", "token": self.cfg.finnhub_key})
-                    if r.status_code == 200:
-                        d = r.json()
-                        ms = {"isOpen": bool(d.get("isOpen")), "session": d.get("session"),
-                              "holiday": d.get("holiday"), "t": d.get("t")}
-                        if ms != self.market_status:
-                            self.market_status = ms
-                            self._publish({"type": "status", "status": self.status_dict()})
-            except Exception:  # noqa: BLE001
-                pass
-            await asyncio.sleep(60)
+            polled = await self._poll_market_status()
+            await asyncio.sleep(60 if polled else 5)
+
+    async def _poll_market_status(self) -> bool:
+        """One market-status request. Returns False, without touching the network, while there
+        is no Finnhub key. A rejected key is said once in the trace instead of leaving the
+        status silently unknown (which keeps every closed-market learner off)."""
+        key = self.cfg.finnhub_key
+        if not key:
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get("https://finnhub.io/api/v1/stock/market-status",
+                                params={"exchange": "US", "token": key})
+            if r.status_code == 200:
+                d = r.json()
+                ms = {"isOpen": bool(d.get("isOpen")), "session": d.get("session"),
+                      "holiday": d.get("holiday"), "t": d.get("t")}
+                self._status_http = 200
+                if ms != self.market_status:
+                    self.market_status = ms
+                    self._publish({"type": "status", "status": self.status_dict()})
+            elif r.status_code != self._status_http:
+                self._status_http = r.status_code
+                self.trace.emit("system", f"Finnhub market status returned HTTP {r.status_code}"
+                                          + (" (check the key)" if r.status_code in (401, 403) else "")
+                                          + "; backfill and idle training wait on this status", "warn")
+        except Exception:  # noqa: BLE001
+            pass
+        return True
 
     async def _brief_loop(self) -> None:
         while True:

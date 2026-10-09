@@ -72,13 +72,32 @@ def create_app(engine: Engine) -> FastAPI:
     async def ws(websocket: WebSocket):
         await websocket.accept()
         q = engine.subscribe()
-        try:
+
+        async def push() -> None:
             await websocket.send_text(engine.snapshot_json())
             while True:
                 await websocket.send_text(await q.get())
-        except (WebSocketDisconnect, RuntimeError):
-            pass
+
+        async def listen() -> None:
+            # The dashboard never sends anything, but only a read notices the peer going away
+            # or uvicorn closing the socket on SIGTERM. A handler that only pushes sits on its
+            # queue until the next publish; with the engine idle (or dead) that is forever, and
+            # uvicorn's graceful shutdown waits for every handler to return before it stops.
+            with contextlib.suppress(WebSocketDisconnect, RuntimeError):
+                while (await websocket.receive())["type"] != "websocket.disconnect":
+                    pass
+
+        pusher = asyncio.create_task(push())
+        listener = asyncio.create_task(listen())
+        try:
+            await asyncio.wait({pusher, listener}, return_when=asyncio.FIRST_COMPLETED)
+            if pusher.done() and not pusher.cancelled():
+                with contextlib.suppress(WebSocketDisconnect, RuntimeError, OSError):
+                    pusher.result()                 # anything else is a real bug: let uvicorn log it
         finally:
+            pusher.cancel()
+            listener.cancel()
+            await asyncio.gather(pusher, listener, return_exceptions=True)
             engine.unsubscribe(q)
 
     return app
