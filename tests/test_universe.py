@@ -148,7 +148,8 @@ def test_replay_columns_alone_flag_new_names(tmp_path):
     fill_windows(A, 6)
     A.save(tmp_path, force_replay=True)
     B = make(["AAA", "BBB", "CCC"])
-    B.save(tmp_path)                                                 # a checkpoint for the new list, replay untouched (interval)
+    B._replay_labels = B.labels                                      # nothing new in B's (empty) buffer: the model saves, the replay stays
+    B.save(tmp_path)                                                 # a checkpoint for the new list over the older replay
     C = make(["AAA", "BBB", "CCC"])
     C.load(tmp_path)
     assert C.size == 6 and C.migrated_new == ["CCC"] and not C.rmask[:6, 2].any()
