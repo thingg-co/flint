@@ -122,3 +122,33 @@ def test_promotion_and_demotion():
     # the room shrinks when holdings grow: the weakest interesting name goes regardless of grace
     u5, _, _, d5 = pick_universe(core, {"H1", "H2", "H3", "H4", "H5", "H6"}, u3, {"M2": 95.0, "M3": 90.0}, rec3, count=2, max_universe=9, today="2026-11-03")
     assert set(d5) == {"M3", "HLD"} and len(u5) == 9           # HLD was sold and is not interesting: it goes too
+
+
+def test_fresh_model_keeps_the_replay_when_the_preset_changed(tmp_path):
+    A = make(["AAA", "BBB", "CCC"])
+    fill_windows(A, 20)
+    A.train_steps(2)
+    A.save(tmp_path, force_replay=True, extra={"norm": {"k": 1}, "paper": {"cash": 5}, "metrics": {"live_labels": 9}, "outcomes": {}})
+    B = make(["BBB", "CCC", "DDD"])
+    B.cfg.d_model = 32                                           # a different preset: the saved weights cannot load
+    B.model = __import__("flint.model", fromlist=["FlintNet"]).FlintNet(3, 3, 5, 32, (1, 2), 2, 2, 0.1)
+    B.opt = torch.optim.AdamW(B.model.parameters(), lr=1e-3)
+    extra = B.load(tmp_path)
+    assert extra == {"norm": {"k": 1}, "paper": {"cash": 5}}       # the book and the normalization survive; the old metrics do not
+    assert B.steps == 0 and B.size == 20 and B.labels == 20          # fresh net, full replay, migrated columns
+    assert np.array_equal(B.rx[:20, 0], A.rx[:20, 1]) and not B.rmask[:20, 2].any()
+    assert B.migrated_new == ["DDD"] and B.model.asset_emb.shape == (3, 32)
+    B.train_steps(2)
+
+
+def test_replay_columns_alone_flag_new_names(tmp_path):
+    """The model may load cleanly (same preset and list) while the replay on disk is from an
+    older list: the re-page must still run for the names the replay lacks."""
+    A = make(["AAA", "BBB"])
+    fill_windows(A, 6)
+    A.save(tmp_path, force_replay=True)
+    B = make(["AAA", "BBB", "CCC"])
+    B.save(tmp_path)                                                 # a checkpoint for the new list, replay untouched (interval)
+    C = make(["AAA", "BBB", "CCC"])
+    C.load(tmp_path)
+    assert C.size == 6 and C.migrated_new == ["CCC"] and not C.rmask[:6, 2].any()

@@ -387,6 +387,7 @@ class OnlineLearner:
                     shutil.rmtree(d / (REPLAY_DIR + ".bak"), ignore_errors=True)
                     os.replace(d / REPLAY_DIR, d / (REPLAY_DIR + ".bak"))
             return None
+        model_fresh = False
         try:
             with self.lock:
                 if migrate:
@@ -398,8 +399,19 @@ class OnlineLearner:
                 self.labels = int(ck["labels"])
                 self.loss_ema, self.pinball_ema, self.bce_ema = ck["emas"]
         except Exception as e:  # noqa: BLE001
-            log.warning("could not restore model state (%s); starting fresh", e)
-            return None
+            # The weights do not fit this net (the autotune moved to another preset, say). The
+            # replay is data, not architecture: keep it, migrated if the universe changed too,
+            # and start the net fresh on it. Before 0.5.14 this path dropped hours of paged history.
+            log.warning("could not restore model state (%s); fresh model on the saved replay", e)
+            model_fresh = True
+            with self.lock:
+                self.model = FlintNet(self.n_features, self.cfg.n_assets, self.cfg.n_quantiles, self.cfg.d_model, self.cfg.dilations,
+                                      self.cfg.n_experts, self.cfg.n_heads, self.cfg.dropout).to(self.device)
+                self.opt = torch.optim.AdamW(self.model.parameters(), lr=self.cfg.lr, weight_decay=self.cfg.weight_decay)
+                self.train_model = self._compiled(self.model)
+                self.steps = 0
+                self.loss_ema = self.pinball_ema = self.bce_ema = None
+            self.migrated_new = [s for s in cur_syms if s not in set(saved_syms)]
         try:
             rep = read_replay(d)
         except Exception as e:  # noqa: BLE001 -- keep the model, just drop an unreadable replay buffer
@@ -411,11 +423,16 @@ class OnlineLearner:
                     total = int(rep["n"])
                     n = min(total, self.rx.shape[0])
                     skip = total - n                                      # a smaller buffer keeps the newest windows
-                    self._copy_replay(rep, n, rep["symbols"] or saved_syms or cur_syms, skip)
+                    src_syms = list(rep["symbols"] or saved_syms or cur_syms)
+                    self._copy_replay(rep, n, src_syms, skip)
+                    if src_syms != cur_syms:                              # columns migrated: the new names need the re-page too
+                        self.migrated_new = [s for s in cur_syms if s not in set(src_syms)]
                     self.rt[:n] = np.asarray(rep["t"][skip:skip + n], dtype=np.float64)   # a pre-0.5.10 replay has no timestamps: kept, just not deduplicated
                     self._seen = {int(round(t)) for t in self.rt[:n] if t}
                     self._slot = {int(round(t)): i for i, t in enumerate(self.rt[:n]) if t}
                     self.rhold[:n] = [self._held_out(float(t)) for t in self.rt[:n]]
+                    if model_fresh:
+                        self.labels = n
                     self._replay_labels = self.labels                    # what is on disk is what is in memory
                     self.size = n
                     self.ptr = (int(rep["ptr"]) % self.rx.shape[0] if (n == self.rx.shape[0] and skip == 0)
@@ -424,7 +441,10 @@ class OnlineLearner:
                 log.warning("replay buffer unreadable (%s); keeping model with an empty buffer", e)
                 self.size = 0
                 self.ptr = 0
-        return ck.get("extra", {})
+        extra = ck.get("extra", {}) or {}
+        if model_fresh:                                              # the book and the feature normalization outlive the net; its metrics do not
+            extra = {k: v for k, v in extra.items() if k in ("norm", "paper")}
+        return extra
 
     def _copy_replay(self, rep: dict, n: int, src_syms: list[str], skip: int = 0) -> None:
         """Copy n saved windows into the buffer in 256-row chunks (the source is memory-mapped),
