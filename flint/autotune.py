@@ -246,7 +246,8 @@ def _check_start_memory(cfg, n_features: int, choice: dict, say) -> None:
     peak = float(choice.get("peak_gb") or 0.0)
     if peak <= 0:
         return
-    replay = cfg.replay_size * cfg.n_assets * choice["window"] * n_features * 4 / 1e9
+    replay = (float(cfg.replay_gb) if float(getattr(cfg, "replay_gb", 0) or 0) > 0
+              else cfg.replay_size * cfg.n_assets * choice["window"] * n_features * 4 / 1e9)
     need = peak * 1.25 + replay + MEMORY_HEADROOM_GB
     free = free_memory_gb(choice["device"])
     say(f"memory: model peak {peak:.1f} GB + replay {replay:.1f} GB -> needs ~{need:.0f} GB, "

@@ -109,7 +109,9 @@ unless Flint is already up.
   after the close `_universe_loop` scores candidates from three organic sources on one scale
   (`universe_candidates`: radar movers by move x dollar volume, tickers named in headlines that are
   known symbols, and the tracked funds' 13F positions) and `pick_universe` promotes the top of the
-  ranking into the room left; a promoted name is demoted only after `interesting_grace_days`
+  ranking into the room left (never on a thin pool: the radar, the news skim and the 13F books must
+  have reported and at least 20 candidates scored, else it waits; "Refresh universe now" on the
+  Control panel queues a pass); a promoted name is demoted only after `interesting_grace_days`
   without ranking in the top 1.5 x count and `interesting_min_tenure_days` of tenure, because a
   demotion forfeits its learned row and history. `state/universe.json` persists the list, the
   refresh date and each promoted name's since/last_hit; delete it to shrink back to the config.
@@ -132,9 +134,11 @@ unless Flint is already up.
   0.5.10 every restart stacked another copy of recent days; a replay saved without timestamps
   is kept but not deduplicated). The replay is written uncompressed, at most every
   `replay_save_minutes` and at shutdown, because the save holds the training lock and a full
-  buffer is tens of GB; the Spark launcher sizes it at 12,000 windows (~33 GB at 212 names,
-  about seven months) with `deep_backfill_days` 200, which fills the buffer without wrapping it; a
-  restart resumes paging from the oldest window held. `_idle_train_loop` fills the gaps between chunks: while closed it trains on
+  buffer is tens of GB. The Spark launcher budgets it in bytes (`replay_gb` 36: the window count
+  follows the universe, 12,000 windows at 232 names and 7,000 at 400; `replay_size` applies only
+  when the budget is unset) with `deep_backfill_days` 200; deep paging stops when the ring is
+  within a chunk of full, since wrapping would overwrite the newest windows, and a smaller buffer
+  on load keeps the newest windows. A restart resumes paging from the oldest window held. `_idle_train_loop` fills the gaps between chunks: while closed it trains on
   the replay up to `idle_train_epochs` passes per closed session (a live control; 0 disables),
   a budget bounded by replay size rather than by hours, so a long night cannot overfit it. Every
   20th bar by timestamp (5%) is held out of training for good (`learner.validate`, derived from the
@@ -155,7 +159,9 @@ unless Flint is already up.
   (`python3.12-dev`; the 2026-10 Spark reinstall dropped it and `install.sh` warns when it is
   missing). If the first compiled step fails for any reason the learner logs the cause once and
   trains eager for the rest of the run; the engine never dies over it. The autotune cache key includes the precision mode. Step time grows about linearly
-  with batch size on a bandwidth-bound GPU, so a bigger batch only buys a smaller preset. The
+  with batch size on a bandwidth-bound GPU, so a bigger batch only buys a smaller preset. The Spark
+  launcher allows 400 names; at that count the ladder lands on 4XL (step time scales with the
+  universe) and the memory guard needs the 36 GB replay budget to pass. The
   preset is chosen by step time, never by memory: the binding budget is `max_warmup_seconds` over
   `warmup_steps`, and both are in the tune cache key, so raising the ceiling re-benchmarks on the
   next start. The Spark launcher sets 300 s so the ladder reaches 5XL, the top rung, about 57 GB
@@ -210,7 +216,12 @@ unless Flint is already up.
   above `memory_floor_gb`), it stops itself at the next day boundary if free memory falls below the
   floor, and deep paging pauses near the floor too. Two 5XL nets training in one 121 GB box took
   the Spark down on 2026-10-10 (NVRM out of memory, reboot); the GPU allocations are outside any
-  cgroup limit, so these in-process rules are the only guard.
+  cgroup limit, so these in-process rules are the only guard. The caching allocator is the other
+  way to lose the box: it keeps blocks per shape, so the training step, the held-out validation pass
+  and per-bar prediction each held their own working set (about 90 GB outside any process at 232
+  names). The idle trainer and the deep loop release the cache every 40 steps, validation runs at
+  batch 8 and releases after, the idle trainer pauses near the floor like deep paging, and the
+  launcher sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`.
 - A failed universe rebuild (no memory to benchmark, a bad symbol) puts the previous universe back
   and resumes the lifecycle on the model it still has; it saves first so the replay in memory is
   not lost. Before 2026-10-10 it left every loop cancelled and the status "starting" for good. The

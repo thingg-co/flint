@@ -353,6 +353,7 @@ class Engine:
         self._backtest_stop_reason = ""
         self._backtest_waiting = False
         self._lowmem_said = False
+        self._ring_full_said = False
         try:
             with open(os.path.join(self.cfg.state_dir, "backtest.json")) as f:
                 self.backtest = json.load(f)
@@ -926,6 +927,12 @@ class Engine:
             if self._backtesting:                         # the backtest owns the GPU and the replay must not grow under it
                 wait = 60.0
                 continue
+            cap = self.learner.rx.shape[0]
+            if self.learner.size >= cap - 800:            # a chunk is ~700 windows; the ring must not wrap onto the newest
+                if not self._ring_full_said:
+                    self.trace.emit("feed", f"deep backfill stops: the replay is full ({self.learner.size} of {cap} windows)", "info")
+                    self._ring_full_said = True
+                continue
             free = free_memory_gb(str(self.learner.device))
             if free is not None and free < float(cfg.memory_floor_gb) + 4.0:
                 if not self._lowmem_said:
@@ -950,6 +957,7 @@ class Engine:
                 res = await asyncio.to_thread(self.learner.train_steps, 30) if (added or filled) else None
                 if res:
                     self._absorb_train(res)
+                self.learner.release_cache()
                 self.trace.emit("learn", f"deep backfill {datetime.fromtimestamp(cutoff):%b %d} – "
                                          f"{datetime.fromtimestamp(until):%b %d}: {len(ticks)} ticks, "
                                          f"{added} windows added ({self.learner.size} in replay)" +
@@ -1021,8 +1029,11 @@ class Engine:
             today = now.date().isoformat()
             if self._universe_refreshed == today or (now.weekday() < 5 and now.hour < 16):
                 continue
+            radar = (self.signals_state.get("market", {}) or {}).get("radar", []) or []
+            if len(radar) < 100 or not (self.news or {}).get("t") or not (self.signals_state.get("gurus") or []):
+                continue                                  # the radar, the news skim and the 13F books must have reported
             cands = self.universe_candidates()
-            if not cands:
+            if len(cands) < 20:
                 continue
             new, rec, promoted, demoted = pick_universe(
                 self.core_symbols, self._held, self.all_symbols, cands, self._interesting,
@@ -1205,6 +1216,13 @@ class Engine:
                 continue                                  # unknown status, or open and session training is off
             if self._backtesting:
                 continue                                  # the weekend backtest owns the GPU
+            free = free_memory_gb(str(self.learner.device))
+            if free is not None and free < float(cfg.memory_floor_gb) + 4.0:
+                if not self._lowmem_said:
+                    self.trace.emit("learn", f"idle training paused: {free:.0f} GB free, floor {cfg.memory_floor_gb:g} GB", "warn")
+                    self._lowmem_said = True
+                self.learner.release_cache()
+                continue
             if is_open != self._idle_was_open:            # each session (open or closed) gets its own budget
                 done, self._idle_was_open, held = 0, is_open, []
             epochs = float(getattr(cfg, "idle_train_epochs", 0) or 0)
@@ -1239,6 +1257,7 @@ class Engine:
                                          f"({size} windows in replay): loss {res['loss']:.3f} "
                                          f"(pinball {res['pinball']:.2f} bps, bce {res['bce']:.3f}{note})")
                 self._publish({"type": "metrics", "metrics": self.metrics.as_dict(), "history": self._drain_history()})
+                self.learner.release_cache()              # every 40 steps: the caching allocator never accumulates
 
     def _ingest_offline(self, ticks: list[Tick]) -> int:
         """Turn a chunk of old history into labeled replay windows without touching the live
@@ -2221,6 +2240,9 @@ class Engine:
                 v.clear()
             self.trace.emit("system", "model weights and optimizer re-initialized" +
                             (", replay cleared" if payload.get("clear_replay") else ", replay kept"), "act")
+        elif action == "refresh_universe":
+            self._universe_refreshed = ""                 # the loop runs the next pass the pool allows
+            return {"ok": True, "universe": "refresh queued"}
         elif action == "backtest":
             self._backtest_requested = True
             return {"ok": True, "backtest": "running" if self._backtesting else "queued"}

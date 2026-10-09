@@ -1041,6 +1041,7 @@ document.addEventListener("click", e => {
     if (v) { control({ action: "add_symbols", symbols: v.split(/[ ,]+/).filter(Boolean) }); inp.value = ""; }
   }
   if (e.target.closest && e.target.closest("button[data-action=add_movers]")) control({ action: "add_movers", n: 20 });
+  if (e.target.closest && e.target.closest("button[data-action=refresh_universe]")) control({ action: "refresh_universe" });
 });
 document.addEventListener("change", e => {
   if (e.target && e.target.dataset && e.target.dataset.mute)

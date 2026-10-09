@@ -84,7 +84,7 @@ class OnlineLearner:
 
     def _alloc(self) -> None:
         cfg = self.cfg
-        cap = cfg.replay_size
+        cap = cfg.replay_windows(self.n_features) if hasattr(cfg, "replay_windows") else cfg.replay_size
         self.rx = np.zeros((cap, cfg.n_assets, cfg.window, self.n_features), dtype=np.float32)
         self.ry = np.zeros((cap, cfg.n_assets), dtype=np.float32)
         self.rmask = np.ones((cap, cfg.n_assets), dtype=np.float32)
@@ -245,8 +245,8 @@ class OnlineLearner:
         pin = bce = 0.0
         with self.lock, torch.no_grad():
             self.model.eval()
-            for k in range(0, len(idx), 32):
-                j = idx[k:k + 32]
+            for k in range(0, len(idx), 8):                  # small batches: an eval pass must not widen the allocator's footprint
+                j = idx[k:k + 8]
                 x = torch.from_numpy(self.rx[j]).to(self.device)
                 y = torch.from_numpy(self.ry[j]).to(self.device)
                 mk = torch.from_numpy(self.rmask[j]).to(self.device)
@@ -255,6 +255,7 @@ class OnlineLearner:
                                       label_smoothing=self.cfg.label_smoothing, threshold=self.cfg.direction_threshold_bps, mask=mk)
                 pin += float(parts["pinball"]) * len(j)
                 bce += float(parts["bce"]) * len(j)
+        self.release_cache()                                 # eval shapes differ from training shapes; do not keep both cached
         return {"pinball": pin / len(idx), "bce": bce / len(idx), "n": int(len(idx))}
 
     def train_steps(self, n: int) -> dict | None:
@@ -407,22 +408,25 @@ class OnlineLearner:
         if rep is not None:
             try:
                 with self.lock:
-                    n = min(int(rep["n"]), self.rx.shape[0])
-                    self._copy_replay(rep, n, rep["symbols"] or saved_syms or cur_syms)
-                    self.rt[:n] = np.asarray(rep["t"][:n], dtype=np.float64)   # a pre-0.5.10 replay has no timestamps: kept, just not deduplicated
+                    total = int(rep["n"])
+                    n = min(total, self.rx.shape[0])
+                    skip = total - n                                      # a smaller buffer keeps the newest windows
+                    self._copy_replay(rep, n, rep["symbols"] or saved_syms or cur_syms, skip)
+                    self.rt[:n] = np.asarray(rep["t"][skip:skip + n], dtype=np.float64)   # a pre-0.5.10 replay has no timestamps: kept, just not deduplicated
                     self._seen = {int(round(t)) for t in self.rt[:n] if t}
                     self._slot = {int(round(t)): i for i, t in enumerate(self.rt[:n]) if t}
                     self.rhold[:n] = [self._held_out(float(t)) for t in self.rt[:n]]
                     self._replay_labels = self.labels                    # what is on disk is what is in memory
                     self.size = n
-                    self.ptr = int(rep["ptr"]) % self.rx.shape[0] if n == self.rx.shape[0] else n % self.rx.shape[0]
+                    self.ptr = (int(rep["ptr"]) % self.rx.shape[0] if (n == self.rx.shape[0] and skip == 0)
+                                else n % self.rx.shape[0])
             except Exception as e:  # noqa: BLE001 -- keep the model, just drop an unreadable replay buffer
                 log.warning("replay buffer unreadable (%s); keeping model with an empty buffer", e)
                 self.size = 0
                 self.ptr = 0
         return ck.get("extra", {})
 
-    def _copy_replay(self, rep: dict, n: int, src_syms: list[str]) -> None:
+    def _copy_replay(self, rep: dict, n: int, src_syms: list[str], skip: int = 0) -> None:
         """Copy n saved windows into the buffer in 256-row chunks (the source is memory-mapped),
         remapping asset columns when the saved symbol order differs from the current one: a
         name no longer modeled is dropped, a new one gets zero features and a zero mask until
@@ -431,9 +435,10 @@ class OnlineLearner:
         if list(src_syms) == cur:
             for k in range(0, n, 256):
                 j = slice(k, min(n, k + 256))
-                self.rx[j] = rep["x"][j]
-                self.ry[j] = rep["y"][j]
-                self.rmask[j] = rep["mask"][j]
+                s = slice(skip + k, skip + min(n, k + 256))
+                self.rx[j] = rep["x"][s]
+                self.ry[j] = rep["y"][s]
+                self.rmask[j] = rep["mask"][s]
             return
         pos = {s: i for i, s in enumerate(src_syms)}
         pairs = [(i, pos[s]) for i, s in enumerate(cur) if s in pos]
@@ -444,9 +449,10 @@ class OnlineLearner:
         self.rmask[:n] = 0.0
         for k in range(0, n, 256):
             j = slice(k, min(n, k + 256))
-            self.rx[j, ni] = np.asarray(rep["x"][j])[:, oi]
-            self.ry[j, ni] = np.asarray(rep["y"][j])[:, oi]
-            self.rmask[j, ni] = np.asarray(rep["mask"][j])[:, oi]
+            s = slice(skip + k, skip + min(n, k + 256))
+            self.rx[j, ni] = np.asarray(rep["x"][s])[:, oi]
+            self.ry[j, ni] = np.asarray(rep["y"][s])[:, oi]
+            self.rmask[j, ni] = np.asarray(rep["mask"][s])[:, oi]
 
     def _migrate_model(self, ck: dict, saved_syms: list[str]) -> None:
         """Load a checkpoint saved for another symbol list. Every parameter is shared across

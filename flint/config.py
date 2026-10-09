@@ -223,6 +223,7 @@ class Config:
     batch_size: int = _env("BATCH_SIZE", 16)   # step time grows ~linearly with batch (activation-bandwidth bound, even on a GPU), so a bigger batch only buys a smaller model under the step budget
     steps_per_label: int = _env("STEPS_PER_LABEL", 2)
     replay_size: int = _env("REPLAY_SIZE", 4096)
+    replay_gb: float = _env("REPLAY_GB", 0.0)      # replay budget in GB; when set, the window count follows the universe (windows = GB / (names x window x features x 4 B)) and replay_size is ignored
     recent_frac: float = _env("RECENT_FRAC", 0.3)   # share of each batch drawn from the newest samples
     recent_n: int = _env("RECENT_N", 256)
     warmup_steps: int = _env("WARMUP_STEPS", 60)   # training steps on backfilled history before going live
@@ -316,6 +317,16 @@ class Config:
     def __post_init__(self):
         if not self.sources_on and self.feed and self.feed != "auto":
             self.sources_on = self.feed
+
+    def replay_windows(self, n_features: int) -> int:
+        """The replay capacity in windows: replay_gb spread over the current universe when set
+        (so growing the universe shrinks the window count instead of the free memory), else
+        replay_size."""
+        gb = float(getattr(self, "replay_gb", 0.0) or 0.0)
+        if gb > 0:
+            per = max(1, self.n_assets) * int(self.window) * int(n_features) * 4
+            return max(256, int(gb * 1e9 // per))
+        return int(self.replay_size)
 
     @property
     def n_assets(self) -> int:
