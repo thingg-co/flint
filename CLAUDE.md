@@ -121,7 +121,12 @@ unless Flint is already up.
   about seven months) with `deep_backfill_days` 200, which fills the buffer without wrapping it; a
   restart resumes paging from the oldest window held. `_idle_train_loop` fills the gaps between chunks: while closed it trains on
   the replay up to `idle_train_epochs` passes per closed session (a live control; 0 disables),
-  a budget bounded by replay size rather than by hours, so a long night cannot overfit it. With
+  a budget bounded by replay size rather than by hours, so a long night cannot overfit it. Every
+  20th bar by timestamp (5%) is held out of training for good (`learner.validate`, derived from the
+  timestamp so a reload keeps the same slice); the idle trainer checks it every 40 steps and ends
+  the session's budget when it stops improving for `overfit_patience` checks (the overfit guard),
+  with the value on the "held-out pinball" tile. The in-sample loss cannot tell fitting from
+  overfitting: it rises whenever the deep backfill adds unseen history. With
   `train_in_session` on (a live control, off by default) it also runs through the open session with
   its own budget; a step can delay a forecast by at most one step. Both loops wait on the Finnhub
   market status (holiday-aware; unknown counts as neither open nor closed), so without a Finnhub key

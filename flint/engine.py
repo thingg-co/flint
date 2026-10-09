@@ -46,6 +46,7 @@ TUNABLE = {"score_threshold": float, "prob_margin": float, "cost_bps": float, "m
            "min_price": float, "option_max_frac": float,
            "backtest_weekends": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
            "backtest_hours": float, "backtest_days": int, "backtest_cost_bps": float, "backtest_night_epochs": float,
+           "overfit_patience": int,
            "size_by_coverage": lambda v: str(v).lower() in ("1", "true", "yes", "on")}
 
 
@@ -132,6 +133,13 @@ KEY_SERVICES = [
 ]
 
 
+def _stalled(vals: list[float], patience: int) -> bool:
+    """True when the last `patience` checks brought no improvement over the best before them."""
+    if patience <= 0 or len(vals) <= patience:
+        return False
+    return min(vals[-patience:]) >= min(vals[:-patience])
+
+
 def _mask(v: str) -> str:
     v = v or ""
     return (v[:2] + "***" + v[-2:]) if len(v) >= 6 else ("***" if v else "")
@@ -171,6 +179,8 @@ class Metrics:
     live_pinball: float | None = None
     coverage_raw_n: int = 0
     covered_raw: int = 0
+    holdout_pinball: float | None = None   # loss on the 5% of windows the trainer never samples
+    holdout_bce: float | None = None
     band_scale: float = 2.0   # conformal multiplier on the predicted band widths; starts wide, earns its way down
     p_scale: float = 0.3      # temperature on the direction logit (1 = raw); starts sceptical
 
@@ -180,6 +190,7 @@ class Metrics:
             "decisions": self.decisions, "hit_rate": self.hits / self.decisions if self.decisions else None,
             "hit_ema": self.hit_ema, "coverage": self.covered / self.coverage_n if self.coverage_n else None,
             "coverage_ema": self.coverage_ema, "sharpness": self.sharpness_ema,
+            "holdout_pinball": self.holdout_pinball, "holdout_bce": self.holdout_bce,
             "suggestions": self.suggestions, "win_rate": self.suggestion_wins / self.suggestions if self.suggestions else None,
             "pnl_bps": self.pnl_bps, "pnl_by_symbol": dict(self.pnl_by_symbol), "trusted": self.trusted,
             "live_labels": self.live_labels, "live_pinball": self.live_pinball,
@@ -936,6 +947,7 @@ class Engine:
         done = 0
         self._idle_was_open = None
         wait = 20.0
+        held: list[float] = []                            # held-out pinball at each check this session
         while True:
             await asyncio.sleep(wait)
             wait = 20.0                                   # idle poll; drops to ~0 while there is budget to burn
@@ -946,7 +958,7 @@ class Engine:
             if self._backtesting:
                 continue                                  # the weekend backtest owns the GPU
             if is_open != self._idle_was_open:            # each session (open or closed) gets its own budget
-                done, self._idle_was_open = 0, is_open
+                done, self._idle_was_open, held = 0, is_open, []
             epochs = float(getattr(cfg, "idle_train_epochs", 0) or 0)
             size = self.learner.size
             if epochs <= 0 or not self.learning_enabled or size < 64:
@@ -962,9 +974,22 @@ class Engine:
             done += chunk
             self._absorb_train(res)
             if done % 40 < chunk or done >= budget:
+                val = await asyncio.to_thread(self.learner.validate)
+                note = ""
+                if val:
+                    self.metrics.holdout_pinball, self.metrics.holdout_bce = val["pinball"], val["bce"]
+                    held.append(val["pinball"])
+                    note = f", held-out {val['pinball']:.2f} bps"
+                    if _stalled(held, int(getattr(cfg, "overfit_patience", 0) or 0)):
+                        # The in-sample loss keeps falling while this stops improving: the net is
+                        # memorising the replay. End the session's budget here, not at the epoch count.
+                        self.trace.emit("learn", f"overfit guard: held-out pinball {val['pinball']:.2f} bps has not improved "
+                                                 f"over {cfg.overfit_patience} checks (best {min(held):.2f}); ending this session's "
+                                                 f"idle training at {done}/{budget} steps", "warn")
+                        done = budget
                 self.trace.emit("learn", f"idle training {done}/{budget} steps this {'open' if is_open else 'closed'} session "
                                          f"({size} windows in replay): loss {res['loss']:.3f} "
-                                         f"(pinball {res['pinball']:.2f} bps, bce {res['bce']:.3f})")
+                                         f"(pinball {res['pinball']:.2f} bps, bce {res['bce']:.3f}{note})")
                 self._publish({"type": "metrics", "metrics": self.metrics.as_dict(), "history": self._drain_history()})
 
     def _ingest_offline(self, ticks: list[Tick]) -> int:

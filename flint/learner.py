@@ -16,6 +16,7 @@ from .autotune import autocast, configure_backend, pick_device
 from .model import FlintNet, flint_loss
 
 log = logging.getLogger(__name__)
+HOLDOUT_EVERY = 20       # every 20th bar by timestamp is validation-only: 5% the trainer never sees
 
 
 @dataclass(slots=True)
@@ -46,6 +47,7 @@ class OnlineLearner:
         self.ry = np.zeros((cap, cfg.n_assets), dtype=np.float32)
         self.rmask = np.ones((cap, cfg.n_assets), dtype=np.float32)
         self.rt = np.zeros(cap, dtype=np.float64)        # label-bar timestamp per window (0 = unknown, legacy)
+        self.rhold = np.zeros(cap, dtype=bool)           # held out of training (derived from the timestamp)
         self._seen: set[int] = set()                     # timestamps in the buffer, so a restart's re-walk of the same history adds nothing
         self._replay_at = 0.0                            # when the replay was last written, and with how many labels
         self._replay_labels = -1
@@ -73,6 +75,7 @@ class OnlineLearner:
                 self.ptr = 0
                 self.labels = 0
                 self.rt[:] = 0.0
+                self.rhold[:] = False
                 self._seen.clear()
 
     def _compiled(self, model):
@@ -130,12 +133,18 @@ class OnlineLearner:
         self.ry[self.ptr] = y
         self.rmask[self.ptr] = 1.0 if mask is None else mask
         self.rt[self.ptr] = ts or 0.0
+        self.rhold[self.ptr] = self._held_out(ts)
         if key is not None:
             self._seen.add(key)
         self.ptr = (self.ptr + 1) % self.rx.shape[0]
         self.size = min(self.size + 1, self.rx.shape[0])
         self.labels += 1
         return True
+
+    def _held_out(self, ts: float | None) -> bool:
+        """Every HOLDOUT_EVERY-th bar by timestamp. Derived, not stored, so a reload or a
+        replay saved before this existed gets the same slice; untimed windows are never held out."""
+        return bool(ts) and (int(round(ts)) // max(1, int(self.cfg.bar_seconds))) % HOLDOUT_EVERY == 0
 
     def _sample(self, batch: int):
         cap = self.rx.shape[0]
@@ -144,7 +153,35 @@ class OnlineLearner:
         recent = (self.ptr - 1 - self.rng.integers(0, n_recent, k_recent)) % cap
         uniform = self.rng.integers(0, self.size, batch - k_recent)
         idx = np.concatenate([recent, uniform])
+        bad = self.rhold[idx]
+        for _ in range(8):                               # redraw held-out picks (5%); a few rounds clear them
+            if not bad.any():
+                break
+            idx[bad] = self.rng.integers(0, self.size, int(bad.sum()))
+            bad = self.rhold[idx]
         return torch.from_numpy(self.rx[idx]), torch.from_numpy(self.ry[idx]), torch.from_numpy(self.rmask[idx])
+
+    def validate(self) -> dict | None:
+        """Pinball and direction loss on the held-out windows, which no training step ever
+        samples: the honest overfitting signal. In-sample loss rises whenever the deep backfill
+        adds unseen history and falls as it is fit, so it cannot tell fitting from overfitting."""
+        idx = np.flatnonzero(self.rhold[:self.size])
+        if len(idx) < 8:
+            return None
+        pin = bce = 0.0
+        with self.lock, torch.no_grad():
+            self.model.eval()
+            for k in range(0, len(idx), 32):
+                j = idx[k:k + 32]
+                x = torch.from_numpy(self.rx[j]).to(self.device)
+                y = torch.from_numpy(self.ry[j]).to(self.device)
+                mk = torch.from_numpy(self.rmask[j]).to(self.device)
+                q, up, dn, gate, _ = self.model(x)
+                _, parts = flint_loss(q.float(), up.float(), dn.float(), gate.float(), y, self.cfg.quantiles,
+                                      label_smoothing=self.cfg.label_smoothing, threshold=self.cfg.direction_threshold_bps, mask=mk)
+                pin += float(parts["pinball"]) * len(j)
+                bce += float(parts["bce"]) * len(j)
+        return {"pinball": pin / len(idx), "bce": bce / len(idx), "n": int(len(idx))}
 
     def train_steps(self, n: int) -> dict | None:
         """Run n optimizer steps. Safe to call from a worker thread."""
@@ -262,6 +299,7 @@ class OnlineLearner:
                     self.rmask[:n] = z["mask"] if "mask" in z else 1.0
                     self.rt[:n] = z["t"] if "t" in z else 0.0       # a pre-0.5.10 replay has no timestamps: kept, just not deduplicated
                     self._seen = {int(round(t)) for t in self.rt[:n] if t}
+                    self.rhold[:n] = [self._held_out(float(t)) for t in self.rt[:n]]
                     self._replay_labels = self.labels                    # what is on disk is what is in memory
                     self.size = n
                     self.ptr = int(z["ptr"]) % self.rx.shape[0] if n == self.rx.shape[0] else n % self.rx.shape[0]

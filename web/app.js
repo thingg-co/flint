@@ -196,10 +196,13 @@ function drawChart(card) {
     ctx.fillStyle = C.ink2; ctx.textAlign = "right"; ctx.fillText(`${fmtBps(L.q[2])} bps`, xEnd - 2, my); ctx.textAlign = "left";
   }
 
-  // candlesticks -- but spot feeds (e.g. metals via GoldAPI) have no intrabar OHLC, so their
+  // candlesticks -- but spot feeds (e.g. metals via GoldAPI) have no intrabar OHLC at all, so their
   // bars are flat (o=h=l=c) and would render as meaningless dashes; fall back to a close line there.
+  // Only there: a quiet equity has many flat bars too (one trade or none in a pre- or post-market
+  // five minutes, carry-forward bars), and those are honest dashes next to real candles. A 50%
+  // rule turned half the cards blue every evening.
   const flat = bars.reduce((k, b) => k + (b.o === b.h && b.h === b.l && b.l === b.c ? 1 : 0), 0);
-  if (flat < bars.length * 0.5) {
+  if (flat < bars.length * 0.95) {
     bars.forEach((b, i) => {
       const x = xs(i), col = b.c >= b.o ? upC : downC;
       ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1;
@@ -567,6 +570,7 @@ function renderTiles() {
     { label: "training steps", value: m.steps ?? 0 },
     { label: "train pinball", value: f2(m.pinball), small: "bps, in sample" },
     { label: "live pinball", value: f2(m.live_pinball), small: "bps, out of sample" },
+    { label: "held-out pinball", value: f2(m.holdout_pinball), small: "bps, 5% never trained on" },
     { label: "hit rate", value: fmtPct(m.hit_rate), small: m.decisions ? `n=${m.decisions}` : "", cls: m.hit_rate > 0.55 ? "good" : (m.hit_rate < 0.45 && m.decisions > 50) ? "bad" : "" },
     { label: "10-90 coverage", value: fmtPct(m.coverage), small: `raw ${fmtPct(m.coverage_raw)}` },
     { label: "band scale", value: m.band_scale != null ? m.band_scale.toFixed(2) + "x" : "·", small: "widened to hit 80%" },
