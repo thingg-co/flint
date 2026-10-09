@@ -90,8 +90,11 @@ unless Flint is already up.
   it appear as a skippable setup step with no frontend code. `set_key` writes the service's
   gitignored file, the one the config reads on the next start, and `_apply_key` pushes the key
   into everything that copied it at construction (the source; for Finnhub also the radar and the
-  fundamentals signal), so a key saved in the panel works without a restart. A new consumer that
-  copies a key at construction must be added there; `tests/test_keys.py` checks the Finnhub set.
+  fundamentals signal), so a key saved in the panel works without a restart. `_key_values` must
+  have an entry per service too, or the panel reports a saved key as "not set" forever (Alpaca,
+  Tradier and E*TRADE did, 2026-10-10). A new consumer that copies a key at construction must be
+  added to `_apply_key`; `tests/test_keys.py` walks KEY_SERVICES for the save, the panel status,
+  the restart read-back through `Config()`, and the live apply against a real `SourceManager`.
 - The `/ws` handler reads its socket as well as pushing to it. uvicorn's graceful shutdown closes
   every socket and then waits for each handler to return, cancelling nothing, so a push-only
   handler parked on its queue held SIGTERM until systemd's SIGKILL 90 s later and the final save
@@ -104,7 +107,15 @@ unless Flint is already up.
 - While the market is closed, `_deep_backfill_loop` pages history back in ~10-day chunks
   (one every 150 s while there is history left, to `deep_backfill_days`, a live control; 0 disables), adds labeled windows to the replay
   through an isolated bar/feature pipeline, and trains on them. It must never run while the
-  market is open. `_idle_train_loop` fills the gaps between chunks: while closed it trains on
+  market is open. Ranged history comes from any source with `backfill_range`: FMP, and since
+  0.5.10 Schwab, which serves 5-minute candles at least 250 days back by date range (probed
+  2026-10-10), so no FMP key is needed. Each replay window is keyed by its bar timestamp, so the
+  startup backfill after a restart, which walks the same ten days again, adds nothing (before
+  0.5.10 every restart stacked another copy of recent days; a replay saved without timestamps
+  is kept but not deduplicated). The replay is written uncompressed, at most every
+  `replay_save_minutes` and at shutdown, because the save holds the training lock and a full
+  buffer is tens of GB; the Spark launcher sizes it at 12,000 windows (~33 GB at 212 names,
+  about seven months) with `deep_backfill_days` 220. `_idle_train_loop` fills the gaps between chunks: while closed it trains on
   the replay up to `idle_train_epochs` passes per closed session (a live control; 0 disables),
   a budget bounded by replay size rather than by hours, so a long night cannot overfit it. With
   `train_in_session` on (a live control, off by default) it also runs through the open session with
@@ -120,7 +131,11 @@ unless Flint is already up.
   (`python3.12-dev`; the 2026-10 Spark reinstall dropped it and `install.sh` warns when it is
   missing). If the first compiled step fails for any reason the learner logs the cause once and
   trains eager for the rest of the run; the engine never dies over it. The autotune cache key includes the precision mode. Step time grows about linearly
-  with batch size on a bandwidth-bound GPU, so a bigger batch only buys a smaller preset.
+  with batch size on a bandwidth-bound GPU, so a bigger batch only buys a smaller preset. The
+  preset is chosen by step time, never by memory: the binding budget is `max_warmup_seconds` over
+  `warmup_steps`, and both are in the tune cache key, so raising the ceiling re-benchmarks on the
+  next start. The Spark launcher sets 300 s so the ladder reaches 5XL, the top rung, about 57 GB
+  with the replay at 212 names; that cannot share the box with an 84 GB llama-server.
 - The autotune records each rung's peak memory and refuses to start (`NotEnoughMemory`, exit 2)
   when the box cannot hold the tuned model plus the replay buffer, naming any `llama-server@*`
   unit sharing the memory. A ladder cut short by memory is never cached, so a transient squeeze

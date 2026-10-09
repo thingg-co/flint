@@ -294,7 +294,7 @@ class Engine:
         for t in self._tasks:
             t.cancel()
         await self.sources.stop()
-        await asyncio.to_thread(self._save)
+        await asyncio.to_thread(self._save, True)
 
     async def reconfigure(self) -> None:
         """Rebuild for the current active universe (all_symbols minus muted) and restart
@@ -439,8 +439,14 @@ class Engine:
     def _key_values(self) -> dict:
         cfg = self.cfg
         ak, asec, acb = cfg.schwab_creds
+        kid, sec = (tuple(cfg.alpaca_creds) + ("", ""))[:2]
+        ck, cs = (tuple(cfg.etrade_creds) + ("", ""))[:2]
+        # One entry per KEY_SERVICES id, or the panel shows a saved key as "not set" forever
+        # (Alpaca, Tradier and E*TRADE were missing until 2026-10-10).
         return {"alphavantage": {"key": cfg.av_key}, "finnhub": {"key": cfg.finnhub_key},
-                "eodhd": {"key": cfg.eodhd_key}, "fmp": {"key": cfg.fmp_key}, "schwab": {"app_key": ak, "app_secret": asec}}
+                "eodhd": {"key": cfg.eodhd_key}, "fmp": {"key": cfg.fmp_key}, "schwab": {"app_key": ak, "app_secret": asec},
+                "alpaca": {"key_id": kid, "secret_key": sec}, "tradier": {"token": cfg.tradier_token},
+                "etrade": {"consumer_key": ck, "consumer_secret": cs}}
 
     def keys_status(self) -> list:
         vals = self._key_values()
@@ -521,6 +527,7 @@ class Engine:
             if src:
                 src.kid, src.sec = cfg.alpaca_creds
                 if src.kid and src.sec:
+                    src.note = "keys set; polling"
                     self.sources.toggle("alpaca", True)
         elif service == "tradier":
             cfg.tradier_token = vals.get("token", "")
@@ -528,6 +535,7 @@ class Engine:
             if src:
                 src.token = cfg.tradier_token
                 if src.token:
+                    src.note = "token set; polling"
                     self.sources.toggle("tradier", True)
         elif service == "etrade":
             ck = vals.get("consumer_key") or self.etrade_auth.ck
@@ -824,21 +832,20 @@ class Engine:
             builder.add(t)
         rows = builder.roll(ticks[-1].ts + cfg.bar_seconds)
         added, idx = 0, 0
-        pend: deque[tuple[int, np.ndarray, np.ndarray, np.ndarray]] = deque()
+        pend: deque[tuple[int, np.ndarray, np.ndarray, np.ndarray, float]] = deque()
         for row in rows:
             idx += 1
             closes = np.array([row[s].close for s in self.symbols], dtype=np.float32)
             real_now = np.array([row[s].volume > 0.0 for s in self.symbols])
             while pend and pend[0][0] + cfg.horizon <= idx:
-                _, x0, c0, r0 = pend.popleft()
+                _, x0, c0, r0, t0 = pend.popleft()
                 with np.errstate(divide="ignore", invalid="ignore"):
                     y = (np.log(closes / c0) * 1e4).astype(np.float32)
                 y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
-                self.learner.add(x0, y, (r0 & real_now).astype(np.float32))
-                added += 1
+                added += int(self.learner.add(x0, y, (r0 & real_now).astype(np.float32), ts=t0))
             x = feats.push(row)
             if x is not None:
-                pend.append((idx, x, closes, real_now))
+                pend.append((idx, x, closes, real_now, float(next(iter(row.values())).ts)))
         self.metrics.labels = self.learner.labels
         return added
 
@@ -937,7 +944,8 @@ class Engine:
                         "hit_ema", "coverage_n", "covered", "coverage_ema", "sharpness_ema",
                         "coverage_raw_n", "covered_raw", "suggestions", "suggestion_wins", "pnl_bps")
 
-    def _save(self) -> None:
+    def _save(self, final: bool = False) -> None:
+        """Checkpoint. `final` (shutdown) also forces the replay buffer to disk."""
         try:
             m = self.metrics
             metrics = {k: getattr(m, k) for k in self._PERSIST_METRICS}
@@ -945,7 +953,8 @@ class Engine:
             metrics["calib_v"] = self.CALIB_V
             self.learner.save(self.cfg.state_dir, extra={"norm": self.features.norm.state(), "metrics": metrics,
                                                           "paper": self.paper.to_state(),
-                                                          "outcomes": {s: list(d) for s, d in self.outcomes.items() if d}})
+                                                          "outcomes": {s: list(d) for s, d in self.outcomes.items() if d}},
+                              force_replay=final)
             tmp = os.path.join(self.cfg.state_dir, "universe.json.tmp")
             with open(tmp, "w") as f:
                 json.dump({"symbols": list(self.all_symbols)}, f)
@@ -1107,7 +1116,7 @@ class Engine:
                 y = (np.log(closes / pp.closes) * 1e4).astype(np.float32)
             y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)   # a 0-seeded / history-less symbol yields no return, not a NaN that poisons the whole batch
             mask = (pp.real & real_now).astype(np.float32) if real_now is not None else None   # train only on symbols that really traded at both ends
-            self.learner.add(pp.x, y, mask)
+            self.learner.add(pp.x, y, mask, ts=pp.ts)
             if pp.pred is not None:
                 self._score(pp, y)
             n += 1

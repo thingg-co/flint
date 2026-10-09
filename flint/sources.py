@@ -526,6 +526,50 @@ class SchwabSource(Source):
             groups = await asyncio.gather(*[_fetch(c, sym) for sym in syms])
         return [t for g in groups for t in g]
 
+    async def backfill_range(self, symbols, cutoff, until):
+        """Bounded history page [cutoff, until) of 5-minute candles by date range rather than
+        by period. Schwab serves minute candles at least 250 days back this way (probed
+        2026-10-10), so the deep-backfill loop runs off Schwab alone, no FMP key needed. Same
+        tick shape and timestamp convention as `backfill`, so pages line up with the startup
+        history. A 429 pauses and retries once; Schwab allows 120 requests a minute."""
+        syms = [s for s in symbols if self.supports(s)]
+        if not syms or not self.auth.authenticated:
+            return []
+        headers = await self._headers()
+        end = until or time.time()
+        params = {"periodType": "day", "frequencyType": "minute", "frequency": "5", "needExtendedHoursData": "false",
+                  "startDate": int(cutoff * 1000), "endDate": int(end * 1000)}
+        sem = asyncio.Semaphore(10)
+
+        async def _fetch(c, sym):
+            async with sem:
+                try:
+                    for attempt in range(2):
+                        r = await c.get(f"{self.BASE}/pricehistory", headers=headers, params={"symbol": sym, **params})
+                        if r.status_code == 429 and attempt == 0:
+                            await asyncio.sleep(15)
+                            continue
+                        break
+                    if r.status_code != 200:
+                        self.note = f"pricehistory {r.status_code}"
+                        return []
+                    out = []
+                    for k in r.json().get("candles", []):
+                        c0 = k.get("close")
+                        kt = k.get("datetime", 0) / 1000.0
+                        if c0 and cutoff <= kt < end:                 # bounded page: no overlap with bars already ingested
+                            c0 = float(c0)
+                            out.append(Tick(sym, kt, c0, float(k.get("volume") or 0.0), None,
+                                            o=float(k.get("open") or c0), h=float(k.get("high") or c0), l=float(k.get("low") or c0)))
+                    return out
+                except Exception as e:  # noqa: BLE001
+                    self.note = f"{sym}: {type(e).__name__}"
+                    return []
+
+        async with httpx.AsyncClient(timeout=25) as c:
+            groups = await asyncio.gather(*[_fetch(c, sym) for sym in syms])
+        return [t for g in groups for t in g]
+
     async def run(self, emit):
         if not self.symbols:
             return

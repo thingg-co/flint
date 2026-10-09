@@ -298,6 +298,7 @@ class Config:
     # Persistence
     state_dir: str = _env("STATE_DIR", "state")
     checkpoint_minutes: float = _env("CHECKPOINT_MINUTES", 5.0)
+    replay_save_minutes: float = _env("REPLAY_SAVE_MINUTES", 30.0)  # the replay buffer (tens of GB when full) is written at most this often, and at shutdown; the model every checkpoint
 
     def __post_init__(self):
         if not self.sources_on and self.feed and self.feed != "auto":

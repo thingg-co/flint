@@ -45,6 +45,10 @@ class OnlineLearner:
         self.rx = np.zeros((cap, cfg.n_assets, cfg.window, n_features), dtype=np.float32)
         self.ry = np.zeros((cap, cfg.n_assets), dtype=np.float32)
         self.rmask = np.ones((cap, cfg.n_assets), dtype=np.float32)
+        self.rt = np.zeros(cap, dtype=np.float64)        # label-bar timestamp per window (0 = unknown, legacy)
+        self._seen: set[int] = set()                     # timestamps in the buffer, so a restart's re-walk of the same history adds nothing
+        self._replay_at = 0.0                            # when the replay was last written, and with how many labels
+        self._replay_labels = -1
         self.size = 0
         self.ptr = 0
         self.steps = 0
@@ -68,6 +72,8 @@ class OnlineLearner:
                 self.size = 0
                 self.ptr = 0
                 self.labels = 0
+                self.rt[:] = 0.0
+                self._seen.clear()
 
     def _compiled(self, model):
         """torch.compile wrapper for the training step (shares weights with `model`, so
@@ -96,7 +102,16 @@ class OnlineLearner:
         return Prediction(q[0].cpu().numpy(), torch.sigmoid(up_logit[0]).cpu().numpy(),
                           torch.sigmoid(down_logit[0]).cpu().numpy(), gate[0].cpu().numpy(), attn[0].cpu().numpy())
 
-    def add(self, x: np.ndarray, y: np.ndarray, mask: np.ndarray | None = None) -> None:
+    def add(self, x: np.ndarray, y: np.ndarray, mask: np.ndarray | None = None, ts: float | None = None) -> bool:
+        """Store one labeled window. `ts` is the bar the window ends on; a window for a bar
+        already in the buffer is skipped (returns False), so the startup backfill after a
+        restart, which walks the same ten days again, cannot stack copies of recent history."""
+        key = int(round(ts)) if ts else None
+        if key is not None and key in self._seen:
+            return False
+        old = self.rt[self.ptr]
+        if old:
+            self._seen.discard(int(round(old)))          # the ring slot being overwritten
         self.rx[self.ptr] = x
         # Apply label cap: mask out symbols with labels exceeding the cap (treat as carry-forward bar)
         cap = self.cfg.label_cap_bps
@@ -108,9 +123,13 @@ class OnlineLearner:
                 mask = mask * label_mask.astype(np.float32)
         self.ry[self.ptr] = y
         self.rmask[self.ptr] = 1.0 if mask is None else mask
+        self.rt[self.ptr] = ts or 0.0
+        if key is not None:
+            self._seen.add(key)
         self.ptr = (self.ptr + 1) % self.rx.shape[0]
         self.size = min(self.size + 1, self.rx.shape[0])
         self.labels += 1
+        return True
 
     def _sample(self, batch: int):
         cap = self.rx.shape[0]
@@ -168,7 +187,11 @@ class OnlineLearner:
 
     # Persistence -----------------------------------------------------------------
 
-    def save(self, directory: str | Path, extra: dict | None = None) -> None:
+    def save(self, directory: str | Path, extra: dict | None = None, *, force_replay: bool = False) -> None:
+        """Checkpoint the model every call; the replay only when it has new windows and
+        replay_save_minutes have passed, or when forced (shutdown). A full buffer is tens of
+        GB, this runs under the training lock, and features compress poorly, so the replay is
+        written uncompressed: an NVMe takes seconds where zlib took minutes."""
         d = Path(directory)
         d.mkdir(parents=True, exist_ok=True)
         with self.lock:
@@ -183,8 +206,12 @@ class OnlineLearner:
                 "extra": extra or {},
             }, d / "model.pt.tmp")
             os.replace(d / "model.pt.tmp", d / "model.pt")                       # atomic: never leave a half-written file
-            np.savez_compressed(d / "replay.tmp.npz", x=self.rx[:self.size], y=self.ry[:self.size], mask=self.rmask[:self.size], ptr=self.ptr)
-            os.replace(d / "replay.tmp.npz", d / "replay.npz")
+            every = float(getattr(self.cfg, "replay_save_minutes", 30.0)) * 60.0
+            if self.labels != self._replay_labels and (force_replay or time.time() - self._replay_at >= every):
+                np.savez(d / "replay.tmp.npz", x=self.rx[:self.size], y=self.ry[:self.size], mask=self.rmask[:self.size],
+                         t=self.rt[:self.size], ptr=self.ptr)
+                os.replace(d / "replay.tmp.npz", d / "replay.npz")
+                self._replay_at, self._replay_labels = time.time(), self.labels
 
     def load(self, directory: str | Path) -> dict | None:
         d = Path(directory)
@@ -227,6 +254,9 @@ class OnlineLearner:
                     self.rx[:n] = z["x"]
                     self.ry[:n] = z["y"]
                     self.rmask[:n] = z["mask"] if "mask" in z else 1.0
+                    self.rt[:n] = z["t"] if "t" in z else 0.0       # a pre-0.5.10 replay has no timestamps: kept, just not deduplicated
+                    self._seen = {int(round(t)) for t in self.rt[:n] if t}
+                    self._replay_labels = self.labels                    # what is on disk is what is in memory
                     self.size = n
                     self.ptr = int(z["ptr"]) % self.rx.shape[0] if n == self.rx.shape[0] else n % self.rx.shape[0]
             except Exception as e:  # noqa: BLE001 -- keep the model, just drop an unreadable replay buffer

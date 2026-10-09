@@ -23,6 +23,11 @@ fi
 ENV=(
     FLINT_HOST=0.0.0.0                                 # reachable from the LAN and the mobile app
     FLINT_COMPILE=1                                    # torch.compile the train step: 2.1x on the GB10
+    FLINT_MAX_WARMUP_SECONDS=300                       # tune budget 5000 ms/step so the ladder reaches 5XL
+                                                       # (~57 GB with the replay at 212 names); the bench runs
+                                                       # eager, live steps run compiled at about half that
+    FLINT_REPLAY_SIZE=12000                            # ~33 GB of windows at 212 names: about 7 months of 5-min bars
+    FLINT_DEEP_BACKFILL_DAYS=220                       # page Schwab history back this far while the market is closed
     FLINT_BRIEF_BACKEND=openai                         # the brief, when enabled, talks to a LOCAL
     FLINT_BRIEF_OPENAI_BASE=http://127.0.0.1:8080/v1   # llama-server on :8080 -- never a cloud API
 )

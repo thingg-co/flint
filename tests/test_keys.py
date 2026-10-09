@@ -62,12 +62,91 @@ def test_finnhub_key_is_saved_and_applied_everywhere(monkeypatch, tmp_path):
     assert Config().finnhub_key == "abc123xyz"
 
 
+# how each service's saved values come back out of a fresh Config(), i.e. after a restart
+CONFIG_READ = {
+    "alphavantage": lambda c: {"key": c.av_key},
+    "finnhub": lambda c: {"key": c.finnhub_key},
+    "eodhd": lambda c: {"key": c.eodhd_key},
+    "fmp": lambda c: {"key": c.fmp_key},
+    "schwab": lambda c: {"app_key": c.schwab_creds[0], "app_secret": c.schwab_creds[1]},
+    "alpaca": lambda c: {"key_id": c.alpaca_creds[0], "secret_key": c.alpaca_creds[1]},
+    "tradier": lambda c: {"token": c.tradier_token},
+    "etrade": lambda c: {"consumer_key": c.etrade_creds[0], "consumer_secret": c.etrade_creds[1]},
+}
+ENV_OF = {"alphavantage": ["FLINT_AV_KEY", "FLINT_ALPHAVANTAGE_KEY"], "finnhub": ["FLINT_FINNHUB_KEY"], "eodhd": ["FLINT_EODHD_KEY"],
+          "fmp": ["FLINT_FMP_KEY"], "schwab": ["FLINT_SCHWAB_APP_KEY", "FLINT_SCHWAB_APP_SECRET"],
+          "alpaca": ["FLINT_ALPACA_KEY_ID", "FLINT_ALPACA_SECRET_KEY"], "tradier": ["FLINT_TRADIER_TOKEN"],
+          "etrade": ["FLINT_ETRADE_CONSUMER_KEY", "FLINT_ETRADE_CONSUMER_SECRET"]}
+
+
 @pytest.mark.parametrize("svc", KEY_SERVICES, ids=[s["id"] for s in KEY_SERVICES])
-def test_every_service_saves_its_file(monkeypatch, tmp_path, svc):
+def test_every_service_saves_shows_present_and_survives_a_restart(monkeypatch, tmp_path, svc):
+    """For each service in KEY_SERVICES: the panel save succeeds, the panel then reports the
+    service present (it did not for Alpaca, Tradier and E*TRADE: the status map lacked them),
+    and a fresh Config() in that directory, which is what a restart does, reads the same values."""
+    for v in ENV_OF[svc["id"]]:
+        monkeypatch.delenv(v, raising=False)
     e = fake_engine(monkeypatch, tmp_path)
-    out = e.set_key(svc["id"], {f["id"]: f"v-{f['id']}" for f in svc["fields"]})
+    vals = {f["id"]: f"v-{f['id']}" for f in svc["fields"]}
+    out = e.set_key(svc["id"], vals)
     assert out.get("ok") is True, out
     assert (tmp_path / svc["file"]).exists()
+    row = next(k for k in out["keys"] if k["id"] == svc["id"])
+    assert row["present"], f"{svc['id']} saved but the panel says not set"
+    assert all(f["present"] and f["masked"] for f in row["fields"])
+    assert CONFIG_READ[svc["id"]](Config()) == vals, f"{svc['id']} does not survive a restart"
+
+
+def test_apply_key_reaches_the_real_sources(monkeypatch, tmp_path):
+    """_apply_key against a real SourceManager (every REGISTRY source, built offline), not a
+    stand-in: the attribute names it sets must be the ones the sources read, the source must
+    end up enabled with its note cleared, and the toggle must not refuse it."""
+    from types import SimpleNamespace as NS
+    from flint.sources import SourceManager
+
+    monkeypatch.chdir(tmp_path)
+    for vs in ENV_OF.values():
+        for v in vs:
+            monkeypatch.delenv(v, raising=False)
+    cfg = Config()
+    cfg.symbols = ["AAPL", "MSFT"]
+
+    async def tok():
+        return "t"
+
+    schwab = NS(authenticated=False, has_creds=False, app_key="", app_secret="", callback="https://127.0.0.1", token=tok)
+    etrade = NS(authenticated=False, has_creds=False, ck="", cs="", token=tok)
+    e = fake_engine(monkeypatch, tmp_path)
+    e.cfg = cfg
+    e.schwab_auth, e.etrade_auth = schwab, etrade
+    e.sources = SourceManager(cfg, cfg.symbols, NS(key="", exhausted=False), lambda t: None, schwab=schwab, etrade=etrade)
+    e.av = e.sources.av
+
+    async def run():
+        # every source that reads a key at construction starts "keyless"; the live apply must flip it
+        for sid in ("alpaca", "tradier", "finnhub", "eodhd", "fmp"):
+            e.sources.enabled[sid] = False
+        assert e.set_key("alpaca", {"key_id": "AKID", "secret_key": "ASEC"})["ok"]
+        assert e.set_key("tradier", {"token": "TTOK"})["ok"]
+        assert e.set_key("finnhub", {"key": "FKEY"})["ok"]
+        assert e.set_key("eodhd", {"key": "EKEY"})["ok"]
+        assert e.set_key("fmp", {"key": "MKEY"})["ok"]
+        assert e.set_key("schwab", {"app_key": "SK", "app_secret": "SS"})["ok"]
+        assert e.set_key("etrade", {"consumer_key": "CK", "consumer_secret": "CS"})["ok"]
+        assert e.set_key("alphavantage", {"key": "AVKEY"})["ok"]
+        src = e.sources.sources
+        assert (src["alpaca"].kid, src["alpaca"].sec) == ("AKID", "ASEC") and "no API keys" not in src["alpaca"].note
+        assert src["tradier"].token == "TTOK" and "no token" not in src["tradier"].note
+        assert src["finnhub"].key == "FKEY" and src["eodhd"].key == "EKEY" and src["fmp"].key == "MKEY"
+        assert (schwab.app_key, schwab.app_secret) == ("SK", "SS") and (etrade.ck, etrade.cs) == ("CK", "CS")
+        assert e.sources.av.key == "AVKEY"
+        for sid in ("alpaca", "tradier", "finnhub", "eodhd", "fmp"):
+            assert e.sources.enabled[sid], f"{sid} not enabled after its key was saved"
+            assert sid in e.sources.tasks, f"{sid} not started after its key was saved"
+        for t in e.sources.tasks.values():
+            t.cancel()
+
+    asyncio.run(run())
 
 
 def _client(monkeypatch, status, body, calls):
