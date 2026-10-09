@@ -274,6 +274,11 @@ class Config:
     portfolio_seconds: float = _env("PORTFOLIO_SECONDS", 60.0)      # how often to poll Schwab account positions (read-only)
     operator_half_life: float = _env("OPERATOR_HALF_LIFE", 1800.0)  # decay of an injected human note (seconds)
     max_universe: int = _env("MAX_UNIVERSE", 256)            # cap on modeled symbols (cross-attention + data-rate limit)
+    universe_refresh: bool = _env("UNIVERSE_REFRESH", "1") not in ("0", "false", "no")  # once a day after the close: core + every holding + the most interesting names (a live control)
+    interesting_count: int = _env("INTERESTING_COUNT", 40)        # how many "interesting" slots the universe keeps beyond core and holdings (a live control)
+    interesting_min_dollar_volume: float = _env("INTERESTING_MIN_DOLLAR_VOLUME", 2e7)  # a radar name needs this much daily dollar volume to be a candidate
+    interesting_grace_days: int = _env("INTERESTING_GRACE_DAYS", 14)   # a promoted name is demoted after this many days without ranking in the top 1.5 x count
+    interesting_min_tenure_days: int = _env("INTERESTING_MIN_TENURE_DAYS", 5)  # ... and never before this many days in the universe
     radar_top: int = _env("RADAR_TOP", 750)                  # movers watchlist size (display + breadth); supply is ~8 screeners x radar_count, deduped
     radar_count: int = _env("RADAR_COUNT", 250)              # per-screener fetch (Yahoo hard cap is 250)
     burry_enabled: bool = _env("BURRY", "1") not in ("0", "false", "no")
@@ -306,6 +311,7 @@ class Config:
     backtest_days: int = _env("BACKTEST_DAYS", 0)             # score only the last N days (0 = all timestamped history)
     backtest_cost_bps: float = _env("BACKTEST_COST_BPS", 5.0)  # round-trip cost per unit of position in the backtest (the live book charges the quoted spread)
     backtest_warm_days: int = _env("BACKTEST_WARM_DAYS", 10)   # training-only days before scoring starts, like warmup
+    memory_floor_gb: float = _env("MEMORY_FLOOR_GB", 10.0)   # GB that must stay free: the backtest sizes its net to fit above it and stops below it; deep paging pauses near it (a live control)
 
     def __post_init__(self):
         if not self.sources_on and self.feed and self.feed != "auto":

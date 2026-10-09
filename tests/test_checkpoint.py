@@ -48,7 +48,7 @@ class TestOnlineLearnerCheckpoint:
 
         # Check files exist and temp files don't
         assert (tmp_path / "model.pt").exists()
-        assert (tmp_path / "replay.npz").exists()
+        assert (tmp_path / "replay" / "meta.json").exists()
         assert not (tmp_path / "model.pt.tmp").exists()
         assert not (tmp_path / "replay.tmp.npz").exists()
 
@@ -66,20 +66,21 @@ class TestOnlineLearnerCheckpoint:
             assert torch.equal(v, b.model.state_dict()[k])
 
     def test_symbol_mismatch_backs_up(self, tmp_path):
-        """Checkpoint with different symbols backs up and returns None."""
+        """A checkpoint for a universe with no name in common backs up and returns None (one
+        with names in common migrates instead; see tests/test_universe.py)."""
         a = make_learner(symbols=("A", "B"), window=8)
         fill(a, 5)
         a.save(tmp_path)
 
         # Load into learner with different symbols
-        b = make_learner(symbols=("A", "C"), window=8)
+        b = make_learner(symbols=("C", "D"), window=8)
         extra = b.load(tmp_path)
 
         assert extra is None
         assert (tmp_path / "model.pt.bak").exists()
-        assert (tmp_path / "replay.npz.bak").exists()
+        assert (tmp_path / "replay.bak" / "meta.json").exists()
         assert not (tmp_path / "model.pt").exists()
-        assert not (tmp_path / "replay.npz").exists()
+        assert not (tmp_path / "replay").exists()
 
     def test_window_mismatch_backs_up(self, tmp_path):
         """Checkpoint with different window backs up and returns None."""
@@ -93,9 +94,9 @@ class TestOnlineLearnerCheckpoint:
 
         assert extra is None
         assert (tmp_path / "model.pt.bak").exists()
-        assert (tmp_path / "replay.npz.bak").exists()
+        assert (tmp_path / "replay.bak" / "meta.json").exists()
         assert not (tmp_path / "model.pt").exists()
-        assert not (tmp_path / "replay.npz").exists()
+        assert not (tmp_path / "replay").exists()
 
     def test_corrupt_checkpoint_starts_fresh(self, tmp_path):
         """Corrupt checkpoint returns None and does not back up."""
@@ -122,7 +123,7 @@ class TestOnlineLearnerCheckpoint:
         a.save(tmp_path, extra={"k": 1})
 
         # Corrupt replay but keep model
-        (tmp_path / "replay.npz").write_bytes(b"garbage")
+        (tmp_path / "replay" / "x.npy").write_bytes(b"garbage")
 
         # Load into fresh learner
         b = make_learner(symbols=("A", "B"), window=8)

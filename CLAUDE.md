@@ -78,10 +78,11 @@ unless Flint is already up.
 
 - The model runs on 5-minute bars. Backfill has to be deep enough that trading bars exceed
   window + horizon, or no windows form and it never forecasts.
-- The checkpoint reloads only when the replay shape and the symbol list match the current
-  config. On a mismatch it renames the old checkpoint to `model.pt.bak` and starts fresh,
-  so a config change never silently destroys a trained model. Changing the symbol list,
-  window, or feature set resets the model.
+- The checkpoint reloads when the replay shape and the symbol list match the current config, and
+  migrates when only the symbol list changed (see the universe bullets). A change of window or
+  feature set, or a universe with no name in common, renames the old checkpoint to `model.pt.bak`
+  and the replay to `replay.bak` and starts fresh, so a config change never silently destroys a
+  trained model.
 - Every modeled symbol needs a price for a bar row to emit, so a symbol with no history
   would block the whole universe. History-less symbols are flat-seeded at 0.0 (a neutral,
   zero-return series). Keep that — one dead ticker must not zero every bar.
@@ -103,10 +104,24 @@ unless Flint is already up.
   handler parked on its queue held SIGTERM until systemd's SIGKILL 90 s later and the final save
   never ran (the 2026-10-10 "stop hangs"). `timeout_graceful_shutdown=10` in `__main__` is a
   backstop, not the fix; `tests/test_server.py` drives the ASGI app directly to check the return.
-- The universe grown at runtime (portfolio holdings, movers, news adds) persists in
-  `state/universe.json` and is merged back on start, so a restart rebuilds at the same
-  symbol count and the checkpoint still matches. Delete the file to intentionally shrink
-  the universe back to the config default.
+- The universe is the configured core, every holding (the portfolio loop adds a new holding
+  within a minute) and up to `interesting_count` promoted names, under `max_universe`. Once a day
+  after the close `_universe_loop` scores candidates from three organic sources on one scale
+  (`universe_candidates`: radar movers by move x dollar volume, tickers named in headlines that are
+  known symbols, and the tracked funds' 13F positions) and `pick_universe` promotes the top of the
+  ranking into the room left; a promoted name is demoted only after `interesting_grace_days`
+  without ranking in the top 1.5 x count and `interesting_min_tenure_days` of tenure, because a
+  demotion forfeits its learned row and history. `state/universe.json` persists the list, the
+  refresh date and each promoted name's since/last_hit; delete it to shrink back to the config.
+- A symbol-list change no longer resets the model: `learner.load` migrates the checkpoint (every
+  parameter is shared across assets except the per-asset embedding table and its Adam moments,
+  whose rows are copied for retained names) and the replay (retained columns copied, new names
+  zero and masked), then the deep backfill re-pages the whole history and `learner.fill` writes the
+  new names' columns into windows already held. Only a change of window or features, or a universe
+  with no name in common, still backs up and starts fresh. The replay lives in `state/replay/` as
+  one .npy per array plus meta.json, swapped in atomically and memory-mapped on load (`read_replay`
+  also reads the pre-0.5.12 replay.npz); a rebuild frees the old buffer before the new learner
+  allocates its own.
 - While the market is closed, `_deep_backfill_loop` pages history back in ~10-day chunks
   (one every 150 s while there is history left, to `deep_backfill_days`, a live control; 0 disables), adds labeled windows to the replay
   through an isolated bar/feature pipeline, and trains on them. It must never run while the
@@ -161,7 +176,8 @@ unless Flint is already up.
   to a cloud API. On the Spark, start.sh points it at llama-server on 127.0.0.1:8080.
 - User-facing text capitalizes "Flint" as a proper noun.
 - FlintNet returns five tensors (quantiles, up-logit, down-logit, gate, attention). If you change the head, update `flint_loss` AND `autotune._bench` together -- an arity mismatch only surfaces on a re-benchmark (a feature/symbol-count change), not on a cached start.
-- Changing the feature set or the symbol list reshapes the model, so it resets once (guarded; the old checkpoint is backed up to model.pt.bak).
+- Changing the feature set reshapes the model, so it resets once (guarded; the old checkpoint is backed
+  up to model.pt.bak); changing the symbol list migrates it.
 - No position may carry unlimited risk, ever. Defined risk is the rule, not premium-capped: long
   options, debit and credit spreads, covered calls on held stock and cash-secured puts are all fine,
   because the worst case is a known finite number at entry. Naked short stock and naked written
@@ -186,12 +202,22 @@ unless Flint is already up.
   regimen); `backtest_hours` (30 by default, a weekend) caps the run by shrinking that budget, so a
   run always finishes; the report says what it used. A universe rebuild stops a running backtest
   first and waits for it, because a benchmark next to another net reads nonsense peaks.
+- A backtest owns the GPU. While one runs, nothing else trains: matured labels are stored and
+  trained on afterwards, the idle trainer skips, and the deep backfill pauses so the replay cannot
+  grow under the run; a manual "Run now" also waits for paging to finish. Before it starts, the
+  backtest sizes its net to the memory actually free (`backtest_preset_for`: the widest preset no
+  wider than the live one whose peak, scaled from the live rung's measured peak by d_model, fits
+  above `memory_floor_gb`), it stops itself at the next day boundary if free memory falls below the
+  floor, and deep paging pauses near the floor too. Two 5XL nets training in one 121 GB box took
+  the Spark down on 2026-10-10 (NVRM out of memory, reboot); the GPU allocations are outside any
+  cgroup limit, so these in-process rules are the only guard.
 - A failed universe rebuild (no memory to benchmark, a bad symbol) puts the previous universe back
   and resumes the lifecycle on the model it still has; it saves first so the replay in memory is
   not lost. Before 2026-10-10 it left every loop cancelled and the status "starting" for good. The
   benchmark's peak is measured above what the process already holds, so a live model or a backtest
-  in the same process cannot inflate it. Note that growing the universe still resets the model and
-  the replay (shape mismatch), so "+ Top 20 movers" and holdings adds cost the deep-backfill history.
+  in the same process cannot inflate it. Since 0.5.12 a universe change migrates the model and the
+  replay instead of resetting them, so holdings adds and the daily refresh cost nothing but the
+  re-page that fills the new names in.
 - News: the browser skimmer's feeds follow the universe's asset mix (`default_sources`): market desks
   for equities, the crypto desks only when crypto is modeled. Equity mentions come mainly from
   `FinnhubNews`, company news keyed by ticker (30 names per pass in rotation, three days kept), with

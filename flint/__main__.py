@@ -139,9 +139,10 @@ def _replay() -> None:
 
     # Load replay.npz
     replay_info = None
-    if replay_path.exists():
+    from .learner import read_replay
+    if read_replay(state_dir) is not None:
         try:
-            z = np.load(replay_path, allow_pickle=False)
+            z = read_replay(state_dir)
             replay_info = {
                 "x_shape": z["x"].shape,
                 "y_shape": z["y"].shape,
@@ -285,19 +286,20 @@ def _backtest() -> None:
         preset = str(choice.get("preset", ""))
     except (OSError, ValueError, KeyError):
         print("no cached tuning in state/machine.json; using the config's model size")
-    r = state / "replay.npz"
-    if not r.exists():
-        print(f"no replay at {r}")
+    from .learner import read_replay
+    z = read_replay(state)
+    if z is None:
+        print(f"no replay under {state}")
         raise SystemExit(1)
-    z = np.load(r)
-    if "t" not in z:
+    if not (np.asarray(z["t"]) > 0).any():
         print("the replay has no timestamps (saved before 0.5.10); nothing to walk")
         raise SystemExit(1)
-    symbols = None
-    try:
-        symbols = list(torch.load(state / "model.pt", map_location="cpu", weights_only=False).get("symbols") or [])
-    except Exception:  # noqa: BLE001
-        pass
+    symbols = list(z.get("symbols") or [])
+    if not symbols:
+        try:
+            symbols = list(torch.load(state / "model.pt", map_location="cpu", weights_only=False).get("symbols") or [])
+        except Exception:  # noqa: BLE001
+            pass
     opts = {"days": int(cfg.backtest_days), "hours": float(cfg.backtest_hours), "cost": float(cfg.backtest_cost_bps),
             "warm": int(cfg.backtest_warm_days), "night": float(cfg.backtest_night_epochs)}
     argv = sys.argv[2:]
@@ -306,15 +308,15 @@ def _backtest() -> None:
             opts[a[2:]] = type(opts[a[2:]])(argv[i + 1])
     device = pick_device(cfg.device)
     configure_backend(device)
-    mask = z["mask"] if "mask" in z else np.ones_like(z["y"])
-    print(f"walking {int((z['t'] > 0).sum())} timestamped windows on {device} ({preset or 'config'} preset), "
+    mask = np.asarray(z["mask"])
+    print(f"walking {int((np.asarray(z['t']) > 0).sum())} timestamped windows on {device} ({preset or 'config'} preset), "
           f"cost {opts['cost']:g} bps, warm {opts['warm']} days, budget {opts['hours']:g} h")
 
     def prog(day, total, t):
         print(f"\r  day {day}/{total}  net {t['net_bps']:+.0f} bps  per day {t['net_bps_per_day']:+.1f}  "
               f"hit {((t['hit_rate'] or 0) * 100):.0f}%  signals {t['signals']}   ", end="", flush=True)
 
-    res = run_backtest(cfg, z["x"], z["y"], mask, z["t"], device=device, symbols=symbols, progress=prog,
+    res = run_backtest(cfg, z["x"], np.asarray(z["y"]), mask, np.asarray(z["t"]), device=device, symbols=symbols, progress=prog,
                        hours=opts["hours"], days=opts["days"], warm_days=opts["warm"], cost_bps=opts["cost"], preset=preset,
                        night_epochs=opts["night"])
     print()

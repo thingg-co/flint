@@ -62,9 +62,12 @@ def test_legacy_replay_without_timestamps_loads(tmp_path):
     for i in range(3):
         L.add(*window(L, i), ts=1_700_000_000.0 + 300 * i)
     L.save(tmp_path)
-    z = dict(np.load(tmp_path / "replay.npz"))
-    del z["t"]
-    np.savez_compressed(tmp_path / "replay.npz", **z)
+    import shutil
+    rd = tmp_path / "replay"
+    z = {k: np.load(rd / f"{k}.npy") for k in ("x", "y", "mask")}
+    ptr = __import__("json").loads((rd / "meta.json").read_text())["ptr"]
+    shutil.rmtree(rd)                                             # a pre-0.5.12 replay: one npz, no timestamps
+    np.savez_compressed(tmp_path / "replay.npz", ptr=ptr, **z)
     M = make_learner()
     M.load(tmp_path)
     assert M.size == 3 and not M._seen                        # kept, not deduplicated

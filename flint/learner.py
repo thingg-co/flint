@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
+import shutil
 import threading
 import time
 from dataclasses import dataclass
@@ -17,6 +19,28 @@ from .model import FlintNet, flint_loss
 
 log = logging.getLogger(__name__)
 HOLDOUT_EVERY = 20       # every 20th bar by timestamp is validation-only: 5% the trainer never sees
+REPLAY_DIR = "replay"    # one .npy per array plus meta.json, memory-mapped on load; replay.npz is the pre-0.5.12 form
+
+
+def read_replay(directory: str | Path) -> dict | None:
+    """The saved replay as arrays plus its metadata: x, y, mask, t (memory-mapped from the
+    replay/ directory; read fully from a legacy replay.npz), ptr, n and the symbol order the
+    columns were saved in (empty for the legacy file: the checkpoint's list applies)."""
+    d = Path(directory)
+    rd = d / REPLAY_DIR
+    if (rd / "meta.json").exists():
+        meta = json.loads((rd / "meta.json").read_text())
+        out = {k: np.load(rd / f"{k}.npy", mmap_mode="r") for k in ("x", "y", "mask", "t")}
+        out.update({"ptr": int(meta.get("ptr", 0)), "n": int(meta.get("n", len(out["y"]))),
+                    "symbols": list(meta.get("symbols") or [])})
+        return out
+    f = d / "replay.npz"
+    if f.exists():
+        z = np.load(f)
+        n = len(z["y"])
+        return {"x": z["x"], "y": z["y"], "mask": z["mask"] if "mask" in z else np.ones_like(z["y"]),
+                "t": z["t"] if "t" in z else np.zeros(n), "ptr": int(z["ptr"]), "n": n, "symbols": []}
+    return None
 
 
 @dataclass(slots=True)
@@ -42,13 +66,11 @@ class OnlineLearner:
         self.compile_broken = False       # set when a compiled step fails; eager for the rest of the run
         self.train_model = self._compiled(self.model)
         self.lock = threading.Lock()
-        cap = cfg.replay_size
-        self.rx = np.zeros((cap, cfg.n_assets, cfg.window, n_features), dtype=np.float32)
-        self.ry = np.zeros((cap, cfg.n_assets), dtype=np.float32)
-        self.rmask = np.ones((cap, cfg.n_assets), dtype=np.float32)
-        self.rt = np.zeros(cap, dtype=np.float64)        # label-bar timestamp per window (0 = unknown, legacy)
-        self.rhold = np.zeros(cap, dtype=bool)           # held out of training (derived from the timestamp)
+        self.n_features = n_features
+        self._alloc()
         self._seen: set[int] = set()                     # timestamps in the buffer, so a restart's re-walk of the same history adds nothing
+        self._slot: dict[int, int] = {}                  # timestamp -> ring slot, so a re-walk can fill new names' columns
+        self.migrated_new: list[str] = []                # names the last load() added fresh (no history in the replay yet)
         self._replay_at = 0.0                            # when the replay was last written, and with how many labels
         self._replay_labels = -1
         self.size = 0
@@ -59,6 +81,30 @@ class OnlineLearner:
         self.pinball_ema: float | None = None
         self.bce_ema: float | None = None
         self.rng = np.random.default_rng(0)
+
+    def _alloc(self) -> None:
+        cfg = self.cfg
+        cap = cfg.replay_size
+        self.rx = np.zeros((cap, cfg.n_assets, cfg.window, self.n_features), dtype=np.float32)
+        self.ry = np.zeros((cap, cfg.n_assets), dtype=np.float32)
+        self.rmask = np.ones((cap, cfg.n_assets), dtype=np.float32)
+        self.rt = np.zeros(cap, dtype=np.float64)        # label-bar timestamp per window (0 = unknown, legacy)
+        self.rhold = np.zeros(cap, dtype=bool)           # held out of training (derived from the timestamp)
+        self._released = False
+
+    def release_replay(self) -> None:
+        """Free the replay arrays (tens of GB) ahead of a rebuild that allocates a new buffer
+        of its own; the next load() re-allocates and reads the saved replay back."""
+        with self.lock:
+            self.rx = self.rx[:0]
+            self.ry = self.ry[:0]
+            self.rmask = self.rmask[:0]
+            self.rt = self.rt[:0]
+            self.rhold = self.rhold[:0]
+            self.size = self.ptr = 0
+            self._seen.clear()
+            self._slot.clear()
+            self._released = True
 
     def reset(self, clear_replay: bool = False) -> None:
         cfg = self.cfg
@@ -77,6 +123,7 @@ class OnlineLearner:
                 self.rt[:] = 0.0
                 self.rhold[:] = False
                 self._seen.clear()
+                self._slot.clear()
 
     def _compiled(self, model):
         """torch.compile wrapper for the training step (shares weights with `model`, so
@@ -118,9 +165,12 @@ class OnlineLearner:
         key = int(round(ts)) if ts else None
         if key is not None and key in self._seen:
             return False
+        if self._released:
+            self._alloc()
         old = self.rt[self.ptr]
         if old:
             self._seen.discard(int(round(old)))          # the ring slot being overwritten
+            self._slot.pop(int(round(old)), None)
         self.rx[self.ptr] = x
         # Apply label cap: mask out symbols with labels exceeding the cap (treat as carry-forward bar)
         cap = self.cfg.label_cap_bps
@@ -136,10 +186,34 @@ class OnlineLearner:
         self.rhold[self.ptr] = self._held_out(ts)
         if key is not None:
             self._seen.add(key)
+            self._slot[key] = self.ptr
         self.ptr = (self.ptr + 1) % self.rx.shape[0]
         self.size = min(self.size + 1, self.rx.shape[0])
         self.labels += 1
         return True
+
+    def fill(self, ts: float | None, x: np.ndarray, y: np.ndarray, mask: np.ndarray | None = None) -> int:
+        """Write the columns of a window already in the buffer (same bar timestamp) that are
+        still masked out: the names added to the universe after that window was stored. The
+        deep backfill re-walks history after a universe change and fills them this way, so a
+        promoted name gets its past without the rest of the replay being rebuilt. Returns the
+        number of columns filled."""
+        if not ts:
+            return 0
+        slot = self._slot.get(int(round(ts)))
+        if slot is None:
+            return 0
+        m = np.ones(self.cfg.n_assets, dtype=np.float32) if mask is None else np.asarray(mask, dtype=np.float32)
+        cap = self.cfg.label_cap_bps
+        if cap > 0:
+            m = m * (np.abs(y) <= cap).astype(np.float32)
+        cols = np.flatnonzero((self.rmask[slot] <= 0) & (m > 0))
+        if len(cols) == 0:
+            return 0
+        self.rx[slot, cols] = x[cols]
+        self.ry[slot, cols] = y[cols]
+        self.rmask[slot, cols] = m[cols]
+        return int(len(cols))
 
     def _held_out(self, ts: float | None) -> bool:
         """Every HOLDOUT_EVERY-th bar by timestamp. Derived, not stored, so a reload or a
@@ -250,11 +324,31 @@ class OnlineLearner:
             }, d / "model.pt.tmp")
             os.replace(d / "model.pt.tmp", d / "model.pt")                       # atomic: never leave a half-written file
             every = float(getattr(self.cfg, "replay_save_minutes", 30.0)) * 60.0
-            if self.labels != self._replay_labels and (force_replay or time.time() - self._replay_at >= every):
-                np.savez(d / "replay.tmp.npz", x=self.rx[:self.size], y=self.ry[:self.size], mask=self.rmask[:self.size],
-                         t=self.rt[:self.size], ptr=self.ptr)
-                os.replace(d / "replay.tmp.npz", d / "replay.npz")
+            if (self.labels != self._replay_labels and not self._released
+                    and (force_replay or time.time() - self._replay_at >= every)):
+                self._write_replay(d)
                 self._replay_at, self._replay_labels = time.time(), self.labels
+
+    def _write_replay(self, d: Path) -> None:
+        """One .npy per array in replay.tmp/, then swapped into replay/: a crash leaves the old
+        directory whole. The legacy replay.npz goes once the directory exists."""
+        tmp, old, final = d / (REPLAY_DIR + ".tmp"), d / (REPLAY_DIR + ".old"), d / REPLAY_DIR
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True)
+        n = self.size
+        np.save(tmp / "x.npy", self.rx[:n])
+        np.save(tmp / "y.npy", self.ry[:n])
+        np.save(tmp / "mask.npy", self.rmask[:n])
+        np.save(tmp / "t.npy", self.rt[:n])
+        (tmp / "meta.json").write_text(json.dumps({"n": n, "ptr": self.ptr, "symbols": list(self.cfg.symbols),
+                                                   "saved_at": time.time()}))
+        shutil.rmtree(old, ignore_errors=True)
+        if final.exists():
+            os.replace(final, old)
+        os.replace(tmp, final)
+        shutil.rmtree(old, ignore_errors=True)
+        with contextlib.suppress(OSError):
+            (d / "replay.npz").unlink()
 
     def load(self, directory: str | Path) -> dict | None:
         d = Path(directory)
@@ -266,45 +360,118 @@ class OnlineLearner:
         except Exception as e:  # noqa: BLE001 -- a corrupt/partial checkpoint must never crash startup
             log.warning("could not read checkpoint %s (%s); starting fresh", f, e)
             return None
-        if tuple(ck.get("shape", ())) != tuple(self.rx.shape[1:]) or ck.get("symbols") != list(self.cfg.symbols):
+        if self._released:
+            self._alloc()
+        saved_shape = tuple(ck.get("shape", ()))
+        saved_syms = list(ck.get("symbols") or [])
+        cur_shape = tuple(self.rx.shape[1:])
+        cur_syms = list(self.cfg.symbols)
+        # Only the symbol list changed (same window and features, some names in common): keep every
+        # retained name's embedding row and replay columns, give the new names fresh ones. Before
+        # 0.5.12 any universe change threw the model and hours of paged history away.
+        migrate = (len(saved_shape) == 3 and saved_shape[1:] == cur_shape[1:] and saved_syms != cur_syms
+                   and bool(set(saved_syms) & set(cur_syms)))
+        self.migrated_new = []
+        if (saved_shape != cur_shape or saved_syms != cur_syms) and not migrate:
             log.warning("checkpoint at %s does not match the current config "
                         "(saved shape=%s / %d symbols; current shape=%s / %d symbols) — "
                         "backing up to model.pt.bak and starting fresh. If this was not an intended "
                         "config change, restore the .bak to avoid losing training.",
-                        d, tuple(ck.get("shape", ())), len(ck.get("symbols") or []),
-                        tuple(self.rx.shape[1:]), len(self.cfg.symbols))
+                        d, saved_shape, len(saved_syms), cur_shape, len(cur_syms))
             with contextlib.suppress(OSError):        # preserve the trained model instead of clobbering it on next save
                 os.replace(f, d / "model.pt.bak")
                 if (d / "replay.npz").exists():
                     os.replace(d / "replay.npz", d / "replay.npz.bak")
+                if (d / REPLAY_DIR).exists():
+                    shutil.rmtree(d / (REPLAY_DIR + ".bak"), ignore_errors=True)
+                    os.replace(d / REPLAY_DIR, d / (REPLAY_DIR + ".bak"))
             return None
         try:
             with self.lock:
-                self.model.load_state_dict(ck["model"])
-                self.opt.load_state_dict(ck["opt"])
+                if migrate:
+                    self._migrate_model(ck, saved_syms)
+                else:
+                    self.model.load_state_dict(ck["model"])
+                    self.opt.load_state_dict(ck["opt"])
                 self.steps = int(ck["steps"])
                 self.labels = int(ck["labels"])
                 self.loss_ema, self.pinball_ema, self.bce_ema = ck["emas"]
         except Exception as e:  # noqa: BLE001
             log.warning("could not restore model state (%s); starting fresh", e)
             return None
-        r = d / "replay.npz"
-        if r.exists():
+        try:
+            rep = read_replay(d)
+        except Exception as e:  # noqa: BLE001 -- keep the model, just drop an unreadable replay buffer
+            log.warning("replay buffer unreadable (%s); keeping model with an empty buffer", e)
+            rep = None
+        if rep is not None:
             try:
                 with self.lock:
-                    z = np.load(r)
-                    n = len(z["y"])
-                    self.rx[:n] = z["x"]
-                    self.ry[:n] = z["y"]
-                    self.rmask[:n] = z["mask"] if "mask" in z else 1.0
-                    self.rt[:n] = z["t"] if "t" in z else 0.0       # a pre-0.5.10 replay has no timestamps: kept, just not deduplicated
+                    n = min(int(rep["n"]), self.rx.shape[0])
+                    self._copy_replay(rep, n, rep["symbols"] or saved_syms or cur_syms)
+                    self.rt[:n] = np.asarray(rep["t"][:n], dtype=np.float64)   # a pre-0.5.10 replay has no timestamps: kept, just not deduplicated
                     self._seen = {int(round(t)) for t in self.rt[:n] if t}
+                    self._slot = {int(round(t)): i for i, t in enumerate(self.rt[:n]) if t}
                     self.rhold[:n] = [self._held_out(float(t)) for t in self.rt[:n]]
                     self._replay_labels = self.labels                    # what is on disk is what is in memory
                     self.size = n
-                    self.ptr = int(z["ptr"]) % self.rx.shape[0] if n == self.rx.shape[0] else n % self.rx.shape[0]
+                    self.ptr = int(rep["ptr"]) % self.rx.shape[0] if n == self.rx.shape[0] else n % self.rx.shape[0]
             except Exception as e:  # noqa: BLE001 -- keep the model, just drop an unreadable replay buffer
                 log.warning("replay buffer unreadable (%s); keeping model with an empty buffer", e)
                 self.size = 0
                 self.ptr = 0
         return ck.get("extra", {})
+
+    def _copy_replay(self, rep: dict, n: int, src_syms: list[str]) -> None:
+        """Copy n saved windows into the buffer in 256-row chunks (the source is memory-mapped),
+        remapping asset columns when the saved symbol order differs from the current one: a
+        name no longer modeled is dropped, a new one gets zero features and a zero mask until
+        the deep backfill fills it in (fill())."""
+        cur = list(self.cfg.symbols)
+        if list(src_syms) == cur:
+            for k in range(0, n, 256):
+                j = slice(k, min(n, k + 256))
+                self.rx[j] = rep["x"][j]
+                self.ry[j] = rep["y"][j]
+                self.rmask[j] = rep["mask"][j]
+            return
+        pos = {s: i for i, s in enumerate(src_syms)}
+        pairs = [(i, pos[s]) for i, s in enumerate(cur) if s in pos]
+        ni = np.asarray([p[0] for p in pairs], dtype=np.int64)
+        oi = np.asarray([p[1] for p in pairs], dtype=np.int64)
+        self.rx[:n] = 0.0
+        self.ry[:n] = 0.0
+        self.rmask[:n] = 0.0
+        for k in range(0, n, 256):
+            j = slice(k, min(n, k + 256))
+            self.rx[j, ni] = np.asarray(rep["x"][j])[:, oi]
+            self.ry[j, ni] = np.asarray(rep["y"][j])[:, oi]
+            self.rmask[j, ni] = np.asarray(rep["mask"][j])[:, oi]
+
+    def _migrate_model(self, ck: dict, saved_syms: list[str]) -> None:
+        """Load a checkpoint saved for another symbol list. Every parameter is shared across
+        assets except the per-asset embedding table (and its Adam moments), whose rows are
+        copied for retained names and left at their fresh initialisation for new ones."""
+        cur = list(self.cfg.symbols)
+        pos = {s: i for i, s in enumerate(saved_syms)}
+        pairs = [(i, pos[s]) for i, s in enumerate(cur) if s in pos]
+        ni = torch.tensor([p[0] for p in pairs], dtype=torch.long)
+        oi = torch.tensor([p[1] for p in pairs], dtype=torch.long)
+        sd = dict(ck["model"])
+        emb = self.model.asset_emb.detach().clone()
+        emb[ni.to(emb.device)] = sd["asset_emb"][oi].to(emb.device, emb.dtype)
+        sd["asset_emb"] = emb
+        self.model.load_state_dict(sd)
+        opt_sd = ck["opt"]
+        idx = next(i for i, p in enumerate(self.model.parameters()) if p is self.model.asset_emb)
+        st = (opt_sd.get("state") or {}).get(idx)
+        if st:
+            for key in ("exp_avg", "exp_avg_sq"):
+                if key in st and tuple(st[key].shape) == (len(saved_syms), emb.shape[1]):
+                    t = torch.zeros(emb.shape, dtype=st[key].dtype)
+                    t[ni] = st[key][oi]
+                    st[key] = t
+        self.opt.load_state_dict(opt_sd)
+        self.migrated_new = [s for s in cur if s not in pos]
+        log.warning("checkpoint migrated to the new universe: %d names kept, %d dropped, %d new (%s)",
+                    len(pairs), len(saved_syms) - len(pairs), len(self.migrated_new), ", ".join(self.migrated_new[:12]))

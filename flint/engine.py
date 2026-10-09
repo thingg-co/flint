@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import functools
 import json
 import logging
@@ -19,12 +20,13 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .autotune import PRESETS, free_memory_gb
 from .backtest import run_backtest
 from .bars import Bar, BarBuilder
 from .features import FEATURES, N_FEATURES, FeatureBuilder
 from .feed import Tick
 from .learner import OnlineLearner, Prediction
-from .news import NewsHub
+from .news import TICKER_STOPLIST, NewsHub
 from .paper import PaperBook
 from .schwab import SchwabAuth
 from .etrade import ETradeAuth
@@ -46,7 +48,8 @@ TUNABLE = {"score_threshold": float, "prob_margin": float, "cost_bps": float, "m
            "min_price": float, "option_max_frac": float,
            "backtest_weekends": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
            "backtest_hours": float, "backtest_days": int, "backtest_cost_bps": float, "backtest_night_epochs": float,
-           "overfit_patience": int,
+           "overfit_patience": int, "memory_floor_gb": float,
+           "universe_refresh": lambda v: str(v).lower() in ("1", "true", "yes", "on"), "interesting_count": int,
            "size_by_coverage": lambda v: str(v).lower() in ("1", "true", "yes", "on")}
 
 
@@ -133,6 +136,107 @@ KEY_SERVICES = [
 ]
 
 
+# upper-case words in headlines that look like tickers and are not
+NOT_TICKERS = TICKER_STOPLIST | {"CEO", "CFO", "COO", "CTO", "IPO", "ETF", "ETFS", "GDP", "CPI", "PPI", "PCE", "FED", "FOMC", "SEC", "USA",
+                                 "NYSE", "EPS", "YTD", "PMI", "OPEC", "GOP", "DOJ", "FTC", "FDA", "NFL", "NBA", "MLB", "NATO", "LLC",
+                                 "INC", "ESG", "AND", "THE", "FOR", "NEW", "TOP", "BUY", "SELL", "HOLD", "USD", "EUR", "GBP", "JPY",
+                                 "ECB", "BOJ", "BOE", "IMF", "WHO", "WSJ", "CNBC", "ETH", "BTC", "XRP", "SOL", "DOGE", "AI", "EV", "UK",
+                                 "US", "EU", "Q1", "Q2", "Q3", "Q4", "H1", "H2", "FY", "YOY", "QOQ", "MOM", "WOW", "ATH", "DCF"}
+_TICKER_RX = re.compile(r"\b[A-Z]{3,5}\b")
+
+
+def headline_tickers(headlines: list[dict], known: set[str]) -> dict[str, int]:
+    """Tickers named in headline text, as upper-case words of three to five letters that are
+    known symbols (on the radar, in a sector record or in a guru's book) and not ordinary
+    acronyms. The organic way a new name shows up: the press is talking about it."""
+    counts: dict[str, int] = {}
+    for h in headlines or []:
+        for tok in set(_TICKER_RX.findall(str(h.get("title") or ""))):
+            if tok in known and tok not in NOT_TICKERS:
+                counts[tok] = counts.get(tok, 0) + 1
+    return counts
+
+
+def rank_scores(ordered: list[str], span: int) -> dict[str, float]:
+    """100 for the first name, falling linearly to 0 at position `span`: one scale for every
+    candidate source, so a top mover, the most-mentioned name and a fund's biggest position
+    rank as equally interesting."""
+    span = max(1, span)
+    return {s: max(0.0, 100.0 * (1.0 - i / span)) for i, s in enumerate(ordered)}
+
+
+def pick_universe(core: list[str], held, current: list[str], candidates: dict[str, float], record: dict,
+                  *, count: int, max_universe: int, today: str, grace_days: int = 14, min_tenure_days: int = 5):
+    """The universe Flint should model: the configured core and every holding always, plus the
+    `count` most interesting names in the room left under max_universe, with a promotion and
+    a demotion path. A name is promoted when it ranks in the top `count` candidates. Once in,
+    it stays while it keeps ranking inside the top 1.5 x count (`last_hit`), and is demoted
+    only after `grace_days` without a hit and `min_tenure_days` of tenure, because every
+    demotion forfeits that name's learned row and history. Returns (symbols, record, promoted,
+    demoted); `record` maps interesting names to their since/last_hit dates."""
+    fixed: list[str] = []
+    for s in list(core) + sorted(set(held) - set(core)):
+        if s not in fixed:
+            fixed.append(s)
+    fixed = fixed[:max_universe]
+    room = max(0, min(int(count), max_universe - len(fixed)))
+    ranked = [s for s, _ in sorted(candidates.items(), key=lambda kv: -kv[1]) if s not in fixed]
+    band = set(ranked[:int(room * 1.5)])
+    today_d = datetime.fromisoformat(today).date()
+    rec = {s: dict(v) for s, v in (record or {}).items()}
+    interesting = [s for s in current if s not in fixed]
+    keep, demoted = [], []
+    for s in interesting:
+        r = rec.setdefault(s, {"since": today, "last_hit": today})
+        if s in band:
+            r["last_hit"] = today
+        idle = (today_d - datetime.fromisoformat(r.get("last_hit", today)).date()).days
+        tenure = (today_d - datetime.fromisoformat(r.get("since", today)).date()).days
+        if idle > grace_days and tenure >= min_tenure_days:
+            demoted.append(s)
+        else:
+            keep.append(s)
+    if len(keep) > room:                                     # the room shrank (holdings grew): the weakest go first
+        keep.sort(key=lambda s: -candidates.get(s, 0.0))
+        demoted += keep[room:]
+        keep = keep[:room]
+    promoted = []
+    for s in ranked:
+        if len(keep) + len(promoted) >= room:
+            break
+        if s not in keep and s not in demoted:
+            promoted.append(s)
+            rec[s] = {"since": today, "last_hit": today}
+    for s in demoted:
+        rec.pop(s, None)
+    for s in list(rec):
+        if s in fixed:
+            rec.pop(s, None)
+    final_set = set(fixed) | set(keep) | set(promoted)
+    out = [s for s in current if s in final_set]            # retained names keep their place
+    out += [s for s in fixed + keep + promoted if s not in out]
+    return out, rec, promoted, demoted
+
+
+def backtest_preset_for(free_gb: float | None, live_d_model: int, live_peak_gb: float, *, floor: float = 10.0, presets=PRESETS):
+    """The widest preset, no wider than the live one, whose training peak fits in the memory free
+    right now with `floor` GB left for everything else. A training peak scales about linearly
+    with d_model (the 2026-10-10 ladder at 232 names: 768 -> 51 GB, 512 -> 34, 384 -> 25), so the
+    live preset's measured peak is scaled by width. None when nothing fits. With no free-memory
+    figure (a CPU box) the live preset is returned. Exists because two 5XL nets training in one
+    121 GB box took the Spark down on 2026-10-10."""
+    live = next((p for p in presets if p[1] == live_d_model), presets[-1])
+    if free_gb is None or live_peak_gb <= 0:
+        return live
+    for p in reversed(presets):
+        if p[1] > live_d_model:
+            continue
+        need = live_peak_gb * (p[1] / float(live_d_model)) * 1.25 + floor
+        if need <= free_gb:
+            return p
+    return None
+
+
 def _stalled(vals: list[float], patience: int) -> bool:
     """True when the last `patience` checks brought no improvement over the best before them."""
     if patience <= 0 or len(vals) <= patience:
@@ -203,15 +307,22 @@ class Engine:
     def __init__(self, cfg):
         self.cfg = cfg
         self.all_symbols = [s.upper() for s in cfg.symbols]     # full configured universe
+        self.core_symbols = list(self.all_symbols)             # the configured names: always modeled
+        self._held: set[str] = set()                           # latest holdings (portfolio loop): always modeled
+        self._universe_refreshed = ""                          # ET date of the last promotion/demotion pass
+        self._interesting: dict = {}                           # name -> {since, last_hit} for promoted names
         # Merge the persisted universe (state/universe.json): symbols added at runtime by the
         # portfolio/movers/news loops must survive a restart, or the rebuilt
         # engine starts at the config default, mismatches the checkpoint's symbol list, and
         # resets the trained model. Delete the file to intentionally shrink the universe.
         try:
-            saved = json.load(open(os.path.join(cfg.state_dir, "universe.json"))).get("symbols", [])
+            uni = json.load(open(os.path.join(cfg.state_dir, "universe.json")))
+            saved = uni.get("symbols", [])
             extra_syms = [s for s in saved if s not in set(self.all_symbols)]
             room = cfg.max_universe - len(self.all_symbols)
             self.all_symbols.extend(extra_syms[:max(0, room)])
+            self._universe_refreshed = str(uni.get("refreshed") or "")
+            self._interesting = dict(uni.get("interesting") or {})
         except (OSError, ValueError):
             pass
         self.muted = {x.strip().upper() for x in cfg.muted_symbols.split(",") if x.strip()} & set(self.all_symbols)
@@ -239,6 +350,9 @@ class Engine:
         self._backtesting = False
         self._backtest_requested = False
         self._backtest_stop = False
+        self._backtest_stop_reason = ""
+        self._backtest_waiting = False
+        self._lowmem_said = False
         try:
             with open(os.path.join(self.cfg.state_dir, "backtest.json")) as f:
                 self.backtest = json.load(f)
@@ -352,6 +466,7 @@ class Engine:
                 await asyncio.to_thread(self._save, True)           # the replay in memory is hours of paging; keep it
             except Exception:  # noqa: BLE001
                 log.exception("save before rebuild failed")
+            self.learner.release_replay()                            # the new learner allocates its own; load() migrates from disk
             self.learner.release_cache()
             try:
                 await asyncio.to_thread(self._build, self._active())   # benchmark/build off the event loop
@@ -702,7 +817,11 @@ class Engine:
         self._deep_cutoff = cutoff                     # deep-backfill loop pages further back from here
         held = self.learner.rt[:self.learner.size]
         held = held[held > 0]
-        if len(held):                                  # resume where the last run's paging stopped, not from today
+        if self.learner.migrated_new:                  # new names: walk the whole history again; fill() takes their columns
+            self.trace.emit("system", f"universe changed: re-paging history to fill {len(self.learner.migrated_new)} new "
+                                      f"name(s) into the replay ({', '.join(self.learner.migrated_new[:12])}"
+                                      f"{'…' if len(self.learner.migrated_new) > 12 else ''})", "act")
+        elif len(held):                                # resume where the last run's paging stopped, not from today
             self._deep_cutoff = min(self._deep_cutoff, float(held.min()))
         ticks, chosen = await self.sources.backfill(cutoff)
         if not ticks:
@@ -723,7 +842,7 @@ class Engine:
         self.trace.emit("system", "live: streaming ticks, forecasting every bar, learning as labels mature")
         self.sources.start()
         self._tasks = [asyncio.create_task(c) for c in
-                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop(), self._market_loop(), self._brief_loop(), self._market_status_loop(), self._portfolio_loop(), self._option_features_loop(), self._deep_backfill_loop(), self._idle_train_loop(), self._backtest_loop())]
+                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop(), self._market_loop(), self._brief_loop(), self._market_status_loop(), self._portfolio_loop(), self._option_features_loop(), self._deep_backfill_loop(), self._idle_train_loop(), self._backtest_loop(), self._universe_loop())]
         await asyncio.gather(*self._tasks)
 
     def _ingest_history(self, ticks: list[Tick]) -> None:
@@ -804,6 +923,17 @@ class Engine:
             if (days <= 0 or self.market_status.get("isOpen") is not False
                     or not self.learning_enabled or self._deep_cutoff <= target):
                 continue
+            if self._backtesting:                         # the backtest owns the GPU and the replay must not grow under it
+                wait = 60.0
+                continue
+            free = free_memory_gb(str(self.learner.device))
+            if free is not None and free < float(cfg.memory_floor_gb) + 4.0:
+                if not self._lowmem_said:
+                    self.trace.emit("feed", f"deep backfill paused: {free:.0f} GB free, floor {cfg.memory_floor_gb:g} GB", "warn")
+                    self._lowmem_said = True
+                wait = 300.0
+                continue
+            self._lowmem_said = False
             wait = 150.0                                  # more history to page: a 211-symbol burst every 150 s stays under Schwab's 120 req/min
             until = self._deep_cutoff
             cutoff = max(target, until - 10 * 86400.0)
@@ -814,17 +944,105 @@ class Engine:
                     self.trace.emit("feed", "deep backfill: no history returned for "
                                             f"{datetime.fromtimestamp(cutoff):%b %d} – {datetime.fromtimestamp(until):%b %d}", "warn")
                     continue
+                self._deep_filled = 0
                 added = await asyncio.to_thread(self._ingest_offline, ticks)
-                res = await asyncio.to_thread(self.learner.train_steps, 30) if added else None
+                filled = self._deep_filled
+                res = await asyncio.to_thread(self.learner.train_steps, 30) if (added or filled) else None
                 if res:
                     self._absorb_train(res)
                 self.trace.emit("learn", f"deep backfill {datetime.fromtimestamp(cutoff):%b %d} – "
                                          f"{datetime.fromtimestamp(until):%b %d}: {len(ticks)} ticks, "
                                          f"{added} windows added ({self.learner.size} in replay)" +
+                                         (f", {filled} columns filled for new names" if filled else "") +
                                          (f", 30 training steps (loss {res['loss']:.3f})" if res else ""))
                 self._publish({"type": "metrics", "metrics": self.metrics.as_dict(), "history": self._drain_history()})
             except Exception as e:  # noqa: BLE001
                 self.trace.emit("learn", f"deep backfill failed: {type(e).__name__}: {str(e)[:80]}", "warn")
+
+    def universe_candidates(self) -> dict[str, float]:
+        """Interesting names and a score on one 0-100 scale, from three organic sources: the
+        market radar (move weighted by dollar volume, liquid names only), tickers the press is
+        naming (headline mentions, only for symbols known elsewhere) and the tracked funds'
+        13F books (position weight). The best rank across sources wins, with a small bonus for
+        showing up in more than one."""
+        cfg = self.cfg
+        radar = (self.signals_state.get("market", {}) or {}).get("radar", []) or []
+        known = {str(r.get("symbol") or "").upper() for r in radar}
+        try:
+            known |= set(json.load(open(os.path.join(cfg.state_dir, "sectors.json"))).keys())
+        except (OSError, ValueError):
+            pass
+        movers = []
+        for r in radar:
+            sym = str(r.get("symbol") or "").upper()
+            px, vol, chg = float(r.get("price") or 0), float(r.get("vol") or 0), abs(float(r.get("chg") or 0))
+            if not sym or "." in sym or not sym.isalnum() or len(sym) > 5 or px < cfg.min_price:
+                continue
+            dv = px * vol
+            if dv < float(cfg.interesting_min_dollar_volume):
+                continue
+            movers.append((chg * math.log10(max(dv, 10.0)), sym))
+        movers.sort(reverse=True)
+        gurus = []
+        for g in self.signals_state.get("gurus") or []:
+            for h in g.get("holdings") or []:
+                t = str(h.get("ticker") or "").upper()
+                if t and t.isalnum() and len(t) <= 5:
+                    gurus.append((float(h.get("weight") or 0), t))
+                    known.add(t)
+        gurus.sort(reverse=True)
+        mentions = headline_tickers((self.news or {}).get("headlines") or [], known)
+        named = sorted(((n, s) for s, n in mentions.items() if n >= 2), reverse=True)
+        span = max(10, int(cfg.interesting_count) * 3)
+        sources = [rank_scores([s for _, s in movers], span), rank_scores([s for _, s in named], span),
+                   rank_scores([s for _, s in gurus], span)]
+        out: dict[str, float] = {}
+        for sc in sources:
+            for s, v in sc.items():
+                if v <= 0:
+                    continue
+                seen_before = s in out
+                out[s] = max(out.get(s, 0.0), v) + (5.0 if seen_before else 0.0)
+        return out
+
+    async def _universe_loop(self) -> None:
+        """Once a day after the close: the universe becomes the configured core, every holding,
+        and the most interesting names (pick_universe: promotion by rank, demotion after a
+        grace period). The rebuild keeps retained names' embedding rows and replay columns and
+        re-pages history to fill the new ones."""
+        while True:
+            await asyncio.sleep(60)
+            cfg = self.cfg
+            if not getattr(cfg, "universe_refresh", True) or self._reconfiguring or self._backtesting:
+                continue
+            if self.market_status.get("isOpen") is not False:
+                continue
+            now = datetime.now(ZoneInfo("America/New_York"))
+            today = now.date().isoformat()
+            if self._universe_refreshed == today or (now.weekday() < 5 and now.hour < 16):
+                continue
+            cands = self.universe_candidates()
+            if not cands:
+                continue
+            new, rec, promoted, demoted = pick_universe(
+                self.core_symbols, self._held, self.all_symbols, cands, self._interesting,
+                count=int(cfg.interesting_count), max_universe=int(cfg.max_universe), today=today,
+                grace_days=int(cfg.interesting_grace_days), min_tenure_days=int(cfg.interesting_min_tenure_days))
+            self._universe_refreshed = today
+            self._interesting = rec
+            if not promoted and not demoted and new == self.all_symbols:
+                self.trace.emit("system", f"universe refresh: no change ({len(new)} names; "
+                                          f"{len(cands)} candidates scored)", "info")
+                continue
+            self.all_symbols = new
+            self.muted -= set(demoted)
+            self.trace.emit("system", f"universe refresh: promoted {len(promoted)} ({', '.join(promoted[:10])}"
+                                      f"{'…' if len(promoted) > 10 else ''}), demoted {len(demoted)} "
+                                      f"({', '.join(demoted[:10])}{'…' if len(demoted) > 10 else ''}); {len(new)} names: "
+                                      f"{len(self.core_symbols)} core, {len(set(self._held) - set(self.core_symbols))} holdings, "
+                                      f"{len(new) - len(set(self.core_symbols) | set(self._held))} interesting", "act")
+            asyncio.get_running_loop().create_task(self.reconfigure())
+            return                                        # the rebuild cancels this task; the new lifecycle starts another
 
     def backtest_summary(self) -> dict:
         """The report the dashboard shows: totals (live partials while a run is on), the day
@@ -861,8 +1079,12 @@ class Engine:
                 continue
             cfg = self.cfg
             days = float(getattr(cfg, "deep_backfill_days", 0) or 0)
-            if days > 0 and self._deep_cutoff > time.time() - days * 86400.0 and not self._backtest_requested:
-                continue                                  # still paging history
+            if days > 0 and self._deep_cutoff > time.time() - days * 86400.0:
+                if self._backtest_requested and not self._backtest_waiting:
+                    self._backtest_waiting = True
+                    self.trace.emit("learn", "backtest queued: waiting for the deep backfill to finish paging", "info")
+                continue                                  # still paging history: the replay must not grow under a run
+            self._backtest_waiting = False
             L = self.learner
             n = L.size
             if n < 64 or float(L.rt[:n].max()) <= 0:
@@ -872,15 +1094,39 @@ class Engine:
                 continue
             self._backtest_requested = False
             self._backtest_stop = False
+            self._backtest_stop_reason = ""
+            L.release_cache()
+            dev = str(L.device)
+            free = free_memory_gb(dev)
+            live_peak = float((self.autotune_info or {}).get("peak_gb") or 0)
+            choice = backtest_preset_for(free, int(cfg.d_model), live_peak, floor=float(cfg.memory_floor_gb))
+            if choice is None:
+                self.trace.emit("learn", f"backtest skipped: {free:.0f} GB free leaves no room for any net next to the live model "
+                                         f"(floor {cfg.memory_floor_gb:g} GB)", "warn")
+                self.backtest_progress = {"running": False}
+                continue
+            name, d_model, dil, n_exp, n_heads, _win = choice
+            cfg_bt = copy.copy(cfg)
+            cfg_bt.d_model, cfg_bt.dilations, cfg_bt.n_experts, cfg_bt.n_heads = int(d_model), tuple(dil), int(n_exp), int(n_heads)
+            preset = str(name) + ("" if d_model == cfg.d_model else f" (sized to {free:.0f} GB free; live is "
+                                                                     f"{(self.autotune_info or {}).get('preset') or cfg.d_model})")
             self._backtesting = True
             started = time.time()
             self.backtest_progress = {"running": True, "day": 0, "days": 0, "started": started}
-            preset = str((self.autotune_info or {}).get("preset") or "")
-            self.trace.emit("learn", f"backtest: walking {n} replay windows day by day with a fresh {preset or 'model'} "
+            self.trace.emit("learn", f"backtest: walking {n} replay windows day by day with a fresh {preset} "
                                      f"(budget {cfg.backtest_hours:g} h, {cfg.backtest_night_epochs:g} night epochs/day, "
-                                     f"cost {cfg.backtest_cost_bps:g} bps)", "act")
+                                     f"cost {cfg.backtest_cost_bps:g} bps); live training waits", "act")
             self._publish({"type": "backtest", "backtest": self.backtest_summary()})
-            L.release_cache()
+
+            def should_stop() -> bool:
+                if self._backtest_stop:
+                    return True
+                f = free_memory_gb(dev)
+                if f is not None and f < float(cfg.memory_floor_gb):
+                    self._backtest_stop_reason = f"memory low ({f:.0f} GB free)"
+                    self._backtest_stop = True
+                    return True
+                return False
 
             def prog(day: int, total: int, totals: dict) -> None:
                 self.backtest_progress = {"running": True, "day": day, "days": total, "started": started, "totals": totals}
@@ -904,8 +1150,8 @@ class Engine:
                 self._publish({"type": "backtest", "backtest": self.backtest_summary()})
 
             fut = loop.run_in_executor(None, functools.partial(
-                run_backtest, cfg, L.rx[:n], L.ry[:n], L.rmask[:n], L.rt[:n], device=str(L.device),
-                symbols=list(self.symbols), progress=prog, should_stop=lambda: self._backtest_stop,
+                run_backtest, cfg_bt, L.rx[:n], L.ry[:n], L.rmask[:n], L.rt[:n], device=dev,
+                symbols=list(self.symbols), progress=prog, should_stop=should_stop,
                 hours=float(cfg.backtest_hours), days=int(cfg.backtest_days), warm_days=int(cfg.backtest_warm_days),
                 cost_bps=float(cfg.backtest_cost_bps), preset=preset, night_epochs=float(cfg.backtest_night_epochs)))
             fut.add_done_callback(finish)
@@ -931,7 +1177,9 @@ class Engine:
         if res.get("error"):
             self.trace.emit("learn", f"backtest: {res['error']}", "warn")
         else:
-            self.trace.emit("learn", f"backtest {'stopped' if res.get('stopped') else 'done'} in {res.get('elapsed_s', 0) / 60:.0f} min: "
+            how = ("stopped (" + self._backtest_stop_reason + ")" if res.get("stopped") and self._backtest_stop_reason
+                   else "stopped" if res.get("stopped") else "done")
+            self.trace.emit("learn", f"backtest {how} in {res.get('elapsed_s', 0) / 60:.0f} min: "
                                      f"{t.get('days', 0)} days, net {t.get('net_bps', 0):+.0f} bps "
                                      f"({t.get('net_bps_per_day', 0):+.1f}/day, Sharpe {t.get('sharpe') if t.get('sharpe') is not None else '·'}), "
                                      f"hit {((t.get('hit_rate') or 0) * 100):.0f}%, coverage {((t.get('coverage') or 0) * 100):.0f}%, "
@@ -1010,7 +1258,7 @@ class Engine:
         for t in ticks:
             builder.add(t)
         rows = builder.roll(ticks[-1].ts + cfg.bar_seconds)
-        added, idx = 0, 0
+        added, filled, idx = 0, 0, 0
         pend: deque[tuple[int, np.ndarray, np.ndarray, np.ndarray, float]] = deque()
         for row in rows:
             idx += 1
@@ -1021,11 +1269,16 @@ class Engine:
                 with np.errstate(divide="ignore", invalid="ignore"):
                     y = (np.log(closes / c0) * 1e4).astype(np.float32)
                 y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
-                added += int(self.learner.add(x0, y, (r0 & real_now).astype(np.float32), ts=t0))
+                mk = (r0 & real_now).astype(np.float32)
+                if self.learner.add(x0, y, mk, ts=t0):
+                    added += 1
+                else:
+                    filled += self.learner.fill(t0, x0, y, mk)
             x = feats.push(row)
             if x is not None:
                 pend.append((idx, x, closes, real_now, float(next(iter(row.values())).ts)))
         self.metrics.labels = self.learner.labels
+        self._deep_filled = filled
         return added
 
     def _on_live_tick(self, tick: Tick) -> None:
@@ -1136,7 +1389,8 @@ class Engine:
                               force_replay=final)
             tmp = os.path.join(self.cfg.state_dir, "universe.json.tmp")
             with open(tmp, "w") as f:
-                json.dump({"symbols": list(self.all_symbols)}, f)
+                json.dump({"symbols": list(self.all_symbols), "refreshed": self._universe_refreshed,
+                           "interesting": self._interesting}, f)
             os.replace(tmp, os.path.join(self.cfg.state_dir, "universe.json"))
         except Exception as e:  # noqa: BLE001
             log.warning("checkpoint failed: %s", e)
@@ -1198,14 +1452,15 @@ class Engine:
             for i, s in enumerate(self.symbols):
                 self.trace.emit("features", f"{self.base[s]} " + " ".join(f"{n} {z[i, j]:+.2f}" for j, n in enumerate(FEATURES)))
 
-        if matured and self.learning_enabled:
+        if matured and self.learning_enabled and not self._backtesting:
             res = await asyncio.to_thread(self.learner.train_steps, min(8, cfg.steps_per_label * matured))
             if res:
                 self._absorb_train(res)
                 self.trace.emit("learn", f"step {res['steps']}: loss {res['loss']:.3f} (pinball {res['pinball']:.2f} bps, "
                                          f"bce {res['bce']:.3f}, gate balance {res.get('balance', 0):.3f}) on {matured} new label(s)")
         elif matured:
-            self.trace.emit("learn", f"{matured} new label(s) stored; learning is paused")
+            self.trace.emit("learn", f"{matured} new label(s) stored; "
+                                     + ("training waits for the backtest" if self._backtesting else "learning is paused"))
 
         if x is not None:
             pred = self.learner.predict(x)
@@ -1861,6 +2116,7 @@ class Engine:
                 held = {p["symbol"] for a in self.portfolio.get("accounts", []) for p in a.get("positions", [])
                         if p.get("asset_type") in ("EQUITY", "ETF", "COLLECTIVE_INVESTMENT")
                         and (p.get("symbol") or "").isalpha() and 1 <= len(p.get("symbol") or "") <= 5}
+                self._held = set(held)
                 room = self.cfg.max_universe - len(self.all_symbols)
                 new = [s for s in sorted(held) if s not in self.all_symbols][:max(0, room)]
                 if new:                                    # model your holdings too, so the Portfolio tab shows real calls
