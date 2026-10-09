@@ -259,6 +259,79 @@ def _replay() -> None:
         sys.exit(0)
 
 
+def _backtest() -> None:
+    """Walk-forward backtest over the saved replay without starting the server, on the cached
+    preset: `flint backtest [--days N] [--hours H] [--cost BPS] [--warm N] [--night EPOCHS]`. The live server runs
+    its own on weekends; do not run this next to one, it loads the replay and a second model."""
+    import json
+    import sys
+    import time
+
+    import numpy as np
+    import torch
+
+    from .autotune import configure_backend, pick_device
+    from .backtest import run_backtest
+    from .config import Config
+
+    cfg = Config()
+    state = Path(cfg.state_dir)
+    preset = ""
+    try:
+        choice = json.loads((state / "machine.json").read_text())["choice"]
+        for k in ("d_model", "n_experts", "n_heads", "window"):
+            setattr(cfg, k, choice[k])
+        cfg.dilations = tuple(choice["dilations"])
+        preset = str(choice.get("preset", ""))
+    except (OSError, ValueError, KeyError):
+        print("no cached tuning in state/machine.json; using the config's model size")
+    r = state / "replay.npz"
+    if not r.exists():
+        print(f"no replay at {r}")
+        raise SystemExit(1)
+    z = np.load(r)
+    if "t" not in z:
+        print("the replay has no timestamps (saved before 0.5.10); nothing to walk")
+        raise SystemExit(1)
+    symbols = None
+    try:
+        symbols = list(torch.load(state / "model.pt", map_location="cpu", weights_only=False).get("symbols") or [])
+    except Exception:  # noqa: BLE001
+        pass
+    opts = {"days": int(cfg.backtest_days), "hours": float(cfg.backtest_hours), "cost": float(cfg.backtest_cost_bps),
+            "warm": int(cfg.backtest_warm_days), "night": float(cfg.backtest_night_epochs)}
+    argv = sys.argv[2:]
+    for i, a in enumerate(argv):
+        if a.startswith("--") and a[2:] in opts and i + 1 < len(argv):
+            opts[a[2:]] = type(opts[a[2:]])(argv[i + 1])
+    device = pick_device(cfg.device)
+    configure_backend(device)
+    mask = z["mask"] if "mask" in z else np.ones_like(z["y"])
+    print(f"walking {int((z['t'] > 0).sum())} timestamped windows on {device} ({preset or 'config'} preset), "
+          f"cost {opts['cost']:g} bps, warm {opts['warm']} days, budget {opts['hours']:g} h")
+
+    def prog(day, total, t):
+        print(f"\r  day {day}/{total}  net {t['net_bps']:+.0f} bps  per day {t['net_bps_per_day']:+.1f}  "
+              f"hit {((t['hit_rate'] or 0) * 100):.0f}%  signals {t['signals']}   ", end="", flush=True)
+
+    res = run_backtest(cfg, z["x"], z["y"], mask, z["t"], device=device, symbols=symbols, progress=prog,
+                       hours=opts["hours"], days=opts["days"], warm_days=opts["warm"], cost_bps=opts["cost"], preset=preset,
+                       night_epochs=opts["night"])
+    print()
+    if res.get("error"):
+        print(res["error"])
+        raise SystemExit(1)
+    t = res["totals"]
+    print(f"{t['days']} days scored in {res['elapsed_s'] / 60:.0f} min: net {t['net_bps']:+.0f} bps "
+          f"({t['net_bps_per_day']:+.1f}/day, Sharpe {t['sharpe'] if t['sharpe'] is not None else '·'}, "
+          f"max drawdown {t['max_drawdown_bps']:.0f} bps), hit {((t['hit_rate'] or 0) * 100):.0f}%, "
+          f"coverage {((t['coverage'] or 0) * 100):.0f}%, {t['signals']} signals; always-long {t['long_bps']:+.0f} bps")
+    out = state / "backtest.json"
+    from .engine import clean
+    out.write_text(json.dumps(clean(res)))
+    print(f"report saved to {out}")
+
+
 def _version() -> None:
     """Print the installed package version and exit."""
     try:
@@ -347,6 +420,9 @@ def main() -> None:
         return
     if len(sys.argv) > 1 and sys.argv[1] == "replay":
         _replay()
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "backtest":
+        _backtest()
         return
     if len(sys.argv) > 1 and sys.argv[1] == "version":
         _version()

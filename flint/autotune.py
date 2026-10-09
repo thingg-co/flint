@@ -126,8 +126,11 @@ class PeakMemory:
     def reset(self) -> None:
         """Reset peak tracking. On CUDA, this resets the internal stats."""
         self.peak = 0.0
+        self.base = 0.0
         if self.device == "cuda":
             torch.cuda.reset_peak_memory_stats()
+            self.base = float(torch.cuda.memory_allocated())   # what the process already holds (a live model, a
+                                                               # backtest) is not this benchmark's peak
 
     def sample(self) -> None:
         """Sample current memory usage and update peak.
@@ -144,7 +147,7 @@ class PeakMemory:
     def gb(self) -> float:
         """Return peak memory in GB."""
         if self.device == "cuda":
-            return torch.cuda.max_memory_allocated() / 1e9
+            return max(0.0, torch.cuda.max_memory_allocated() - self.base) / 1e9
         if self.device == "mps":
             return self.peak
         return 0.0

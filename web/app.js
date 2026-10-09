@@ -738,6 +738,7 @@ function renderAll() {
   renderNews();
   if (document.body.dataset.view === "consoles") { renderUniverse(); renderKeys(); renderSources(); renderSignals(); renderRadar(); renderBriefCtl(); }
   if (document.body.dataset.view === "brief") renderBrief();
+  if (document.body.dataset.view === "backtest") renderBacktest();
   if (document.body.dataset.view === "paper") renderPaper();
   if (document.body.dataset.view === "portfolio") renderPortfolio();
 }
@@ -1404,6 +1405,50 @@ function paintPaperEquity() {
   if (rEl) { rEl.textContent = (ret >= 0 ? "+" : "") + ret.toFixed(2) + "%"; rEl.className = "peq-ret " + (ret >= 0 ? "up" : "down"); }
 }
 
+function renderBacktest() {
+  const b = state.backtest, root = $("#bt-stats"); if (!root) return;
+  const meta = $("#bt-meta"), pr = (b && b.progress) || {};
+  if (!b || (!b.totals && !pr.running)) {
+    root.innerHTML = ""; $("#bt-days").innerHTML = ""; $("#bt-names").innerHTML = "";
+    if (meta) meta.textContent = b && b.error ? b.error : "no run yet — runs on weekends over the replay, or press Run now";
+    paintBacktest([]); return;
+  }
+  const t = b.totals || {}, c = b.config || {};
+  const f1 = v => v != null ? v.toFixed(1) : "·", f2 = v => v != null ? v.toFixed(2) : "·";
+  root.innerHTML = [
+    ["net", fmtBps(t.net_bps)], ["per day", fmtBps(t.net_bps_per_day)], ["Sharpe", f2(t.sharpe)], ["max drawdown", fmtBps(t.max_drawdown_bps)],
+    ["hit rate", fmtPct(t.hit_rate)], ["10-90 coverage", fmtPct(t.coverage)], ["pinball", f1(t.pinball)],
+    ["signals", t.signals ?? 0], ["days", `${t.days ?? 0}${pr.running ? " / " + (pr.days || "?") : ""}`], ["always long", fmtBps(t.long_bps)],
+  ].map(([k, v]) => `<div class="pstat"><label>${esc(k)}</label><b>${esc(String(v))}</b></div>`).join("");
+  if (meta) meta.textContent = pr.running ? `running: day ${pr.day} of ${pr.days || "?"}`
+    : (b.ran_at ? `ran ${fmtTime(b.ran_at)} · ${c.preset || "model"}${c.params ? " " + (c.params / 1e6).toFixed(1) + "M params" : ""} · cost ${c.cost_bps} bps · ${c.history_days} days of history, ${c.warm_days} warm · ${b.stopped ? "stopped early" : "complete"}` : "");
+  const days = (b.days || []).slice(-30).reverse();
+  const cell = (v, cls) => `<span class="num ${cls || ""}">${v}</span>`;
+  $("#bt-days").innerHTML = days.length
+    ? `<div class="prow phead"><span>day</span>${cell("net")}${cell("cum")}${cell("signals")}${cell("hit")}${cell("cover")}${cell("steps")}</div>` +
+      days.map(d => `<div class="prow"><span>${esc(d.date)}</span>${cell(fmtBps(d.net_bps), d.net_bps >= 0 ? "up" : "down")}${cell(fmtBps(d.cum_net_bps))}${cell(d.signals)}${cell(fmtPct(d.hit))}${cell(fmtPct(d.coverage))}${cell(d.steps)}</div>`).join("")
+    : "";
+  const names = [...(b.best || []), ...(b.worst || [])];
+  $("#bt-names").innerHTML = names.length
+    ? `<div class="prow phead"><span>name</span>${cell("net bps")}${cell("signals")}${cell("hit")}</div>` +
+      names.map(x => `<div class="prow"><span class="psym">${esc(x.sym)}</span>${cell(fmtBps(x.net_bps), x.net_bps >= 0 ? "up" : "down")}${cell(x.signals)}${cell(fmtPct(x.hit))}</div>`).join("")
+    : "";
+  paintBacktest(b.days || []);
+}
+
+function paintBacktest(days) {
+  const canvas = $("#bt-curve"); if (!canvas) return;
+  const { ctx: g, w: W, h: H } = ctx2d(canvas);
+  if (days.length < 2) return;
+  const cs = getComputedStyle(document.body), v = n => cs.getPropertyValue(n).trim();
+  const series = [[days.map(d => d.cum_long_bps || 0), v("--muted") || "#888", 1], [days.map(d => d.cum_net_bps), v("--good") || "#3c6", 2]];
+  const all = series.flatMap(s => s[0]), lo = Math.min(0, ...all), hi = Math.max(0, ...all), span = (hi - lo) || 1;
+  const X = i => 8 + (W - 16) * i / (days.length - 1), Y = y => H - 8 - (H - 16) * (y - lo) / span;
+  g.strokeStyle = v("--line") || "#444"; g.lineWidth = 1; g.beginPath(); g.moveTo(8, Y(0)); g.lineTo(W - 8, Y(0)); g.stroke();
+  series.forEach(([vals, color, lw]) => { g.strokeStyle = color; g.lineWidth = lw; g.beginPath(); vals.forEach((y, i) => i ? g.lineTo(X(i), Y(y)) : g.moveTo(X(i), Y(y))); g.stroke(); });
+  g.fillStyle = v("--ink-2") || "#aaa"; g.font = "11px system-ui, sans-serif"; g.fillText(fmtBps(hi), 10, 14); g.fillText(fmtBps(lo), 10, H - 4);
+}
+
 function renderPortfolio() {
   const root = $("#pf-accounts"); if (!root) return;
   const pf = state.portfolio, meta = $("#pf-meta");
@@ -1796,13 +1841,21 @@ function renderGuru(id, g, title) {
 function renderNews() {
   const n = state.news;
   if (!n || !n.t) { $("#news-meta").textContent = "not run yet"; return; }
-  $("#news-meta").textContent = `${fmtTime(n.t)} via ${n.method}, ${n.headlines.length} relevant headlines, ${n.new} new`;
-  $("#tone").innerHTML = Object.entries(n.per_asset || {}).map(([s, a]) => {
+  const pa = Object.entries(n.per_asset || {});
+  const covered = pa.filter(([, a]) => a.mentions > 0)
+    .sort((x, y) => y[1].mentions - x[1].mentions || Math.abs(y[1].sentiment) - Math.abs(x[1].sentiment));
+  const quiet = pa.length - covered.length;
+  const gen = (n.headlines || []).filter(h => !h.assets || !h.assets.length);
+  const tone = gen.length ? gen.reduce((s, h) => s + h.sentiment, 0) / gen.length : 0;
+  $("#news-meta").textContent = `${fmtTime(n.t)} via ${n.method}, ${n.headlines.length} headlines (${n.new} new), ${covered.length} of ${pa.length} names covered`;
+  $("#tone").innerHTML = covered.slice(0, 30).map(([s, a]) => {
     const v = a.sentiment, w = Math.abs(v) * 50, left = v >= 0 ? 50 : 50 - w;
-    return `<div class="a"><span>${esc(base(s))}</span><div class="bar" title="tone ${v.toFixed(2)}, attention ${a.attention.toFixed(2)}"><i style="left:${left}%;width:${w}%;background:${v >= 0 ? C.good : C.critical}"></i></div><span>${a.mentions} hl</span></div>`;
-  }).join("") + `<div class="why">bar: tone from -1 to +1; hl: headlines naming the asset</div>` +
+    return `<div class="a"><span>${esc(base(s))}</span><div class="bar" title="tone ${v.toFixed(2)}, attention ${a.attention.toFixed(2)}"><i style="left:${left}%;width:${w}%;background:${v >= 0 ? "var(--good)" : "var(--serious)"}"></i></div><small>${a.mentions}</small></div>`;
+  }).join("") +
+    `<div class="why">${covered.length ? "bar: tone from -1 to +1; count: headlines naming the asset" : "no name had direct coverage this pass"}` +
+    `${quiet ? ` · ${quiet} names without coverage` : ""} · market tone ${tone >= 0 ? "+" : ""}${tone.toFixed(2)} over ${gen.length} general headlines</div>` +
     (n.ideas || []).map(i => `<div class="why">${esc(i)}</div>`).join("");
-  $("#headlines").innerHTML = n.headlines.slice(0, 80).map(h =>
+  $("#headlines").innerHTML = n.headlines.slice(0, 60).map(h =>
     `<li class="${h.new ? "new" : ""}"><span class="s ${h.sentiment > 0 ? "pos" : h.sentiment < 0 ? "neg" : ""}">${h.sentiment >= 0 ? "+" : ""}${h.sentiment.toFixed(2)}</span>` +
     (h.assets.length ? h.assets : ["mkt"]).map(a => `<span class="tag">${esc(a)}</span>`).join("") +
     `<a href="${esc(safeUrl(h.url))}" target="_blank" rel="noopener noreferrer">${esc(h.title)}</a><span class="src">${esc(h.source)}</span></li>`).join("");
@@ -1817,7 +1870,7 @@ function handle(msg) {
       Object.assign(state, { config: msg.config, status: msg.status, controls: msg.controls, prices: msg.prices, bars: msg.bars,
         latest: msg.latest, gate: msg.gate, outcomes: msg.outcomes, metrics: msg.metrics, history: msg.history, log: msg.log, news: msg.news,
         sources: msg.sources || [], news_sources: msg.news_sources || [], providers: (msg.status && msg.status.providers) || {}, classes: msg.classes || {},
-        signals: msg.signals || null, signal_providers: msg.signal_providers || [], brief: msg.brief || null, paper: msg.paper || null, portfolio: msg.portfolio || null, burry: msg.burry || { enabled: true }, keys: msg.keys || [], muted: msg.muted || [], universe: msg.universe || (msg.config ? msg.config.symbols : []), holds: msg.holds || [] });
+        signals: msg.signals || null, signal_providers: msg.signal_providers || [], brief: msg.brief || null, paper: msg.paper || null, portfolio: msg.portfolio || null, backtest: msg.backtest || null, burry: msg.burry || { enabled: true }, keys: msg.keys || [], muted: msg.muted || [], universe: msg.universe || (msg.config ? msg.config.symbols : []), holds: msg.holds || [] });
       buildCards(); buildConsoles(); buildControls(); applyMuted();
       Object.values(msg.trace || {}).forEach(evs => evs.forEach(ev => appendTrace(ev, false)));
       Object.values(consoles).forEach(c => { c.body.scrollTop = c.body.scrollHeight; });
@@ -1827,6 +1880,10 @@ function handle(msg) {
       renderAll();
       requestAnimationFrame(() => requestAnimationFrame(redrawCharts));
       onboardStart();
+      break;
+    case "backtest":
+      state.backtest = msg.backtest;
+      if (document.body.dataset.view === "backtest") renderBacktest();
       break;
     case "portfolio":
       state.portfolio = msg.portfolio;
@@ -1918,6 +1975,7 @@ function showTab(tab, updateHash) {
   return true;
 }
 $$(".tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab, true));
+{ const b = $("#bt-run"); if (b) b.onclick = async () => { b.disabled = true; const r = await control({ action: "backtest" }); b.textContent = r && r.backtest ? r.backtest : "Run now"; setTimeout(() => { b.disabled = false; b.textContent = "Run now"; }, 4000); }; }
 // routes: #<tab> or #<tab>/<SYMBOL> (symbol detail open). Back/forward and refresh replay them.
 function route() {
   const [t, sym] = location.hash.slice(1).split("/");

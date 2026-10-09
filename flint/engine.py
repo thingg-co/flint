@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import math
@@ -18,6 +19,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .backtest import run_backtest
 from .bars import Bar, BarBuilder
 from .features import FEATURES, N_FEATURES, FeatureBuilder
 from .feed import Tick
@@ -42,6 +44,8 @@ TUNABLE = {"score_threshold": float, "prob_margin": float, "cost_bps": float, "m
            "train_in_session": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
            "skill_min_n": int, "confirm_bars": int, "stock_min_hold_bars": int, "max_spread_bps": float,
            "min_price": float, "option_max_frac": float,
+           "backtest_weekends": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
+           "backtest_hours": float, "backtest_days": int, "backtest_cost_bps": float, "backtest_night_epochs": float,
            "size_by_coverage": lambda v: str(v).lower() in ("1", "true", "yes", "on")}
 
 
@@ -219,6 +223,16 @@ class Engine:
         self.news: dict = {"t": None, "method": None, "status": {}, "headlines": [], "per_asset": {}, "ideas": [], "new": 0}
         self.market_status: dict = {"isOpen": None, "session": None, "holiday": None, "t": None}  # from Finnhub, holiday-aware
         self._status_http: int | None = None     # last market-status HTTP code, so a rejected key is reported once
+        self.backtest: dict = {}                  # last walk-forward report (state/backtest.json)
+        self.backtest_progress: dict = {"running": False}
+        self._backtesting = False
+        self._backtest_requested = False
+        self._backtest_stop = False
+        try:
+            with open(os.path.join(self.cfg.state_dir, "backtest.json")) as f:
+                self.backtest = json.load(f)
+        except (OSError, ValueError):
+            pass
         self.brief: dict = {"text": None, "takes": {}, "models": {}, "t": None, "generating": False, "error": None}
         self.autotune_info = None
         self._skimming = False
@@ -304,6 +318,9 @@ class Engine:
         self._reconfiguring = True
         try:
             self.muted &= set(self.all_symbols)
+            if self._backtesting:                                   # its net shares the GPU: a benchmark next to it reads nonsense peaks
+                self._backtest_stop = True
+                self.trace.emit("system", "universe change: stopping the backtest first", "act")
             for t in self._tasks:
                 t.cancel()
             if self._lifecycle:
@@ -313,11 +330,31 @@ class Engine:
             except Exception:  # noqa: BLE001
                 pass
             await asyncio.sleep(0.15)
+            for _ in range(900):                                    # the worker stops at its next day boundary
+                if not self._backtesting:
+                    break
+                await asyncio.sleep(1)
             self._tasks = []
             self.status = "starting"
-            await asyncio.to_thread(self._build, self._active())   # benchmark/build off the event loop
-            self.trace.emit("system", f"universe rebuilt: {len(self.symbols)} active "
-                                      f"({len(self.muted)} muted) — {', '.join(self.base[s] for s in self.symbols)}", "act")
+            prev = (list(self.symbols), list(self.all_symbols), dict(self.base), list(self.cfg.symbols))
+            try:
+                await asyncio.to_thread(self._save, True)           # the replay in memory is hours of paging; keep it
+            except Exception:  # noqa: BLE001
+                log.exception("save before rebuild failed")
+            self.learner.release_cache()
+            try:
+                await asyncio.to_thread(self._build, self._active())   # benchmark/build off the event loop
+                self.trace.emit("system", f"universe rebuilt: {len(self.symbols)} active "
+                                          f"({len(self.muted)} muted) — {', '.join(self.base[s] for s in self.symbols)}", "act")
+            except Exception as e:  # noqa: BLE001
+                # A rebuild that fails (no memory to benchmark, a bad symbol) must not leave the
+                # engine with every loop cancelled and no lifecycle, as it did on 2026-10-10.
+                # Put the previous universe back and resume with the model we still have.
+                log.exception("universe rebuild failed")
+                self.symbols, self.all_symbols, self.base, self.cfg.symbols = prev
+                self.muted &= set(self.all_symbols)
+                self.trace.emit("system", f"universe rebuild failed: {type(e).__name__}: {str(e)[:160]}; "
+                                          f"keeping the previous {len(self.symbols)} names", "error")
             self._publish(self.snapshot())                         # UI rebuilds cards for the new set
             self._lifecycle = asyncio.create_task(self.run())
         finally:
@@ -652,6 +689,10 @@ class Engine:
                                 f"{cfg.backfill_seconds / 60:.0f} min per symbol from the best available")
         cutoff = time.time() - cfg.backfill_seconds
         self._deep_cutoff = cutoff                     # deep-backfill loop pages further back from here
+        held = self.learner.rt[:self.learner.size]
+        held = held[held > 0]
+        if len(held):                                  # resume where the last run's paging stopped, not from today
+            self._deep_cutoff = min(self._deep_cutoff, float(held.min()))
         ticks, chosen = await self.sources.backfill(cutoff)
         if not ticks:
             self.trace.emit("feed", "no source returned history; the simulator will provide a live fallback", "warn")
@@ -671,7 +712,7 @@ class Engine:
         self.trace.emit("system", "live: streaming ticks, forecasting every bar, learning as labels mature")
         self.sources.start()
         self._tasks = [asyncio.create_task(c) for c in
-                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop(), self._market_loop(), self._brief_loop(), self._market_status_loop(), self._portfolio_loop(), self._option_features_loop(), self._deep_backfill_loop(), self._idle_train_loop())]
+                       (self._clock(), self._ticker(), self._checkpoints(), self._news_loop(), self._signals_loop(), self._market_loop(), self._brief_loop(), self._market_status_loop(), self._portfolio_loop(), self._option_features_loop(), self._deep_backfill_loop(), self._idle_train_loop(), self._backtest_loop())]
         await asyncio.gather(*self._tasks)
 
     def _ingest_history(self, ticks: list[Tick]) -> None:
@@ -774,6 +815,117 @@ class Engine:
             except Exception as e:  # noqa: BLE001
                 self.trace.emit("learn", f"deep backfill failed: {type(e).__name__}: {str(e)[:80]}", "warn")
 
+    def backtest_summary(self) -> dict:
+        """The report the dashboard shows: totals (live partials while a run is on), the day
+        rows, the best and worst names, and the run's configuration."""
+        b = self.backtest or {}
+        pr = self.backtest_progress or {}
+        syms = [(k, v) for k, v in (b.get("symbols") or {}).items() if v.get("signals")]
+        syms.sort(key=lambda kv: kv[1]["net_bps"])
+        return {"progress": pr, "ran_at": b.get("ran_at"), "elapsed_s": b.get("elapsed_s"), "stopped": b.get("stopped"),
+                "error": b.get("error"), "config": b.get("config"),
+                "totals": pr.get("totals") if pr.get("running") else b.get("totals"),
+                "days": (b.get("days") or [])[-260:],
+                "best": [dict(sym=k, **v) for k, v in syms[-8:][::-1]], "worst": [dict(sym=k, **v) for k, v in syms[:8]]}
+
+    def _backtest_due(self, now: datetime | None = None) -> bool:
+        """Once per weekend (Saturday or Sunday ET with the market closed), or on request."""
+        if self._backtest_requested:
+            return True
+        if not getattr(self.cfg, "backtest_weekends", True):
+            return False
+        now = now or datetime.now(ZoneInfo("America/New_York"))
+        if now.weekday() < 5 or self.market_status.get("isOpen") is not False:
+            return False
+        return now.timestamp() - float((self.backtest or {}).get("ran_at") or 0) > 4 * 86400
+
+    async def _backtest_loop(self) -> None:
+        """Weekend walk-forward backtest (flint/backtest.py) on the live preset, in process so
+        the replay is shared and the idle trainer yields the GPU. Waits for the deep backfill
+        to finish paging so the ring cannot move under the run. Never touches the live model."""
+        loop = asyncio.get_running_loop()
+        while True:
+            await asyncio.sleep(30)
+            if self._backtesting or not self._backtest_due():
+                continue
+            cfg = self.cfg
+            days = float(getattr(cfg, "deep_backfill_days", 0) or 0)
+            if days > 0 and self._deep_cutoff > time.time() - days * 86400.0 and not self._backtest_requested:
+                continue                                  # still paging history
+            L = self.learner
+            n = L.size
+            if n < 64 or float(L.rt[:n].max()) <= 0:
+                if self._backtest_requested:
+                    self._backtest_requested = False
+                    self.trace.emit("learn", "backtest: no timestamped replay windows yet", "warn")
+                continue
+            self._backtest_requested = False
+            self._backtest_stop = False
+            self._backtesting = True
+            started = time.time()
+            self.backtest_progress = {"running": True, "day": 0, "days": 0, "started": started}
+            preset = str((self.autotune_info or {}).get("preset") or "")
+            self.trace.emit("learn", f"backtest: walking {n} replay windows day by day with a fresh {preset or 'model'} "
+                                     f"(budget {cfg.backtest_hours:g} h, {cfg.backtest_night_epochs:g} night epochs/day, "
+                                     f"cost {cfg.backtest_cost_bps:g} bps)", "act")
+            self._publish({"type": "backtest", "backtest": self.backtest_summary()})
+            L.release_cache()
+
+            def prog(day: int, total: int, totals: dict) -> None:
+                self.backtest_progress = {"running": True, "day": day, "days": total, "started": started, "totals": totals}
+                loop.call_soon_threadsafe(self._publish, {"type": "backtest", "backtest": self.backtest_summary()})
+
+            def finish(f: asyncio.Future) -> None:
+                # Runs on the event loop when the worker thread exits, whether or not the loop task
+                # that started it is still alive: a universe rebuild cancels this loop, but the
+                # thread keeps going until its next day boundary and its report is still wanted.
+                self._backtesting = False
+                L.release_cache()
+                self.backtest_progress = {"running": False}
+                res = None
+                try:
+                    res = f.result()
+                except Exception as e:  # noqa: BLE001
+                    log.error("backtest failed", exc_info=e)
+                    self.trace.emit("learn", f"backtest failed: {type(e).__name__}: {str(e)[:120]}", "error")
+                if res:
+                    self._finish_backtest(res)
+                self._publish({"type": "backtest", "backtest": self.backtest_summary()})
+
+            fut = loop.run_in_executor(None, functools.partial(
+                run_backtest, cfg, L.rx[:n], L.ry[:n], L.rmask[:n], L.rt[:n], device=str(L.device),
+                symbols=list(self.symbols), progress=prog, should_stop=lambda: self._backtest_stop,
+                hours=float(cfg.backtest_hours), days=int(cfg.backtest_days), warm_days=int(cfg.backtest_warm_days),
+                cost_bps=float(cfg.backtest_cost_bps), preset=preset, night_epochs=float(cfg.backtest_night_epochs)))
+            fut.add_done_callback(finish)
+            try:
+                await asyncio.shield(fut)
+            except asyncio.CancelledError:
+                self._backtest_stop = True                          # the worker checks at each day boundary; finish() runs when it exits
+                raise
+            except Exception:  # noqa: BLE001 -- reported by finish()
+                pass
+
+    def _finish_backtest(self, res: dict) -> None:
+        cfg = self.cfg
+        self.backtest = res
+        try:
+            tmp = os.path.join(cfg.state_dir, "backtest.json.tmp")
+            with open(tmp, "w") as f:
+                json.dump(clean(res), f)
+            os.replace(tmp, os.path.join(cfg.state_dir, "backtest.json"))
+        except OSError as e:
+            log.warning("could not save backtest.json: %s", e)
+        t = res.get("totals") or {}
+        if res.get("error"):
+            self.trace.emit("learn", f"backtest: {res['error']}", "warn")
+        else:
+            self.trace.emit("learn", f"backtest {'stopped' if res.get('stopped') else 'done'} in {res.get('elapsed_s', 0) / 60:.0f} min: "
+                                     f"{t.get('days', 0)} days, net {t.get('net_bps', 0):+.0f} bps "
+                                     f"({t.get('net_bps_per_day', 0):+.1f}/day, Sharpe {t.get('sharpe') if t.get('sharpe') is not None else '·'}), "
+                                     f"hit {((t.get('hit_rate') or 0) * 100):.0f}%, coverage {((t.get('coverage') or 0) * 100):.0f}%, "
+                                     f"{t.get('signals', 0)} signals; always-long {t.get('long_bps', 0):+.0f} bps", "act")
+
     async def _idle_train_loop(self) -> None:
         """While the market is closed, train on the replay buffer instead of leaving the GPU
         idle between deep-backfill chunks. The budget is idle_train_epochs passes over the
@@ -791,6 +943,8 @@ class Engine:
             is_open = self.market_status.get("isOpen")
             if is_open is None or (is_open and not getattr(cfg, "train_in_session", False)):
                 continue                                  # unknown status, or open and session training is off
+            if self._backtesting:
+                continue                                  # the weekend backtest owns the GPU
             if is_open != self._idle_was_open:            # each session (open or closed) gets its own budget
                 done, self._idle_was_open = 0, is_open
             epochs = float(getattr(cfg, "idle_train_epochs", 0) or 0)
@@ -1106,6 +1260,7 @@ class Engine:
             "history": self._drain_history(),
             "outcomes": {s: list(self.outcomes.get(s, ())) for s in self.symbols}, "log": list(self.log),
             "status": self.status_dict(), "paper": self.paper.snapshot(self._live_prices()),
+            "backtest": self.backtest_summary(),
         })
 
     def _mature(self, closes: np.ndarray, real_now: np.ndarray | None = None) -> int:
@@ -1785,6 +1940,12 @@ class Engine:
                 v.clear()
             self.trace.emit("system", "model weights and optimizer re-initialized" +
                             (", replay cleared" if payload.get("clear_replay") else ", replay kept"), "act")
+        elif action == "backtest":
+            self._backtest_requested = True
+            return {"ok": True, "backtest": "running" if self._backtesting else "queued"}
+        elif action == "backtest_stop":
+            self._backtest_stop = True
+            return {"ok": True, "backtest": "stopping" if self._backtesting else "idle"}
         elif action == "skim":
             asyncio.get_running_loop().create_task(self.skim_news())
         elif action == "toggle_source":

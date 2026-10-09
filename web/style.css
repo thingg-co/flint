@@ -65,7 +65,7 @@ button.active { background: var(--blue); border-color: var(--blue); color: #fff;
 .more-wrap small { color: var(--muted); font-size: 12px; }
 
 .view { display: none; padding: 16px 18px 40px; }
-body[data-view="dashboard"] #dashboard, body[data-view="consoles"] #consoles, body[data-view="brief"] #brief, body[data-view="console"] #console, body[data-view="paper"] #paper, body[data-view="portfolio"] #portfolio { display: block; }
+body[data-view="dashboard"] #dashboard, body[data-view="consoles"] #consoles, body[data-view="brief"] #brief, body[data-view="console"] #console, body[data-view="paper"] #paper, body[data-view="backtest"] #backtest, body[data-view="portfolio"] #portfolio { display: block; }
 
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 14px; margin-bottom: 16px; }   /* never wider than the screen */
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
@@ -729,3 +729,8 @@ h3 .mini { float: right; padding: 2px 10px; font-size: 11px; margin-top: -2px; }
 .prow.ptr.earlier { opacity: .5; }
 .prow.ptr.pdivider { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; padding: 8px 0 2px; border-bottom: 1px solid var(--grid); }
 .stall { background: var(--warning); color: #111; font-size: 13px; padding: 8px 14px; text-align: center; }
+
+/* news skim: bounded, scrollable; a 212-name universe must not become a 12,000 px panel */
+#tone { max-height: 380px; overflow-y: auto; }
+#tone .a small { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-left: 6px; min-width: 18px; text-align: right; }
+#headlines { max-height: 520px; overflow-y: auto; }

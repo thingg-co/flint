@@ -23,11 +23,52 @@ log = logging.getLogger(__name__)
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
-DEFAULT_SOURCES = [
+CRYPTO_SOURCES = [
     ("CoinDesk", "https://www.coindesk.com/"),
     ("Cointelegraph", "https://cointelegraph.com/"),
-    ("Google News", "https://news.google.com/search?q=bitcoin%20OR%20ethereum%20OR%20solana%20OR%20xrp%20OR%20crypto&hl=en-US&gl=US&ceid=US%3Aen"),
+    ("Google News crypto", "https://news.google.com/search?q=bitcoin%20OR%20ethereum%20OR%20solana%20OR%20xrp%20OR%20crypto&hl=en-US&gl=US&ceid=US%3Aen"),
 ]
+EQUITY_SOURCES = [
+    ("CNBC Markets", "https://www.cnbc.com/markets/"),
+    ("Yahoo Finance", "https://finance.yahoo.com/topic/stock-market-news/"),
+    ("Google News markets", "https://news.google.com/search?q=stocks%20OR%20nasdaq%20OR%20%22S%26P%20500%22%20OR%20earnings%20OR%20fed&hl=en-US&gl=US&ceid=US%3Aen"),
+]
+DEFAULT_SOURCES = CRYPTO_SOURCES          # kept for callers that predate default_sources()
+
+
+def is_crypto(sym: str) -> bool:
+    return "-" in sym                       # BTC-USD style pairs; equities are bare tickers
+
+
+def default_sources(symbols: list[str]) -> list[tuple[str, str]]:
+    """Feeds for the universe's asset mix: the crypto desks only when crypto is modeled, the
+    market desks whenever equities are. A 212-name equity book skimming CoinDesk was the
+    2026-10-10 "why is the news all crypto"."""
+    out: list[tuple[str, str]] = []
+    if any(not is_crypto(s) for s in symbols):
+        out += EQUITY_SOURCES
+    if any(is_crypto(s) for s in symbols):
+        out += CRYPTO_SOURCES
+    return out or EQUITY_SOURCES
+
+
+# tickers that are also English words: matched only by their company news, never by headline text
+TICKER_STOPLIST = {"ALL", "NOW", "APP", "NET", "LOW", "COST", "CAT", "KEYS", "MET", "ARM", "DASH", "SNAP", "TEAM",
+                   "FAST", "GOLD", "PLAY", "TMC", "SU", "BE", "ON", "ET", "IT", "SO", "AN", "AM", "PM", "WELL", "LIVE",
+                   "LOVE", "REAL", "BIG", "RUN", "BOOT", "OPEN", "HOLD", "SEE", "ONE", "TWO", "TEN", "ACT", "FIT", "FUN"}
+
+
+def asset_patterns(bases: dict[str, str]) -> dict[str, re.Pattern]:
+    """One regex per modeled base: the crypto names and aliases from ASSET_TERMS, and for an
+    equity its ticker as an upper-case word of three or more letters (shorter ones and the
+    stoplist are too often ordinary words)."""
+    out: dict[str, re.Pattern] = {}
+    for base in set(bases.values()):
+        if base in ASSET_TERMS:
+            out[base] = _ASSET[base]
+        elif len(base) >= 3 and base.isalpha() and base not in TICKER_STOPLIST:
+            out[base] = re.compile(rf"\b{re.escape(base)}\b")
+    return out
 
 ASSET_TERMS = {
     "BTC": [r"bitcoin", r"\bbtc\b"],
@@ -44,7 +85,9 @@ ASSET_TERMS = {
     "MATIC": [r"\bpolygon\b", r"\bmatic\b"],
 }
 GENERIC_TERMS = [r"crypto", r"cryptocurrenc", r"digital asset", r"stablecoin", r"altcoin", r"\betf\b", r"\bsec\b",
-                 r"blockchain", r"\bdefi\b", r"\btoken"]
+                 r"blockchain", r"\bdefi\b", r"\btoken",
+                 r"\bstocks?\b", r"\bnasdaq\b", r"s&p", r"\bdow\b", r"\bfed\b", r"\bearnings\b", r"\btariff",
+                 r"inflation", r"treasur", r"wall street", r"\bmarkets?\b"]
 
 POSITIVE = ["surge", "surges", "soar", "soars", "rally", "rallies", "jump", "jumps", "gain", "gains", "record", "high",
             "highs", "approve", "approves", "approval", "adoption", "inflow", "inflows", "upgrade", "breakout", "bull",
@@ -79,8 +122,8 @@ class Headline:
         return dict(self.__dict__)
 
 
-def score_headline(text: str) -> tuple[list[str], bool, float]:
-    assets = [a for a, rx in _ASSET.items() if rx.search(text)]
+def score_headline(text: str, asset_rx: dict[str, re.Pattern] | None = None) -> tuple[list[str], bool, float]:
+    assets = [a for a, rx in (asset_rx if asset_rx is not None else _ASSET).items() if rx.search(text)]
     generic = bool(_GENERIC.search(text))
     pos = len(_POS.findall(text))
     neg = len(_NEG.findall(text))
@@ -151,7 +194,8 @@ class NewsSkimmer:
     def __init__(self, symbols: list[str], sources_spec: str = "", use_browser: bool = True):
         self.symbols = symbols
         self.bases = {s: s.split("-")[0].upper() for s in symbols}
-        self.sources = parse_sources(sources_spec) or DEFAULT_SOURCES
+        self.asset_rx = asset_patterns(self.bases)
+        self.sources = parse_sources(sources_spec) or default_sources(symbols)
         self.use_browser = use_browser
         self.browser_ok: bool | None = None
         self.seen: dict[str, float] = {}
@@ -194,7 +238,7 @@ class NewsSkimmer:
                 if key in titles:
                     continue
                 titles.add(key)
-                assets, generic, sent = score_headline(title)
+                assets, generic, sent = score_headline(title, self.asset_rx)
                 if not assets and not generic:
                     continue
                 is_new = key not in self.seen
@@ -226,12 +270,13 @@ class NewsSkimmer:
         }
 
     def _ideas(self, per_asset: dict, headlines: list[Headline]) -> list[str]:
+        """One line per name with coverage, most covered first, and one line for the rest:
+        212 "no direct coverage" lines were the 2026-10-10 Control panel."""
         ideas = []
-        for sym, pa in per_asset.items():
+        covered = sorted(((s, pa) for s, pa in per_asset.items() if pa["mentions"]),
+                         key=lambda kv: (-kv[1]["mentions"], -abs(kv[1]["sentiment"])))
+        for sym, pa in covered[:24]:
             base = self.bases[sym]
-            if pa["mentions"] == 0:
-                ideas.append(f"{base}: no direct coverage this pass; general crypto tone {pa['sentiment']:+.2f}")
-                continue
             s = pa["sentiment"]
             tilt = "bullish" if s > 0.15 else "bearish" if s < -0.15 else "mixed"
             lead = pa["top"][0] if pa["top"] else ""
@@ -239,10 +284,14 @@ class NewsSkimmer:
             if lead:
                 line += f' | "{lead[:100]}"'
             ideas.append(line)
+        quiet = len(per_asset) - len(covered)
         gen = [h for h in headlines if h.generic and not h.assets]
+        tail = f"{quiet} names without direct coverage this pass" if quiet else ""
         if gen:
             mean = sum(h.sentiment for h in gen) / len(gen)
-            ideas.append(f"Market: {len(gen)} general crypto headlines, tone {mean:+.2f}")
+            tail += ("; " if tail else "") + f"market: {len(gen)} general headlines, tone {mean:+.2f}"
+        if tail:
+            ideas.append(tail[0].upper() + tail[1:])
         return ideas
 
     async def _with_browser(self, say) -> dict[str, list[tuple[str, str]]]:
@@ -368,6 +417,95 @@ class AlphaVantageNews:
         return result
 
 
+class FinnhubNews:
+    """Company news keyed by ticker from Finnhub (/company-news), so an equity's mentions are
+    the articles Finnhub filed under it, not a string match on a headline. Each pass refreshes
+    `per_skim` equities in rotation (under the 60 requests/min limit, next to the radar's
+    sector fill) and keeps every name's last articles for three days, so a 212-name universe
+    is fully refreshed about every 25 minutes at the default 3-minute cadence. General market
+    news (/news?category=general) gives the market tone every pass. The key is read on every
+    pass, so one saved in the Control panel takes effect without a restart."""
+
+    id = "finnhub"
+    name = "Finnhub company news"
+    REST = "https://finnhub.io/api/v1"
+    KEEP_S = 3 * 86400
+
+    def __init__(self, symbols: list[str], key_getter, per_skim: int = 30):
+        self.symbols = symbols
+        self.equities = [s for s in symbols if not is_crypto(s)]
+        self.key_getter = key_getter
+        self.per_skim = per_skim
+        self.pos = 0
+        self.cache: dict[str, list[Headline]] = {}
+        self.general: list[Headline] = []
+        self.seen: dict[str, float] = {}
+        self.status: dict[str, str] = {}
+        self.method = "finnhub"
+
+    def _headline(self, it: dict, assets: list[str], generic: bool, now: float) -> Headline | None:
+        title = html.unescape(str(it.get("headline") or "")).strip()
+        if len(title) < 12:
+            return None
+        _a, _g, sent = score_headline(title)
+        key = title.lower()[:120]
+        is_new = key not in self.seen
+        self.seen.setdefault(key, now)
+        ts = float(it.get("datetime") or now)
+        return Headline(title, str(it.get("source") or "Finnhub"), str(it.get("url") or ""), assets, generic, sent, is_new, ts)
+
+    async def skim(self, say=None) -> dict:
+        now = time.time()
+        key = self.key_getter() if callable(self.key_getter) else self.key_getter
+        if not key or not self.equities:
+            self.status["finnhub"] = "no key" if not key else "no equities"
+            return {"t": now, "method": "finnhub (off)", "status": dict(self.status), "headlines": [], "per_asset": {}}
+        batch = [self.equities[(self.pos + i) % len(self.equities)] for i in range(min(self.per_skim, len(self.equities)))]
+        self.pos = (self.pos + len(batch)) % len(self.equities)
+        frm = datetime.fromtimestamp(now - self.KEEP_S).date().isoformat()
+        to = datetime.fromtimestamp(now).date().isoformat()
+        fetched = 0
+        async with httpx.AsyncClient(timeout=15) as c:
+            for sym in batch:
+                try:
+                    r = await c.get(f"{self.REST}/company-news", params={"symbol": sym, "from": frm, "to": to, "token": key})
+                except Exception as e:  # noqa: BLE001
+                    self.status["finnhub"] = f"{sym}: {type(e).__name__}"
+                    break
+                if r.status_code == 429:
+                    self.status["finnhub"] = "rate limited; resuming next pass"
+                    break
+                if r.status_code != 200:
+                    self.status["finnhub"] = f"company-news {r.status_code}"
+                    continue
+                items = r.json() if isinstance(r.json(), list) else []
+                hs = [h for h in (self._headline(it, [sym.split("-")[0].upper()], False, now) for it in items[:8]) if h]
+                self.cache[sym] = hs
+                fetched += 1
+                await asyncio.sleep(0.2)
+            try:
+                r = await c.get(f"{self.REST}/news", params={"category": "general", "token": key})
+                if r.status_code == 200 and isinstance(r.json(), list):
+                    self.general = [h for h in (self._headline(it, [], True, now) for it in r.json()[:40]) if h]
+            except Exception:  # noqa: BLE001
+                pass
+        for sym in list(self.cache):                                   # forget stale articles
+            self.cache[sym] = [h for h in self.cache[sym] if now - h.ts < self.KEEP_S]
+        self.status["finnhub"] = f"{fetched} names refreshed, {sum(len(v) for v in self.cache.values())} company headlines"
+        headlines = [h for hs in self.cache.values() for h in hs] + self.general
+        per_asset: dict[str, dict] = {}
+        gen = self.general
+        for sym in self.equities:
+            direct = self.cache.get(sym, [])
+            weight = len(direct) + 0.5 * len(gen)
+            sent = (sum(h.sentiment for h in direct) + 0.5 * sum(h.sentiment for h in gen)) / weight if weight else 0.0
+            per_asset[sym] = {"mentions": len(direct), "generic": len(gen), "sentiment": round(sent, 3),
+                              "attention": round(min(1.0, math.log1p(weight) / math.log1p(120.0)), 3),
+                              "top": [h.title for h in sorted(direct, key=lambda h: -abs(h.sentiment))[:3]]}
+        return {"t": now, "method": f"finnhub ({fetched} names)", "status": dict(self.status),
+                "headlines": [h.to_json() for h in headlines], "per_asset": per_asset}
+
+
 class NewsHub:
     """Holds the toggleable news sources and merges their output per asset."""
 
@@ -380,6 +518,10 @@ class NewsHub:
         browser = NewsSkimmer(symbols, cfg.news_sources, cfg.news_browser)
         self.sources[browser.id] = browser
         self.enabled[browser.id] = "browser" not in off
+        if any(not is_crypto(s) for s in symbols):
+            fn = FinnhubNews(symbols, lambda: getattr(cfg, "finnhub_key", ""))
+            self.sources[fn.id] = fn
+            self.enabled[fn.id] = "finnhub" not in off
         if av.key:
             avn = AlphaVantageNews(symbols, av, cfg.av_news_minutes * 60)
             self.sources[avn.id] = avn
@@ -436,14 +578,20 @@ class NewsHub:
                 "per_asset": per_asset, "ideas": ideas, "new": sum(1 for h in headlines if h.get("new"))}
 
     def _ideas(self, per_asset: dict) -> list[str]:
+        """Names with coverage, most covered first, then one line for the rest."""
         ideas = []
-        for sym, pa in per_asset.items():
+        covered = sorted(((s, pa) for s, pa in per_asset.items() if pa["mentions"]),
+                         key=lambda kv: (-kv[1]["mentions"], -abs(kv[1]["sentiment"])))
+        for sym, pa in covered[:24]:
             base = sym.split("-")[0].upper()
             s = pa["sentiment"]
             tilt = "bullish" if s > 0.15 else "bearish" if s < -0.15 else "mixed"
             lead = pa["top"][0] if pa["top"] else ""
-            line = f"{base}: {pa['mentions']} scored mention(s), tone {s:+.2f} ({tilt}), attention {pa['attention']:.2f}"
+            line = f"{base}: {pa['mentions']} headline{'s' if pa['mentions'] != 1 else ''}, tone {s:+.2f} ({tilt}), attention {pa['attention']:.2f}"
             if lead:
                 line += f' | "{lead[:100]}"'
             ideas.append(line)
+        quiet = len(per_asset) - len(covered)
+        if quiet:
+            ideas.append(f"{quiet} names without direct coverage this pass")
         return ideas

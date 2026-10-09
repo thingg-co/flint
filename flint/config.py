@@ -299,6 +299,12 @@ class Config:
     state_dir: str = _env("STATE_DIR", "state")
     checkpoint_minutes: float = _env("CHECKPOINT_MINUTES", 5.0)
     replay_save_minutes: float = _env("REPLAY_SAVE_MINUTES", 30.0)  # the replay buffer (tens of GB when full) is written at most this often, and at shutdown; the model every checkpoint
+    backtest_weekends: bool = _env("BACKTEST_WEEKENDS", "1") not in ("0", "false", "no")  # walk-forward backtest over the replay on Saturday/Sunday ET (a live control; action "backtest" runs one any time)
+    backtest_hours: float = _env("BACKTEST_HOURS", 30.0)      # time budget for a run; the per-day training budget shrinks to fit it (0 = uncapped)
+    backtest_night_epochs: float = _env("BACKTEST_NIGHT_EPOCHS", 2.0)  # passes over the history seen so far per simulated day, as the idle trainer does per closed session
+    backtest_days: int = _env("BACKTEST_DAYS", 0)             # score only the last N days (0 = all timestamped history)
+    backtest_cost_bps: float = _env("BACKTEST_COST_BPS", 5.0)  # round-trip cost per unit of position in the backtest (the live book charges the quoted spread)
+    backtest_warm_days: int = _env("BACKTEST_WARM_DAYS", 10)   # training-only days before scoring starts, like warmup
 
     def __post_init__(self):
         if not self.sources_on and self.feed and self.feed != "auto":

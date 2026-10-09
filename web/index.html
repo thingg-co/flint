@@ -21,6 +21,7 @@
     <button data-tab="brief" hidden>Brief</button>
     <button data-tab="dashboard" class="active">Dashboard</button>
     <button data-tab="paper">Paper</button>
+    <button data-tab="backtest">Backtest</button>
     <button data-tab="portfolio">Portfolio</button>
     <button data-tab="console">Console</button>
     <button data-tab="consoles"><span class="long">Control panel</span><span class="short">Control</span></button>
@@ -185,6 +186,15 @@
     <section class="panel"><h3>Options <small id="p-opt-meta"></small></h3><div class="ptable" id="p-options"></div></section>
   </div>
   <div class="why">Simulated. The model runs a $100k long/short book, rebalancing to its own suggestions with no leverage and a small cost per trade. It compounds continuously and persists across restarts. These are not real orders.</div>
+</main>
+<main id="backtest" class="view">
+  <section class="panel"><h3>Walk-forward backtest <small id="bt-meta"></small> <button class="mini" id="bt-run">Run now</button></h3><div class="pstats" id="bt-stats"></div></section>
+  <section class="panel"><h3>Equity curve <small>cumulative net bps per day; the thin grey line is an always-long 1/N book</small></h3><canvas id="bt-curve" class="pcurve"></canvas></section>
+  <div class="row pcards">
+    <section class="panel"><h3>Days <small>newest first, last 30</small></h3><div class="ptable" id="bt-days"></div></section>
+    <section class="panel"><h3>Names <small>best and worst by net bps</small></h3><div class="ptable" id="bt-names"></div></section>
+  </div>
+  <div class="why">Out of sample by construction: a fresh net of the live preset forecasts each day before it trains on that day, the live policy's gates and sizing decide, and the realised hour-ahead returns score it. It runs on the weekend GPU over the timestamped replay; the model that trades is untouched.</div>
 </main>
 <main id="portfolio" class="view">
   <div class="paper-head">

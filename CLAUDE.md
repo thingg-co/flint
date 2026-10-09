@@ -53,6 +53,9 @@ unless Flint is already up.
   experts, non-crossing quantiles) and the loss.
 - `flint/learner.py` — replay buffer and online optimizer; atomic, corruption-resilient
   checkpoints.
+- `flint/backtest.py` — walk-forward backtest over the timestamped replay: a fresh net of the live
+  preset predicts each day before training on it, `decide` applies the live policy's gates, and
+  the realised returns score it. Run by the engine on weekends and by `flint backtest`.
 - `flint/autotune.py` — picks the model preset by benchmarking against a warmup-time
   budget; caches the choice in `state/machine.json`.
 - `flint/features.py`, `flint/bars.py` — per-bar features with running normalization, and
@@ -115,7 +118,8 @@ unless Flint is already up.
   is kept but not deduplicated). The replay is written uncompressed, at most every
   `replay_save_minutes` and at shutdown, because the save holds the training lock and a full
   buffer is tens of GB; the Spark launcher sizes it at 12,000 windows (~33 GB at 212 names,
-  about seven months) with `deep_backfill_days` 220. `_idle_train_loop` fills the gaps between chunks: while closed it trains on
+  about seven months) with `deep_backfill_days` 200, which fills the buffer without wrapping it; a
+  restart resumes paging from the oldest window held. `_idle_train_loop` fills the gaps between chunks: while closed it trains on
   the replay up to `idle_train_epochs` passes per closed session (a live control; 0 disables),
   a budget bounded by replay size rather than by hours, so a long night cannot overfit it. With
   `train_in_session` on (a live control, off by default) it also runs through the open session with
@@ -166,6 +170,28 @@ unless Flint is already up.
   capped at `option_max_frac` of equity. These exist because of the 2026-09-02 session (churn and a
   $1 stock cost 7% in a night).
 - The Portfolio tab and account access are strictly read-only; Flint never places, changes, or cancels an order on any provider.
+- The backtest (`_backtest_loop`, Backtest tab, `/api/backtest`, `flint backtest`) never touches the
+  live model. It runs in process, once per weekend (Saturday or Sunday ET, market closed) or on the
+  `backtest` control action, only after the deep backfill has finished paging (so the ring cannot move
+  under it), and the idle trainer yields the GPU while it runs. It is out of sample by construction:
+  the fresh net forecasts day D before it trains on day D, signals wait for the live trust rule, and
+  every calibration update lands one horizon late, as live. `backtest.decide` mirrors the gates of
+  `_suggest` that history can answer; change them together. Each simulated day trains the live
+  online budget plus `backtest_night_epochs` passes over the history so far (the idle trainer's
+  regimen); `backtest_hours` (30 by default, a weekend) caps the run by shrinking that budget, so a
+  run always finishes; the report says what it used. A universe rebuild stops a running backtest
+  first and waits for it, because a benchmark next to another net reads nonsense peaks.
+- A failed universe rebuild (no memory to benchmark, a bad symbol) puts the previous universe back
+  and resumes the lifecycle on the model it still has; it saves first so the replay in memory is
+  not lost. Before 2026-10-10 it left every loop cancelled and the status "starting" for good. The
+  benchmark's peak is measured above what the process already holds, so a live model or a backtest
+  in the same process cannot inflate it. Note that growing the universe still resets the model and
+  the replay (shape mismatch), so "+ Top 20 movers" and holdings adds cost the deep-backfill history.
+- News: the browser skimmer's feeds follow the universe's asset mix (`default_sources`): market desks
+  for equities, the crypto desks only when crypto is modeled. Equity mentions come mainly from
+  `FinnhubNews`, company news keyed by ticker (30 names per pass in rotation, three days kept), with
+  general market news for the tone; headline text matches a ticker only as an upper-case word of
+  three or more letters outside `TICKER_STOPLIST`. The Control panel lists only covered names.
 
 ## Working on it
 
@@ -180,6 +206,8 @@ unless Flint is already up.
   device, free memory, any llama-server unit on the same memory, the cached preset and its peak,
   and whether the model plus replay fits. Exit 2 means a start would refuse. Run it with the same
   `FLINT_*` environment the launcher uses, or the replay size and universe will be the defaults.
+- The Backtest tab shows the last walk-forward report and live progress; "Run now" queues one. The
+  loop logs a one-line summary to the trace when it finishes; `state/backtest.json` holds the report.
 - Tests: `uv run pytest -q tests`. They cover the memory guard, the paper book's defined-risk
   rules, the policy gates in `_suggest`, checkpoint mismatch handling, bar building, features and
   source failover, key saving and live application, the eager fallback when a compiled step

@@ -170,7 +170,8 @@ class TestScoreHeadline:
         assets, generic, sent = result
         assert sent == 1.0
         assert assets == []
-        assert generic is False
+        assert generic is True      # "markets" is market tone since 0.5.11; a headline with no market word is not
+        assert score_headline("Widgets surge and rally hard")[1] is False
 
     def test_score_headline_negative_sentiment(self):
         """Two negative words, no positive = sentiment -1.0."""

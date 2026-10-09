@@ -60,6 +60,10 @@ def create_app(engine: Engine) -> FastAPI:
     async def keys():
         return JSONResponse(clean(engine.keys_status()))
 
+    @app.get("/api/backtest")
+    async def backtest():
+        return JSONResponse(clean({"backtest": engine.backtest, "progress": engine.backtest_progress}))
+
     @app.post("/api/keys")
     async def set_keys(payload: dict):
         return JSONResponse(clean(engine.set_key(payload.get("service", ""), payload.get("values", {}))))

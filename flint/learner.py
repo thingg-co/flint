@@ -91,6 +91,12 @@ class OnlineLearner:
             log.warning("torch.compile unavailable (%s: %s); training eager", type(e).__name__, str(e)[:120])
             return model
 
+    def release_cache(self) -> None:
+        """Hand the CUDA caching allocator's idle blocks back so another net (the weekend
+        backtest) can use them. The weights and optimizer state stay."""
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+
     @property
     def n_params(self) -> int:
         return sum(p.numel() for p in self.model.parameters())
