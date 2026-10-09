@@ -171,7 +171,6 @@ ul.log li.win { color: #6fe36f; } ul.log li.loss { color: #ff8b8b; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .console-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 12px; margin-bottom: 14px; }
 .console { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; display: flex; flex-direction: column; height: 300px; min-width: 0; }
-.console.tall { height: 420px; }
 .console header { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 12px; }
 .console header .name { font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-2); }
 .console header .desc { color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

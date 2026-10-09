@@ -760,7 +760,7 @@ function buildConsoles() {
   for (const k of Object.keys(consoles)) delete consoles[k];
   Object.entries(CHANNELS).forEach(([ch, desc]) => {
     const el = document.createElement("div");
-    el.className = "console" + (ch === "model" || ch === "news" ? " tall" : "");
+    el.className = "console";                      // one height for every card: the grid reads as a grid
     el.innerHTML = `<header><span class="name">${ch}</span><span class="desc">${desc}</span><span class="rate">0/min</span>
       <button type="button" class="pause">pause</button><button type="button" class="clear">clear</button></header><div class="body"></div>`;
     grid.appendChild(el);
