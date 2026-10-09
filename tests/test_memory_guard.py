@@ -29,3 +29,11 @@ def test_never_wider_than_live():
 def test_floor_is_respected():
     assert name(backtest_preset_for(60.0, LIVE_D, LIVE_PEAK, floor=30.0)) == "XXL"       # 25.5*1.25+30 = 62 > 60; 17*1.25+30 = 51 fits
     assert [p[0] for p in PRESETS][-1] == "5XL"
+
+
+def test_rung_need_scales_with_width():
+    from flint.autotune import MEMORY_HEADROOM_GB, rung_need
+    assert rung_need(0.0, None, 64) == 1.0 + MEMORY_HEADROOM_GB                 # the first rung
+    need = rung_need(39.5, 384, 512)                                             # XXXL measured, 4XL next (362 names)
+    assert 60 < need < 80                                                        # not the 122 GB the flat x3 asked for
+    assert rung_need(34.0, 512, 768) > rung_need(34.0, 512, 640)

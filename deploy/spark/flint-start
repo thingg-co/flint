@@ -28,7 +28,7 @@ ENV=(
     FLINT_MAX_WARMUP_SECONDS=300                       # tune budget 5000 ms/step so the ladder reaches 5XL
                                                        # (~57 GB with the replay at 212 names); the bench runs
                                                        # eager, live steps run compiled at about half that
-    FLINT_REPLAY_GB=36                                 # replay budget; the window count follows the universe
+    FLINT_REPLAY_GB=30                                 # replay budget; the window count follows the universe
                                                        # (12,000 windows at 232 names, 7,000 at 400)
     FLINT_MAX_UNIVERSE=400                             # core + holdings + up to interesting_count promoted names
     FLINT_INTERESTING_COUNT=150

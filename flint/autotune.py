@@ -35,7 +35,17 @@ PRESETS = [
 ]
 
 MEMORY_HEADROOM_GB = 3.0     # left for the OS, the feeds and the dashboard, on top of what the model needs
-LADDER_GROWTH = 3.0          # the next rung's peak vs this one's: d_model x1.5 gives ~2.25x params + optimizer state
+LADDER_SAFETY = 1.35         # margin on the next rung's estimated peak before it is benchmarked
+
+
+def rung_need(last_peak_gb: float, last_d_model: int | None, d_model: int) -> float:
+    """Memory the next rung needs free before it is benchmarked: the previous rung's measured
+    peak scaled by width (a training peak grows about linearly with d_model: 2026-10-10 at 232
+    names, 384 -> 25 GB, 512 -> 34, 768 -> 51) with a margin, plus the headroom. A flat x3 here
+    refused 4XL at 362 names with 106 GB free when it needed about 53."""
+    if not last_d_model or last_peak_gb <= 0:
+        return 1.0 + MEMORY_HEADROOM_GB
+    return last_peak_gb * (d_model / float(last_d_model)) * LADDER_SAFETY + MEMORY_HEADROOM_GB
 
 
 class NotEnoughMemory(RuntimeError):
@@ -310,9 +320,23 @@ def autotune(cfg, n_features: int, say=None) -> dict:
         if tenants:
             say(f"note: {', '.join(tenants)} is loaded on the same memory; the ladder stops where it runs out")
         chosen, chosen_ms, chosen_n, chosen_peak = PRESETS[0], None, None, 0.0
-        last_peak = 0.0
+        last_peak, last_d, last_ms = 0.0, None, None
+        total = _host_total_gb()
         for preset in PRESETS:
-            need = max(1.0, last_peak * LADDER_GROWTH) + MEMORY_HEADROOM_GB     # the rung after a 4 GB one may take 12
+            need = rung_need(last_peak, last_d, preset[1])
+            if last_d and last_ms and last_ms * (preset[1] / last_d) > budget * 1.3:
+                say(f"{preset[0]} would take about {last_ms * preset[1] / last_d:.0f} ms/step, well over the "
+                    f"{budget:.0f} ms budget; the ladder stops here")   # a rung that cannot be chosen is not worth its benchmark
+                break
+            replay_gb = (float(cfg.replay_gb) if float(getattr(cfg, "replay_gb", 0) or 0) > 0
+                         else float(getattr(cfg, "replay_size", 0) or 0) * cfg.n_assets * preset[5] * n_features * 4 / 1e9)
+            if total and need > total - replay_gb - MEMORY_HEADROOM_GB:
+                # Not transient: this box cannot hold that rung next to the replay at any time, so the
+                # ladder stops and the cache stays honest. A rung that would fit an empty box but not
+                # the box as it is right now is the transient case below, which refuses instead.
+                say(f"{preset[0]} needs about {need:.0f} GB next to a {replay_gb:.0f} GB replay and this box has "
+                    f"{total:.0f} GB; the ladder stops here")
+                break
             free = free_memory_gb(device)
             if free is not None and free < need:
                 # A ladder cut short by memory is a transient condition, not this machine's speed: caching a
@@ -323,7 +347,7 @@ def autotune(cfg, n_features: int, say=None) -> dict:
             except Exception as e:  # noqa: BLE001
                 say(f"preset {preset[0]} failed ({type(e).__name__}); stopping ladder")
                 break
-            last_peak = peak
+            last_peak, last_d, last_ms = peak, preset[1], ms
             say(f"benchmark {preset[0]:4}: {n / 1e6:5.2f}M params  {ms:5.0f} ms/step  {peak:4.1f} GB peak" +
                 ("  <- fits" if ms <= budget else "  (over budget)"))
             if ms <= budget:
