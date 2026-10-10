@@ -62,7 +62,9 @@ def create_app(engine: Engine) -> FastAPI:
 
     @app.get("/api/backtest")
     async def backtest():
-        return JSONResponse(clean({"backtest": engine.backtest, "progress": engine.backtest_progress}))
+        # the same shape the websocket pushes (totals and day rows from the live run while one is on,
+        # a finished variant as the baseline), plus the raw saved report for scripts
+        return JSONResponse(clean({**engine.backtest_summary(), "backtest": engine.backtest}))
 
     @app.post("/api/keys")
     async def set_keys(payload: dict):
