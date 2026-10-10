@@ -136,3 +136,21 @@ def test_night_epochs_add_training_over_the_history_seen():
         assert p["steps"] == cfg.steps_per_label * 6
         assert q["steps"] == p["steps"] + int(6 * (k + 1) / 4)
     assert night["config"]["night_epochs"] == 1.0
+
+
+def test_backtest_waits_for_paging_only_while_the_ring_has_room():
+    """A full ring ends paging early; the queued backtest must then run, not wait for a cutoff
+    the deep loop will never reach."""
+    import time
+    import types
+    cfg = SimpleNamespace(deep_backfill_days=200.0)
+    rx = np.zeros((6474, 1, 1, 1), dtype=np.float32)
+    learner = SimpleNamespace(size=6058, rx=rx)
+    fake = types.SimpleNamespace(cfg=cfg, learner=learner, _deep_cutoff=time.time() - 83 * 86400.0)
+    assert Engine._paging_pending(fake) is False                       # within a chunk of full: paging is over
+    fake.learner.size = 3000
+    assert Engine._paging_pending(fake) is True                        # room left and history left: still paging
+    fake._deep_cutoff = time.time() - 201 * 86400.0
+    assert Engine._paging_pending(fake) is False                       # paged to the configured depth
+    fake.cfg.deep_backfill_days = 0
+    assert Engine._paging_pending(fake) is False                       # deep backfill off

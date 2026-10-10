@@ -229,7 +229,9 @@ unless Flint is already up.
 - The backtest (`_backtest_loop`, Backtest tab, `/api/backtest`, `flint backtest`) never touches the
   live model. It runs in process, once per weekend (Saturday or Sunday ET, market closed) or on the
   `backtest` control action, only after the deep backfill has finished paging (so the ring cannot move
-  under it), and the idle trainer yields the GPU while it runs. It is out of sample by construction:
+  under it; `_paging_pending` counts a ring within a chunk of full as finished, because the deep loop
+  stops there and at 362 names the 30 GB budget holds 6,474 windows of the 128-bar preset, about 83
+  days, well short of `deep_backfill_days`), and the idle trainer yields the GPU while it runs. It is out of sample by construction:
   the fresh net forecasts day D before it trains on day D, signals wait for the live trust rule, and
   every calibration update lands one horizon late, as live. `backtest.decide` mirrors the gates of
   `_suggest` that history can answer; change them together. Each simulated day trains the live

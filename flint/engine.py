@@ -1119,8 +1119,7 @@ class Engine:
             if self._backtesting or not self._backtest_due():
                 continue
             cfg = self.cfg
-            days = float(getattr(cfg, "deep_backfill_days", 0) or 0)
-            if days > 0 and self._deep_cutoff > time.time() - days * 86400.0:
+            if self._paging_pending():
                 if self._backtest_requested and not self._backtest_waiting:
                     self._backtest_waiting = True
                     self.trace.emit("learn", "backtest queued: waiting for the deep backfill to finish paging", "info")
@@ -1231,6 +1230,17 @@ class Engine:
                 raise
             except Exception:  # noqa: BLE001 -- reported by finish()
                 pass
+
+    def _paging_pending(self) -> bool:
+        """Whether the deep backfill still has chunks to add: history left to page and room in the
+        ring for a chunk. A full ring ends paging early (the deep loop stops within a chunk of
+        full), so the backtest must not wait on the cutoff alone: before 0.5.14 it did, and a
+        queued run waited forever once the replay filled before the configured depth."""
+        days = float(getattr(self.cfg, "deep_backfill_days", 0) or 0)
+        if days <= 0 or self._deep_cutoff <= time.time() - days * 86400.0:
+            return False
+        L = self.learner
+        return L.size < L.rx.shape[0] - 800
 
     def _finish_backtest(self, res: dict) -> None:
         cfg = self.cfg
