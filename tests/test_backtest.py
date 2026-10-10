@@ -203,3 +203,29 @@ def test_progress_reports_every_day_warm_ones_included():
     assert len(rows) == 5 and rows[-1]["date"] and len(rows[-1]["gate"]) == cfg.n_experts       # day rows ride along with progress
     assert abs(sum(rows[-1]["gate"]) - 1.0) < 0.01                                               # the day's mean expert mix
     assert calls[2][2]["days"] == []                                                              # nothing scored yet in the warm days
+
+
+def test_a_finished_variant_rides_along_as_the_baseline_while_the_next_one_runs():
+    """The variants run back to back inside one job and the combined report is saved only at the
+    end, so until 0.5.15 the first variant's result vanished from the tab for the whole second
+    run (the 2026-10-11 weekend: 15 hours with nothing to look at). `variant_summary` is what the
+    job appends to the progress, and the summary serves it as the baseline while running."""
+    from types import SimpleNamespace
+    from flint.backtest import variant_summary
+    from flint.engine import Engine
+    rep = {"config": {"target": "absolute"}, "totals": {"net_bps": -144.1, "sharpe": -3.07, "days": 74}, "stopped": False,
+           "days": [{"date": "2026-06-01", "net_bps": 20.0, "cum_net_bps": 20.0, "hit": 0.5, "gate": [0.1] * 12},
+                    {"date": "2026-06-02", "net_bps": -39.0, "cum_net_bps": -19.0, "hit": 0.49}]}
+    vs = variant_summary(rep)
+    assert vs["target"] == "absolute" and vs["totals"]["net_bps"] == -144.1 and vs["stopped"] is False
+    assert vs["days"] == [{"date": "2026-06-01", "cum_net_bps": 20.0}, {"date": "2026-06-02", "cum_net_bps": -19.0}]   # the curve only
+    old = {"ran_at": 1.0, "totals": {"net_bps": 1.0}, "days": [], "baseline": {"target": "stale"}, "config": {}}
+    eng = SimpleNamespace(backtest=old, sweep=None,
+                          backtest_progress={"running": True, "variant": "relative", "variants": ["absolute", "relative"],
+                                             "day": 21, "totals": {"net_bps": -20.2}, "days": [], "done": [vs]})
+    s = Engine.backtest_summary(eng)
+    assert s["baseline"] is vs and s["totals"] == {"net_bps": -20.2}                 # the finished variant, not the old report's
+    eng.backtest_progress = {"running": True, "variant": "absolute", "variants": ["absolute", "relative"], "day": 3, "done": []}
+    assert Engine.backtest_summary(eng)["baseline"] is None                           # first variant still running: nothing finished yet
+    eng.backtest_progress = {"running": False}
+    assert Engine.backtest_summary(eng)["baseline"] == {"target": "stale"}            # idle: the saved report's own baseline

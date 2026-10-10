@@ -32,6 +32,14 @@ GRID: dict[str, list] = {
     "skill_min_n": [0, 4, 8, 16],
 }
 MIN_SIGNALS_PER_DAY = 0.5           # a setting that barely trades has no net worth comparing
+THIN_SIGNALS_PER_DAY = 2.0          # a proposal confirmed on fewer trades than this is a hint, not a result
+
+
+def is_thin(r: dict) -> bool:
+    """Whether a replay traded too rarely for its net to mean much: under THIN_SIGNALS_PER_DAY
+    signals a day. The 2026-10-11 sweep "accepted" gates whose confirming half placed 20 trades
+    in 37 days; the operator should see that for what it is."""
+    return bool(r.get("days")) and r.get("signals", 0) / r["days"] < THIN_SIGNALS_PER_DAY
 
 
 def load_forecasts(path: str | Path) -> dict:
@@ -221,12 +229,16 @@ def run_sweep(fc: dict, cfg, cost_bps: float, grid: dict | None = None, max_pass
     cur_conf = replay_policy(fc, cfg, cost_bps, current, split, n_days)
     prop_conf = replay_policy(fc, cfg, cost_bps, knobs, split, n_days) if proposal else cur_conf
     accepted = bool(proposal) and _objective(prop_conf) > _objective(cur_conf) + 1e-9
+    thin = bool(proposal) and is_thin(prop_conf)
     why = ("no setting beat the current gates on the tuning half" if not proposal else
            ("the proposal also beats the current gates on the confirming half" if accepted else
             "the proposal won the tuning half but not the confirming half: likely noise, not proposed"))
+    if accepted and thin:
+        why += (f", but it trades only {prop_conf['signals']} times in {prop_conf['days']} confirming days: "
+                "that is a hint to tighten the gates, not a setting to copy")
     strip = lambda r: {k: v for k, v in r.items() if k != "nets"}  # noqa: E731
     return {"ran_at": t0, "elapsed_s": time.time() - t0, "forecasts": fc.get("path"), "target": fc.get("target"),
             "cost_bps": float(cost_bps), "days": n_days, "split_day": split, "evaluations": evals,
             "current": {"knobs": current, "tune": strip(cur_tune), "confirm": strip(cur_conf)},
             "proposal": ({"knobs": proposal, "all": knobs, "tune": strip(best), "confirm": strip(prop_conf)} if proposal else None),
-            "accepted": accepted, "why": why, "steps": steps}
+            "accepted": accepted, "thin": thin, "why": why, "steps": steps}

@@ -375,6 +375,14 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
             "days": day_rows, "totals": totals, "symbols": per_sym}
 
 
+def variant_summary(report: dict) -> dict:
+    """A finished variant, compact enough to ride along in the progress of the next one: the
+    target, the totals and the cumulative curve by date, the shape the tab's baseline takes."""
+    return {"target": (report.get("config") or {}).get("target"), "totals": report.get("totals"),
+            "stopped": bool(report.get("stopped")),
+            "days": [{"date": d.get("date"), "cum_net_bps": d.get("cum_net_bps")} for d in (report.get("days") or [])]}
+
+
 def combine_reports(reports: list[dict]) -> dict:
     """One report from the variants a run walked back to back: the last complete one, carrying
     the earlier ones' totals and curves as `baseline` so the dashboard can show both. A run cut

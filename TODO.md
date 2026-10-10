@@ -22,3 +22,26 @@ feature set reset the model once, so they are batched into a single reset on a w
 
 Baseline: the first full walk-forward backtest on the 362-name universe runs the weekend of
 2026-10-10 (absolute target, 4XL, 30 h budget); its report is the "before" for everything above.
+
+Absolute-target run, 2026-10-11 (74 scored days, 4XL, 61 steps a day, 5 bps cost): net −144 bps,
+−1.9 bps a day, Sharpe −3.1, hit 51.4%, 289 signals a day, 20 winning days. What the stored
+forecasts say (`flint sweep` and the notebook-style checks behind it):
+
+- The net has a small, real cross-sectional signal: rank IC 0.032 (t = 14.5 over 5,259 bars),
+  positive in seven of eight 10-day blocks, and the direction hit climbs with confidence, from
+  50.3% in the least confident fifth to 53.7% in the top 1%, where the mean move in the called
+  direction is 24 bps against 5 bps of cost. Only the top tenth or so clears the cost.
+- The loss is the policy, not the sign: the book was 70% short (the net leans bearish, mean
+  P(down) 0.44 against P(up) 0.40) through a period the equal-weight universe rose 26 bps, and the
+  short leg lost about three times what the long leg made; costs took another 56 bps.
+- The raw quantiles are about half as wide as the realised spread (raw 10–90 covers 37%, IQR 47
+  bps against 85 realised), so the raw pinball (36.3) is worse than the last ten days' unconditional
+  quantiles (30.4); the live band calibration widens them to the 80% the report shows. A 74-day
+  walk-forward net at 61 steps a day is much less trained than the live model, so this is a floor.
+- The sweep's proposal (score 0.8, margin 0.12, 16 calls before a name trades, Kelly 0.6) makes
+  +36 bps on the tuning half on 429 trades and +7 bps on the confirming half on 20 trades: it
+  found "almost never trade", which is a hint about the gates, not a setting.
+
+Candidates this points at: a bearish-bias check in the policy (net exposure capped by the index
+view), trading only the top confidence decile (meta-labeling, item 5, is the principled form),
+and the feature batch (item 2a) so the net sees something other than price.

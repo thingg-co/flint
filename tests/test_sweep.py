@@ -91,3 +91,9 @@ def test_sweep_tunes_on_the_first_half_and_confirms_on_the_second(tmp_path):
     short = dict(fc)
     short["day_of"] = np.minimum(fc["day_of"], 3)
     assert "error" in run_sweep(short, cfg, 0.0, grid=grid)
+
+
+def test_a_proposal_confirmed_on_a_handful_of_trades_is_flagged_thin():
+    from flint.sweep import THIN_SIGNALS_PER_DAY, is_thin
+    assert is_thin({"days": 37, "signals": 20}) and not is_thin({"days": 37, "signals": 37 * THIN_SIGNALS_PER_DAY})
+    assert not is_thin({"days": 0, "signals": 0})                              # nothing scored: not a verdict either way

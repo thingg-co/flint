@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .autotune import PRESETS, free_memory_gb
-from .backtest import combine_reports, run_backtest
+from .backtest import combine_reports, run_backtest, variant_summary
 from .bars import Bar, BarBuilder
 from .features import FEATURES, N_FEATURES, FeatureBuilder
 from .feed import Tick
@@ -1111,7 +1111,7 @@ class Engine:
                 "error": b.get("error"), "config": b.get("config"),
                 "totals": pr.get("totals") if pr.get("running") else b.get("totals"),
                 "days": (pr.get("days") or []) if pr.get("running") else (b.get("days") or [])[-260:],
-                "baseline": b.get("baseline"),
+                "baseline": ((pr.get("done") or [None])[0] if pr.get("running") else b.get("baseline")),   # a finished variant shows under the one still running
                 "best": [dict(sym=k, **v) for k, v in syms[-8:][::-1]], "worst": [dict(sym=k, **v) for k, v in syms[:8]],
                 "sweep": self.sweep or None}
 
@@ -1214,11 +1214,12 @@ class Engine:
                 # Runs on the worker thread: the variants back to back on one net's worth of memory,
                 # each on its share of the budget; the second report carries the first as its baseline.
                 reports: list[dict] = []
+                done: list[dict] = []                                  # finished variants, carried through the progress so the tab keeps them
                 for vi, variant in enumerate(variants):
                     if self._backtest_stop:
                         break
                     self.backtest_progress = {"running": True, "day": 0, "days": 0, "started": started,
-                                              "variant": variant, "variants": variants}
+                                              "variant": variant, "variants": variants, "done": done}
                     if len(variants) > 1:
                         loop.call_soon_threadsafe(self.trace.emit, "learn",
                                                   f"backtest {vi + 1}/{len(variants)}: the {variant} target", "info")
@@ -1230,6 +1231,8 @@ class Engine:
                         target=variant, index_symbols=str(cfg.index_symbols),
                         beta_windows=int(cfg.beta_windows), beta_shrink=float(cfg.beta_shrink),
                         store=os.path.join(cfg.state_dir, "backtest_forecasts")))
+                    done.append(variant_summary(reports[-1]))
+                    loop.call_soon_threadsafe(self._publish, {"type": "backtest", "backtest": self.backtest_summary()})
                 return combine_reports(reports)
 
             def finish(f: asyncio.Future) -> None:
