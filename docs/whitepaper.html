@@ -73,7 +73,9 @@
   .toc a.sub{padding-left:14px;color:var(--muted)}
   .toc a:hover{color:var(--ink);text-decoration:none}
   @media(max-width:900px){.toc{position:static;border:1px solid var(--border);border-radius:10px;padding:14px 16px;columns:2;column-gap:24px} .toc .t{column-span:all}}
-  article{max-width:var(--col);min-width:0}
+  article{max-width:none;min-width:0}
+  article > p, article > ul, article > ol, article > h1, article > h2, article > h3, .abstract, .callout, .eq, .byline{max-width:var(--col)}
+  article ol.refs{max-width:none}
   .eyebrow{font-family:var(--mono);font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--fire);margin-bottom:14px}
   article h1{font-size:clamp(30px,4.2vw,44px);margin-bottom:.4em}
   .byline{font-family:var(--sans);font-size:14px;color:var(--muted);margin:0 0 30px;line-height:1.6}
@@ -102,9 +104,9 @@
   .fig{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px 18px 14px;margin:20px 0 26px}
   .fig .cap{font-family:var(--sans);font-size:13px;color:var(--muted);margin-top:10px;line-height:1.5}
   .fig svg{display:block;width:100%;height:auto;max-width:100%}
-  .lbl{font-family:var(--sans);font-size:12px;fill:var(--ink2)}
+  .lbl{font-family:var(--sans);font-size:13px;fill:var(--ink2)}
   .lbl.b{fill:var(--ink);font-weight:600}
-  .lbl.m{font-family:var(--mono);font-size:11px;fill:var(--muted)}
+  .lbl.m{font-family:var(--mono);font-size:11.5px;fill:var(--muted)}
   .bx{fill:var(--surface2);stroke:var(--border);stroke-width:1}
   .bx.hot{fill:var(--hot);stroke:var(--fire)}
   .bx.cool{fill:var(--cool);stroke:var(--blue)}
@@ -191,13 +193,13 @@
         <rect class="bx cool" x="10" y="30" width="150" height="66" rx="8"/><text class="lbl b" x="85" y="56" text-anchor="middle">Feeds</text><text class="lbl m" x="85" y="74" text-anchor="middle">priority failover</text><text class="lbl m" x="85" y="88" text-anchor="middle">per name</text>
         <rect class="bx" x="175" y="30" width="120" height="66" rx="8"/><text class="lbl b" x="235" y="56" text-anchor="middle">Bars</text><text class="lbl m" x="235" y="74" text-anchor="middle">5 min, OHLCV</text><text class="lbl m" x="235" y="88" text-anchor="middle">real trades only</text>
         <rect class="bx" x="310" y="30" width="120" height="66" rx="8"/><text class="lbl b" x="370" y="56" text-anchor="middle">Features</text><text class="lbl m" x="370" y="74" text-anchor="middle">25 per name</text><text class="lbl m" x="370" y="88" text-anchor="middle">running z-scores</text>
-        <rect class="bx hot" x="445" y="22" width="160" height="82" rx="8"/><text class="lbl b" x="525" y="48" text-anchor="middle">FlintNet</text><text class="lbl m" x="525" y="66" text-anchor="middle">q10..q90, P(up), P(down)</text><text class="lbl m" x="525" y="80" text-anchor="middle">regime gate, attention</text><text class="lbl m" x="525" y="94" text-anchor="middle">128-bar window</text>
+        <rect class="bx hot" x="445" y="22" width="160" height="82" rx="8"/><text class="lbl b" x="525" y="48" text-anchor="middle">FlintNet</text><text class="lbl m" x="525" y="66" text-anchor="middle">q10..q90, P(up), P(down)</text><text class="lbl m" x="525" y="80" text-anchor="middle">gate and attention</text><text class="lbl m" x="525" y="94" text-anchor="middle">128-bar window</text>
         <rect class="bx" x="620" y="30" width="130" height="66" rx="8"/><text class="lbl b" x="685" y="56" text-anchor="middle">Calibration</text><text class="lbl m" x="685" y="74" text-anchor="middle">band scale s</text><text class="lbl m" x="685" y="88" text-anchor="middle">temperature T</text>
         <rect class="bx" x="765" y="30" width="205" height="66" rx="8"/><text class="lbl b" x="867" y="56" text-anchor="middle">Policy, then the book</text><text class="lbl m" x="867" y="74" text-anchor="middle">gates, fractional Kelly</text><text class="lbl m" x="867" y="88" text-anchor="middle">stock, puts, straddles</text>
         <path class="ar" d="M160 63H173"/><path class="ar" d="M295 63H308"/><path class="ar" d="M430 63H443"/><path class="ar" d="M605 63H618"/><path class="ar" d="M750 63H763"/>
         <rect class="bx" x="310" y="190" width="295" height="70" rx="8"/><text class="lbl b" x="457" y="216" text-anchor="middle">Replay buffer</text><text class="lbl m" x="457" y="234" text-anchor="middle">windows keyed by bar time, 5% held out</text><text class="lbl m" x="457" y="248" text-anchor="middle">byte budget, memory-mapped on disk</text>
         <rect class="bx hot" x="640" y="190" width="220" height="70" rx="8"/><text class="lbl b" x="750" y="216" text-anchor="middle">Online learner</text><text class="lbl m" x="750" y="234" text-anchor="middle">2 steps per resolved label</text><text class="lbl m" x="750" y="248" text-anchor="middle">night passes, overfit guard</text>
-        <path class="ar" d="M867 96V150H457V188"/><text class="lbl m" x="662" y="166" text-anchor="middle">twelve bars later the forecast resolves: label = log return in bps</text>
+        <path class="ar" d="M867 96V150H457V188"/><text class="lbl m" x="640" y="166" text-anchor="middle">twelve bars later the forecast resolves: the label is the log return in bps</text>
         <path class="ar" d="M605 225H638"/>
         <path class="ar" d="M750 188V130H525V106"/><text class="lbl m" x="637" y="124" text-anchor="middle">weights</text>
         <rect class="bx cool" x="10" y="190" width="270" height="70" rx="8"/><text class="lbl b" x="145" y="216" text-anchor="middle">Deep backfill, market closed</text><text class="lbl m" x="145" y="234" text-anchor="middle">5-min candles 200 days back</text><text class="lbl m" x="145" y="248" text-anchor="middle">10-day chunk every 150 s</text>
@@ -273,15 +275,15 @@
     <p>Promotion fills the room left under the cap from the top of the ranking. Demotion is deliberately slow: a promoted name stays while it keeps ranking inside the top one-and-a-half times the slot count, and leaves only after 14 days without such a hit and at least five days of tenure. The asymmetry exists because a demotion forfeits that name's learned representation and its history in the replay, and a day's excitement is not worth that.</p>
     <div class="fig">
       <svg viewBox="0 0 980 230" role="img" aria-label="Universe state machine: candidates are scored from three sources, promoted into open slots, retained while they keep ranking, and demoted after a grace period and minimum tenure; core names and holdings are fixed">
-        <rect class="bx" x="10" y="20" width="230" height="86" rx="8"/><text class="lbl b" x="125" y="44" text-anchor="middle">Candidates, scored 0–100</text><text class="lbl m" x="125" y="62" text-anchor="middle">radar movers × dollar volume</text><text class="lbl m" x="125" y="76" text-anchor="middle">tickers named in headlines (known only)</text><text class="lbl m" x="125" y="90" text-anchor="middle">13F positions of tracked funds</text>
+        <rect class="bx" x="10" y="20" width="230" height="86" rx="8"/><text class="lbl b" x="125" y="44" text-anchor="middle">Candidates, scored 0–100</text><text class="lbl m" x="125" y="62" text-anchor="middle">radar movers × dollar volume</text><text class="lbl m" x="125" y="76" text-anchor="middle">tickers named in headlines</text><text class="lbl m" x="125" y="90" text-anchor="middle">13F positions of tracked funds</text>
         <rect class="bx hot" x="300" y="20" width="200" height="86" rx="8"/><text class="lbl b" x="400" y="48" text-anchor="middle">Promoted</text><text class="lbl m" x="400" y="68" text-anchor="middle">top of the ranking fills the room</text><text class="lbl m" x="400" y="84" text-anchor="middle">since = today, last_hit = today</text>
         <rect class="bx" x="560" y="20" width="200" height="86" rx="8"/><text class="lbl b" x="660" y="48" text-anchor="middle">Retained</text><text class="lbl m" x="660" y="68" text-anchor="middle">a hit while in the top 1.5 × count</text><text class="lbl m" x="660" y="84" text-anchor="middle">refreshes last_hit</text>
         <rect class="bx" x="820" y="20" width="150" height="86" rx="8"/><text class="lbl b" x="895" y="48" text-anchor="middle">Demoted</text><text class="lbl m" x="895" y="68" text-anchor="middle">14 days without a hit</text><text class="lbl m" x="895" y="84" text-anchor="middle">and 5 days of tenure</text>
         <path class="ar" d="M240 63H298"/><path class="ar" d="M500 63H558"/><path class="ar" d="M760 63H818"/>
-        <path class="ar" d="M895 106V150H660V108"/><text class="lbl m" x="780" y="140" text-anchor="middle">row and history forfeited; may re-enter later as a fresh name</text>
+        <path class="ar" d="M895 106V150H660V108"/><text class="lbl m" x="700" y="140" text-anchor="middle">row and history forfeited; may re-enter as a fresh name</text>
         <rect class="bx cool" x="10" y="160" width="490" height="52" rx="8"/><text class="lbl b" x="255" y="182" text-anchor="middle">Fixed: the configured core and every holding</text><text class="lbl m" x="255" y="200" text-anchor="middle">never scored, never demoted; a new holding enters within a minute</text>
-        <text class="lbl m" x="740" y="186" text-anchor="middle">room = min(count, cap − fixed); if the room shrinks, the weakest promoted leave first</text>
-        <text class="lbl m" x="740" y="204" text-anchor="middle">runs once a day after the close, only when all three sources have reported</text>
+        <text class="lbl m" x="740" y="186" text-anchor="middle">room = min(count, cap − fixed); if it shrinks, the weakest leave first</text>
+        <text class="lbl m" x="740" y="204" text-anchor="middle">once a day after the close, once all three sources have reported</text>
       </svg>
       <div class="cap">Figure 3. The universe's promotion and demotion rule. The asymmetry is deliberate: entry is cheap, exit forfeits learning.</div>
     </div>
@@ -295,20 +297,20 @@
     <div class="fig">
       <svg viewBox="0 0 980 300" role="img" aria-label="FlintNet: per-name dilated causal convolutions over the 128-bar window, a per-name embedding, cross-asset attention across names, a pooled market state feeding a regime gate over twelve expert heads, and quantile and direction outputs">
         <rect class="bx" x="10" y="30" width="170" height="60" rx="8"/><text class="lbl b" x="95" y="54" text-anchor="middle">Input</text><text class="lbl m" x="95" y="74" text-anchor="middle">N names × 128 bars × 25</text>
-        <rect class="bx hot" x="210" y="20" width="200" height="80" rx="8"/><text class="lbl b" x="310" y="44" text-anchor="middle">Dilated causal convs</text><text class="lbl m" x="310" y="62" text-anchor="middle">dilations 1, 2, 4, 8, 16, 32, 64</text><text class="lbl m" x="310" y="76" text-anchor="middle">per name, shared weights</text><text class="lbl m" x="310" y="90" text-anchor="middle">receptive field: the whole window</text>
+        <rect class="bx hot" x="210" y="20" width="200" height="80" rx="8"/><text class="lbl b" x="310" y="44" text-anchor="middle">Dilated causal convs</text><text class="lbl m" x="310" y="62" text-anchor="middle">dilations 1 to 64</text><text class="lbl m" x="310" y="76" text-anchor="middle">per name, shared weights</text><text class="lbl m" x="310" y="90" text-anchor="middle">sees the whole window</text>
         <rect class="bx" x="440" y="30" width="150" height="60" rx="8"/><text class="lbl b" x="515" y="54" text-anchor="middle">+ name embedding</text><text class="lbl m" x="515" y="74" text-anchor="middle">the only per-name parameter</text>
-        <rect class="bx hot" x="620" y="20" width="180" height="80" rx="8"/><text class="lbl b" x="710" y="44" text-anchor="middle">Cross-asset attention</text><text class="lbl m" x="710" y="62" text-anchor="middle">across the N names in a bar</text><text class="lbl m" x="710" y="76" text-anchor="middle">multi-head; map published</text><text class="lbl m" x="710" y="90" text-anchor="middle">with each forecast</text>
-        <rect class="bx" x="830" y="30" width="140" height="60" rx="8"/><text class="lbl b" x="900" y="54" text-anchor="middle">Pooled state</text><text class="lbl m" x="900" y="74" text-anchor="middle">mean and spread over names</text>
+        <rect class="bx hot" x="620" y="20" width="180" height="80" rx="8"/><text class="lbl b" x="710" y="44" text-anchor="middle">Cross-asset attention</text><text class="lbl m" x="710" y="62" text-anchor="middle">across the N names</text><text class="lbl m" x="710" y="76" text-anchor="middle">multi-head</text><text class="lbl m" x="710" y="90" text-anchor="middle">map published</text>
+        <rect class="bx" x="830" y="30" width="140" height="60" rx="8"/><text class="lbl b" x="900" y="54" text-anchor="middle">Pooled state</text><text class="lbl m" x="900" y="74" text-anchor="middle">mean, spread</text>
         <path class="ar" d="M180 60H208"/><path class="ar" d="M410 60H438"/><path class="ar" d="M590 60H618"/><path class="ar" d="M800 60H828"/>
-        <rect class="bx hot" x="620" y="150" width="180" height="60" rx="8"/><text class="lbl b" x="710" y="174" text-anchor="middle">Regime gate</text><text class="lbl m" x="710" y="194" text-anchor="middle">softmax over 12 experts, with noise in training</text>
+        <rect class="bx hot" x="620" y="150" width="180" height="60" rx="8"/><text class="lbl b" x="710" y="174" text-anchor="middle">Regime gate</text><text class="lbl m" x="710" y="194" text-anchor="middle">softmax over 12 experts</text>
         <path class="ar" d="M900 90V180H802"/>
-        <rect class="bx" x="300" y="140" width="290" height="80" rx="8"/><text class="lbl b" x="445" y="164" text-anchor="middle">12 expert heads, mixed by the gate</text><text class="lbl m" x="445" y="184" text-anchor="middle">median + non-negative increments → q10 ≤ q25 ≤ q50 ≤ q75 ≤ q90</text><text class="lbl m" x="445" y="200" text-anchor="middle">logit P(ret &gt; +10 bps), logit P(ret &lt; −10 bps)</text>
+        <rect class="bx" x="300" y="140" width="290" height="80" rx="8"/><text class="lbl b" x="445" y="164" text-anchor="middle">12 expert heads, mixed by the gate</text><text class="lbl m" x="445" y="184" text-anchor="middle">median + increments: q10 ≤ … ≤ q90</text><text class="lbl m" x="445" y="200" text-anchor="middle">logits for P(up), P(down)</text>
         <path class="ar" d="M710 100V140"/><path class="ar" d="M620 180H592"/><path class="ar" d="M710 210V240"/>
         <path class="ar" d="M710 100C710 125 600 110 590 150" style="display:none"/>
-        <rect class="bx" x="10" y="140" width="250" height="80" rx="8"/><text class="lbl b" x="135" y="164" text-anchor="middle">Loss</text><text class="lbl m" x="135" y="184" text-anchor="middle">pinball over 5 quantiles + smoothed BCE × 2</text><text class="lbl m" x="135" y="200" text-anchor="middle">masked to names that traded at both ends</text>
+        <rect class="bx" x="10" y="140" width="250" height="80" rx="8"/><text class="lbl b" x="135" y="164" text-anchor="middle">Loss</text><text class="lbl m" x="135" y="184" text-anchor="middle">pinball + 2 × smoothed BCE</text><text class="lbl m" x="135" y="200" text-anchor="middle">masked to names that traded</text>
         <path class="ar" d="M300 180H262"/>
-        <text class="lbl m" x="710" y="262" text-anchor="middle">gate weights to the dashboard</text>
-        <text class="lbl m" x="490" y="262" text-anchor="middle">attention from the attention layer: N × N, shown per name</text>
+        <text class="lbl m" x="710" y="262" text-anchor="middle">gate weights shown on the dashboard</text>
+        <text class="lbl m" x="330" y="262" text-anchor="middle">attention map N × N, shown per name</text>
       </svg>
       <div class="cap">Figure 4. FlintNet. Width is the preset's d_model (512 or 768 on the reference machine); the temporal stack, the attention and the heads are shared across names.</div>
     </div>
