@@ -1423,9 +1423,33 @@ function paintPaperEquity() {
   if (rEl) { rEl.textContent = (ret >= 0 ? "+" : "") + ret.toFixed(2) + "%"; rEl.className = "peq-ret " + (ret >= 0 ? "up" : "down"); }
 }
 
+let btFetched = false;
+async function fetchBacktest() {
+  // a page opened mid-run has no report yet: ask for the live one instead of saying "no run yet"
+  if (btFetched) return; btFetched = true;
+  try {
+    const r = await fetch("/api/backtest"); if (!r.ok) return;
+    const j = await r.json(); const b = j.backtest || {};
+    state.backtest = { ...b, progress: j.progress || {}, totals: (j.progress && j.progress.running) ? j.progress.totals : b.totals };
+    renderBacktest();
+  } catch (e) { /* offline: the next push fills it */ }
+}
+
+function fmtElapsed(s) { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h} h ${m} min` : `${m} min`; }
+
 function renderBacktest() {
   const b = state.backtest, root = $("#bt-stats"); if (!root) return;
-  const meta = $("#bt-meta"), pr = (b && b.progress) || {};
+  const meta = $("#bt-meta"), pr = (b && b.progress) || {}, bar = $("#bt-progress");
+  if (!b || !("progress" in b)) fetchBacktest();
+  if (bar) {
+    const warming = pr.running && !pr.day && !pr.days;
+    bar.hidden = !pr.running;
+    bar.classList.toggle("indeterminate", !!(pr.running && !pr.history_days));
+    if (pr.running && pr.history_days) {
+      const vi = Math.max(0, (pr.variants || []).indexOf(pr.variant)), nv = Math.max(1, (pr.variants || [1]).length);
+      bar.firstElementChild.style.width = `${(100 * (vi + (pr.history_day || 0) / pr.history_days) / nv).toFixed(1)}%`;
+    } else if (warming) bar.firstElementChild.style.width = "";
+  }
   if (!b || (!b.totals && !pr.running)) {
     root.innerHTML = ""; $("#bt-days").innerHTML = ""; $("#bt-names").innerHTML = "";
     if (meta) meta.textContent = b && b.error ? b.error : "no run yet — runs on weekends over the replay, or press Run now";
@@ -1440,8 +1464,13 @@ function renderBacktest() {
     ...(c.target === "relative" ? [["unhedged", fmtBps(t.unhedged_bps)]] : []),
     ...(b.baseline && b.baseline.totals ? [[`${b.baseline.target || "other"} target`, `${fmtBps(b.baseline.totals.net_bps)} · Sharpe ${f2(b.baseline.totals.sharpe)}`]] : []),
   ].map(([k, v]) => `<div class="pstat"><label>${esc(k)}</label><b>${esc(String(v))}</b></div>`).join("");
-  const variant = pr.variant && pr.variants && pr.variants.length > 1 ? ` (${pr.variant} target, ${pr.variants.indexOf(pr.variant) + 1} of ${pr.variants.length})` : "";
-  if (meta) meta.textContent = pr.running ? `running: day ${pr.day} of ${pr.days || "?"}${variant}`
+  const variant = pr.variant && pr.variants && pr.variants.length > 1 ? ` · ${pr.variant} target, ${pr.variants.indexOf(pr.variant) + 1} of ${pr.variants.length}` : (pr.variant ? ` · ${pr.variant} target` : "");
+  const elapsed = pr.started ? ` · ${fmtElapsed(Date.now() / 1000 - pr.started)} elapsed` : "";
+  const warmN = pr.warm_days || (state.controls && state.controls.backtest_warm_days) || 10;
+  const phase = pr.phase === "warming" ? `warming up: training-only day ${pr.history_day || 1} of ${warmN}, scoring starts after`
+    : pr.phase === "scoring" ? `scoring day ${pr.day} of ${pr.days || "?"}${pr.step_s ? ` · ${pr.step_s.toFixed(1)} s/step` : ""}`
+    : (!pr.day && !pr.days) ? `warming up on the first ${warmN} training-only days, then scoring` : `day ${pr.day} of ${pr.days || "?"}`;
+  if (meta) meta.textContent = pr.running ? `running: ${phase}${variant}${elapsed}`
     : (b.ran_at ? `ran ${fmtTime(b.ran_at)} · ${c.preset || "model"}${c.params ? " " + (c.params / 1e6).toFixed(1) + "M params" : ""} · ${c.target || "absolute"} target${c.index && c.index.length ? " vs " + c.index.join(", ") : ""} · cost ${c.cost_bps} bps · ${c.history_days} days of history, ${c.warm_days} warm · ${b.stopped ? "stopped early" : "complete"}` : "");
   const days = (b.days || []).slice(-30).reverse();
   const cell = (v, cls) => `<span class="num ${cls || ""}">${v}</span>`;

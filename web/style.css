@@ -690,6 +690,10 @@ ul.headlines li.new a { color: var(--ink); } ul.headlines li:not(.new) a { color
 .pstat label { font-size: 11px; color: var(--muted); }
 .pstat b { font-family: var(--mono); font-size: 15px; color: var(--ink-2); }
 .pcurve { width: 100%; height: 220px; display: block; }
+.bt-progress { height: 4px; background: var(--grid); border-radius: 2px; margin: 6px 0 10px; overflow: hidden; }
+.bt-progress[hidden] { display: none; }
+.bt-progress i { display: block; height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--blue), var(--good)); transition: width .4s; }
+.bt-progress.indeterminate i { width: 30%; animation: lslide 1.6s ease-in-out infinite; }
 .ptable { font-family: var(--mono); font-size: 12.5px; }
 .prow { display: grid; grid-template-columns: 1fr 1.5fr .9fr 1fr 1fr .8fr; gap: 8px; padding: 5px 2px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .prow > span:nth-child(n+3) { text-align: right; font-variant-numeric: tabular-nums; }   /* numeric columns right-aligned so digits line up */

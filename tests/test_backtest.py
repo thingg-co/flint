@@ -187,3 +187,15 @@ def test_wait_idle_waits_out_a_training_step_in_flight():
     t.join()
     assert dt >= 0.25                                                      # it waited for the step, not past it
     assert time.time() - t0 < 2.0
+
+
+def test_progress_reports_every_day_warm_ones_included():
+    cfg = toy_cfg()
+    rx, ry, rmask, rt = toy_replay()
+    calls = []
+    run_backtest(cfg, rx, ry, rmask, rt, device="cpu", warm_days=3, steps_per_day=1,
+                 progress=lambda day, total, totals, info=None: calls.append((day, total, info)))
+    assert len(calls) == 8                                                             # one per history day
+    assert [c[2]["phase"] for c in calls] == ["warming"] * 3 + ["scoring"] * 5
+    assert [c[2]["history_day"] for c in calls] == list(range(1, 9)) and calls[0][2]["history_days"] == 8
+    assert calls[0][0] == 0 and calls[-1][0] == 5 and calls[-1][1] == 5 and calls[0][2]["warm_days"] == 3

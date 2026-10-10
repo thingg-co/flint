@@ -190,7 +190,7 @@
   <div class="why">Simulated. The model runs a $100k long/short book, rebalancing to its own suggestions with no leverage and a small cost per trade. It compounds continuously and persists across restarts. These are not real orders.</div>
 </main>
 <main id="backtest" class="view">
-  <section class="panel"><h3>Walk-forward backtest <small id="bt-meta"></small> <button class="mini" id="bt-run">Run now</button></h3><div class="pstats" id="bt-stats"></div></section>
+  <section class="panel"><h3>Walk-forward backtest <small id="bt-meta"></small> <button class="mini" id="bt-run">Run now</button></h3><div class="bt-progress" id="bt-progress" hidden><i></i></div><div class="pstats" id="bt-stats"></div></section>
   <section class="panel"><h3>Equity curve <small>cumulative net bps per day; the thin grey line is an always-long 1/N book</small></h3><canvas id="bt-curve" class="pcurve"></canvas></section>
   <div class="row pcards">
     <section class="panel"><h3>Days <small>newest first, last 30</small></h3><div class="ptable" id="bt-days"></div></section>

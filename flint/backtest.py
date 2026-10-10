@@ -334,8 +334,10 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                              "cum_long_bps": long_cum, "steps": steps, "loss": loss,
                              "unhedged_bps": d["unhedged"] / nb, "cum_unhedged_bps": unhedged_cum,
                              "band_scale": band_scale, "p_scale": p_scale, "hit_ema": hit_ema})
-            if progress:
-                progress(len(day_rows), n_scored, _totals(day_rows, tot, cum, max_dd, long_cum))
+        if progress:                                                        # every day, warm ones too: the dashboard shows where the run is
+            progress(len(day_rows), n_scored, _totals(day_rows, tot, cum, max_dd, long_cum),
+                     {"phase": "scoring" if scoring else "warming", "history_day": di + 1, "history_days": len(groups),
+                      "warm_days": warm_days, "steps": steps, "step_s": step_s, "elapsed_s": time.time() - t0, "hours": hours})
 
     totals = _totals(day_rows, tot, cum, max_dd, long_cum)
     totals["unhedged_bps"] = float(unhedged_cum)

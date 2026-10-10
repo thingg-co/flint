@@ -764,6 +764,7 @@ class Engine:
                           "preset": (self.autotune_info or {}).get("preset")},
             },
             "status": self.status_dict(),
+            "backtest": self.backtest_summary(),         # a page opened mid-run sees the run, not "no run yet"
             "controls": self.controls(),
             "sources": self.sources.status(),
             "news_sources": self.news_hub.status(),
@@ -1203,9 +1204,9 @@ class Engine:
                     return True
                 return False
 
-            def prog(day: int, total: int, totals: dict) -> None:
+            def prog(day: int, total: int, totals: dict, info: dict | None = None) -> None:
                 self.backtest_progress = {**self.backtest_progress, "running": True, "day": day, "days": total, "started": started,
-                                          "totals": totals}
+                                          "totals": totals, **(info or {})}
                 loop.call_soon_threadsafe(self._publish, {"type": "backtest", "backtest": self.backtest_summary()})
 
             def job() -> dict:

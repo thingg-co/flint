@@ -360,7 +360,11 @@ def _backtest() -> None:
           f"cost {opts['cost']:g} bps, warm {opts['warm']} days, budget {opts['hours']:g} h, target{'s' if len(variants) > 1 else ''} "
           f"{' then '.join(variants)}")
 
-    def prog(day, total, t):
+    def prog(day, total, t, info=None):
+        info = info or {}
+        if info.get("phase") == "warming":
+            print(f"\r  warming: training-only day {info.get('history_day')}/{info.get('warm_days')}   ", end="", flush=True)
+            return
         print(f"\r  day {day}/{total}  net {t['net_bps']:+.0f} bps  per day {t['net_bps_per_day']:+.1f}  "
               f"hit {((t['hit_rate'] or 0) * 100):.0f}%  signals {t['signals']}   ", end="", flush=True)
 
