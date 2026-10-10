@@ -1106,28 +1106,6 @@ function renderSources() {
       nl.appendChild(el);
     });
   }
-  // Who serves the universe: a donut of names per provider (red: no source, amber: the simulator)
-  const pm = $("#provider-map");
-  if (pm) {
-    const syms = state.config ? state.config.symbols : [];
-    const counts = new Map();
-    syms.forEach(sym => { const pid = state.providers[sym] || ""; counts.set(pid, (counts.get(pid) || 0) + 1); });
-    const total = syms.length, order = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-    const cs = getComputedStyle(document.body), v = n => cs.getPropertyValue(n).trim();
-    const palette = ["--blue", "--aqua", "--violet", "--yellow", "--magenta", "--orange", "--ch-feed"].map(v);
-    const nameOf = pid => { const src = state.sources.find(x => x.id === pid); return src ? src.name : (pid || "no source"); };
-    let k = 0;
-    const slices = order.map(([pid, n]) => ({ pid, n, name: nameOf(pid), color: !pid ? v("--critical") : pid === "sim" ? v("--warning") : palette[k++ % palette.length] }));
-    const C = 2 * Math.PI * 24; let off = 0;
-    const rings = slices.map(sl => {
-      const len = C * sl.n / Math.max(1, total), el = `<circle cx="32" cy="32" r="24" fill="none" stroke="${sl.color}" stroke-width="12" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}"><title>${esc(sl.name)}: ${sl.n} of ${total} names (${(100 * sl.n / Math.max(1, total)).toFixed(0)}%)</title></circle>`;
-      off += len; return el;
-    }).join("");
-    pm.innerHTML = total
-      ? `<svg viewBox="0 0 64 64" role="img" aria-label="names per data provider"><g transform="rotate(-90 32 32)">${rings}</g></svg>` +
-        `<div class="legend">${slices.map(sl => `<span class="li" title="${esc(sl.name)} serves ${sl.n} of ${total} names"><i style="background:${sl.color}"></i>${esc(sl.name)} <b>${sl.n}</b></span>`).join("")}</div>`
-      : "";
-  }
 }
 
 const urgencyEMA = {};
