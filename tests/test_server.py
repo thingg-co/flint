@@ -239,3 +239,27 @@ class TestCORS:
             response = client.get("/api/state", headers={"Origin": "http://tauri.localhost"})
             assert response.status_code == 200
             assert response.headers["access-control-allow-origin"] == "*"
+
+
+def test_the_page_and_its_assets_are_never_served_stale():
+    """A browser kept app.js by the heuristic freshness rule and re-ran a script fixed hours
+    earlier on every normal reload (2026-10-11). The page and /static answer with no-cache so
+    every load revalidates, and the page links its script and stylesheet by the files' mtimes,
+    so a changed file is a new URL."""
+    import re
+    from fastapi.testclient import TestClient
+    from flint.server import WEB, index_html
+    engine = make_engine()
+    with TestClient(create_app(engine)) as client:
+        r = client.get("/")
+        assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
+        js = re.search(r'src="/static/app\.js\?v=(\d+)"', r.text)
+        css = re.search(r'href="/static/style\.css\?v=(\d+)"', r.text)
+        assert js and css and int(js.group(1)) == int((WEB / "app.js").stat().st_mtime)
+        assert "/static/app.js\"" not in r.text                                        # no unversioned reference left
+        a = client.get("/static/app.js?v=" + js.group(1))
+        assert a.status_code == 200 and a.headers["cache-control"] == "no-cache" and a.headers.get("etag")
+        again = client.get("/static/app.js", headers={"If-None-Match": a.headers["etag"]})
+        assert again.status_code == 304                                                 # revalidation is a 304, not a transfer
+        assert client.get("/api/state").headers.get("cache-control") is None            # the API is untouched
+    assert index_html().count("?v=") == 2

@@ -285,7 +285,10 @@ unless Flint is already up.
   `MemoryCurrent`: the CUDA allocations live outside both, so a live 4XL run reads about 3 GB by
   RSS and 30+ GB by system used, and a dead engine (phase `error`, steps not moving) looks the
   same by RSS.
-- Frontend edits are static — hard-reload the tab, no restart. Backend edits need a restart.
+- Frontend edits are static — reload the tab, no restart. Backend edits need a restart. The page and
+  `/static` are served `Cache-Control: no-cache` and the page links its script and stylesheet by the
+  files' mtimes (`index_html`), so a normal reload always gets the current files; before 0.5.15 a
+  browser could keep app.js for hours under the heuristic rule and only a hard reload replaced it.
 - `uv run flint check` prints what a start would do without loading a model or touching the port:
   device, free memory, any llama-server unit on the same memory, the cached preset and its peak,
   and whether the model plus replay fits. Exit 2 means a start would refuse. Run it with the same

@@ -7,13 +7,26 @@ import logging
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .engine import Engine, clean
 
 log = logging.getLogger(__name__)
 WEB = Path(__file__).resolve().parent.parent / "web"
+
+
+def index_html() -> str:
+    """The dashboard page with its script and stylesheet URLs versioned by the files' mtimes, so a
+    changed file is a new URL and no cache, in the browser or in between, serves the old one."""
+    html = (WEB / "index.html").read_text()
+    for name in ("app.js", "style.css"):
+        try:
+            v = int((WEB / name).stat().st_mtime)
+        except OSError:
+            continue
+        html = html.replace(f"/static/{name}\"", f"/static/{name}?v={v}\"")
+    return html
 
 
 def create_app(engine: Engine) -> FastAPI:
@@ -34,9 +47,20 @@ def create_app(engine: Engine) -> FastAPI:
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     app.mount("/static", StaticFiles(directory=WEB), name="static")
 
+    @app.middleware("http")
+    async def never_stale(request, call_next):
+        # The page and its script and stylesheet carry no Cache-Control, so a browser kept them by
+        # the heuristic rule (a tenth of the file's age) and a normal reload re-ran a script fixed
+        # hours earlier (2026-10-11: the Control panel's "cannot be parsed" warnings outlived their
+        # fix by a day). no-cache makes every load revalidate; the ETag answers 304 when unchanged.
+        resp = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static/"):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
     @app.get("/")
     async def index():
-        return FileResponse(WEB / "index.html")
+        return HTMLResponse(index_html())
 
     @app.get("/api/state")
     async def state():
