@@ -165,14 +165,15 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
     @torch.no_grad()
     def predict(idx: np.ndarray):
         model.eval()
-        qs, ups, dns = [], [], []
+        qs, ups, dns, gs = [], [], [], []
         for k in range(0, len(idx), 32):
             x = torch.from_numpy(rx[idx[k:k + 32]]).to(dev)
-            q, up, dn, _, _ = model(x)
+            q, up, dn, gate, _ = model(x)
             qs.append(q.float().cpu().numpy())
             ups.append(torch.sigmoid(up.float()).cpu().numpy())
             dns.append(torch.sigmoid(dn.float()).cpu().numpy())
-        return np.concatenate(qs), np.concatenate(ups), np.concatenate(dns)
+            gs.append(gate.float().cpu().numpy())                              # which experts the regime gate leaned on
+        return np.concatenate(qs), np.concatenate(ups), np.concatenate(dns), np.concatenate(gs)
 
     # lagged live state: these only move when a label resolves, one horizon after the forecast
     band_scale, p_scale = 2.0, 0.3
@@ -209,24 +210,24 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
     steps_lo = steps_hi = 0
     stopped = False
     n_scored = len(groups) - warm_days
-    kept: dict[str, list] = {k: [] for k in ("rows", "q", "up", "dn", "y", "mask", "beta")}   # the forecasts, when `store` is set
+    kept: dict[str, list] = {k: [] for k in ("rows", "q", "up", "dn", "y", "mask", "beta", "gate")}   # the forecasts, when `store` is set
 
     for di, (date, idx) in enumerate(groups):
         if should_stop and should_stop():
             stopped = True
             break
         scoring = di >= warm_days
-        q_all = up_all = dn_all = None
+        q_all = up_all = dn_all = g_all = None
         if icols and len(seen) >= 20:                                       # yesterday's labels at the latest: nothing of today
             beta = estimate_beta(ry[seen], rmask[seen], icols, recent=beta_windows, shrink=beta_shrink)
         if scoring:
             if hooks.get("on_predict"):
                 hooks["on_predict"](di)
-            q_all, up_all, dn_all = predict(idx)
+            q_all, up_all, dn_all, g_all = predict(idx)
             if store:
                 kept["rows"].append(idx); kept["q"].append(q_all.astype(np.float32)); kept["up"].append(up_all.astype(np.float32))
                 kept["dn"].append(dn_all.astype(np.float32)); kept["y"].append(relative(ry[idx], beta, icols).astype(np.float32))
-                kept["mask"].append(rmask[idx].astype(np.uint8)); kept["beta"].append(beta.copy())
+                kept["mask"].append(rmask[idx].astype(np.uint8)); kept["beta"].append(beta.copy()); kept["gate"].append(g_all.astype(np.float32))
         d = {"signals": 0, "gross": 0.0, "net": 0.0, "hits": 0, "decisions": 0, "pin": 0.0, "pin_n": 0, "inside": 0, "inside_n": 0, "long": 0.0,
              "unhedged": 0.0}
         for k in range(len(idx)):
@@ -333,11 +334,15 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                              "gross_bps": daily_gross, "net_bps": daily_net, "cum_net_bps": cum, "long_bps": daily_long,
                              "cum_long_bps": long_cum, "steps": steps, "loss": loss,
                              "unhedged_bps": d["unhedged"] / nb, "cum_unhedged_bps": unhedged_cum,
-                             "band_scale": band_scale, "p_scale": p_scale, "hit_ema": hit_ema})
+                             "band_scale": band_scale, "p_scale": p_scale, "hit_ema": hit_ema,
+                             "gate": [round(float(v), 3) for v in g_all.mean(axis=0)]})    # the day's mean expert mix
         if progress:                                                        # every day, warm ones too: the dashboard shows where the run is
             progress(len(day_rows), n_scored, _totals(day_rows, tot, cum, max_dd, long_cum),
                      {"phase": "scoring" if scoring else "warming", "history_day": di + 1, "history_days": len(groups),
-                      "warm_days": warm_days, "steps": steps, "step_s": step_s, "elapsed_s": time.time() - t0, "hours": hours})
+                      "warm_days": warm_days, "steps": steps, "step_s": step_s, "elapsed_s": time.time() - t0, "hours": hours,
+                      "days": [{k: r.get(k) for k in ("date", "net_bps", "cum_net_bps", "signals", "hit", "coverage", "steps",
+                                                       "gate", "long_bps", "cum_long_bps", "unhedged_bps", "cum_unhedged_bps")}
+                               for r in day_rows[-60:]]})
 
     totals = _totals(day_rows, tot, cum, max_dd, long_cum)
     totals["unhedged_bps"] = float(unhedged_cum)
@@ -348,7 +353,8 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
             stored = f"{store}_{target.split()[0]}.npz"
             np.savez(stored, rows=rows, t=rt[rows], q=np.concatenate(kept["q"]), up=np.concatenate(kept["up"]),
                      dn=np.concatenate(kept["dn"]), y=np.concatenate(kept["y"]), mask=np.concatenate(kept["mask"]),
-                     beta=np.stack(kept["beta"]), day_of=np.concatenate([np.full(len(r), i) for i, r in enumerate(kept["rows"])]),
+                     beta=np.stack(kept["beta"]), gate=np.concatenate(kept["gate"]),
+                     day_of=np.concatenate([np.full(len(r), i) for i, r in enumerate(kept["rows"])]),
                      symbols=np.array(symbols), index=np.array([symbols[c] for c in icols]), target=np.array(target),
                      quantiles=np.asarray(cfg.quantiles), cost_bps=np.array(cost))
         except Exception as e:  # noqa: BLE001

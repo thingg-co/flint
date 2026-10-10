@@ -1472,12 +1472,16 @@ function renderBacktest() {
     : (!pr.day && !pr.days) ? `warming up on the first ${warmN} training-only days, then scoring` : `day ${pr.day} of ${pr.days || "?"}`;
   if (meta) meta.textContent = pr.running ? `running: ${phase}${variant}${elapsed}`
     : (b.ran_at ? `ran ${fmtTime(b.ran_at)} · ${c.preset || "model"}${c.params ? " " + (c.params / 1e6).toFixed(1) + "M params" : ""} · ${c.target || "absolute"} target${c.index && c.index.length ? " vs " + c.index.join(", ") : ""} · cost ${c.cost_bps} bps · ${c.history_days} days of history, ${c.warm_days} warm · ${b.stopped ? "stopped early" : "complete"}` : "");
-  const days = (b.days || []).slice(-30).reverse();
+  const days = (b.days || []).slice(-40).reverse();
   const cell = (v, cls) => `<span class="num ${cls || ""}">${v}</span>`;
+  // which experts the regime gate leaned on that day: the top three by mean weight, as E3 41 · E7 22 · E1 12
+  const experts = d => (d.gate || []).map((v, i) => [v, i]).sort((a, b) => b[0] - a[0]).slice(0, 3).map(([v, i]) => `E${i + 1} ${(v * 100).toFixed(0)}`).join(" · ");
+  const hasGate = days.some(d => d.gate && d.gate.length);
   $("#bt-days").innerHTML = days.length
-    ? `<div class="prow phead"><span>day</span>${cell("net")}${cell("cum")}${cell("signals")}${cell("hit")}${cell("cover")}${cell("steps")}</div>` +
-      days.map(d => `<div class="prow"><span>${esc(d.date)}</span>${cell(fmtBps(d.net_bps), d.net_bps >= 0 ? "up" : "down")}${cell(fmtBps(d.cum_net_bps))}${cell(d.signals)}${cell(fmtPct(d.hit))}${cell(fmtPct(d.coverage))}${cell(d.steps)}</div>`).join("")
+    ? `<div class="prow pday phead"><span>day</span>${cell("net")}${cell("cum")}${cell("signals")}${cell("hit")}${cell("cover")}${cell("steps")}${hasGate ? cell("experts") : ""}</div>` +
+      days.map(d => `<div class="prow pday"><span>${esc(d.date)}</span>${cell(fmtBps(d.net_bps), d.net_bps >= 0 ? "up" : "down")}${cell(fmtBps(d.cum_net_bps))}${cell(d.signals)}${cell(fmtPct(d.hit))}${cell(fmtPct(d.coverage))}${cell(d.steps)}${hasGate ? `<span class="num gate" title="mean gate weight per expert: ${(d.gate || []).map((v, i) => `E${i + 1} ${(v * 100).toFixed(0)}%`).join(", ")}">${experts(d)}</span>` : ""}</div>`).join("")
     : "";
+  const dh = $("#bt-days-head"); if (dh) dh.textContent = pr.running ? `newest first, ${days.length} scored so far` : "newest first, last 40";
   const names = [...(b.best || []), ...(b.worst || [])];
   $("#bt-names").innerHTML = names.length
     ? `<div class="prow phead"><span>name</span>${cell("net bps")}${cell("signals")}${cell("hit")}</div>` +

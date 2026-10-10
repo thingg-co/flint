@@ -199,3 +199,7 @@ def test_progress_reports_every_day_warm_ones_included():
     assert [c[2]["phase"] for c in calls] == ["warming"] * 3 + ["scoring"] * 5
     assert [c[2]["history_day"] for c in calls] == list(range(1, 9)) and calls[0][2]["history_days"] == 8
     assert calls[0][0] == 0 and calls[-1][0] == 5 and calls[-1][1] == 5 and calls[0][2]["warm_days"] == 3
+    rows = calls[-1][2]["days"]
+    assert len(rows) == 5 and rows[-1]["date"] and len(rows[-1]["gate"]) == cfg.n_experts       # day rows ride along with progress
+    assert abs(sum(rows[-1]["gate"]) - 1.0) < 0.01                                               # the day's mean expert mix
+    assert calls[2][2]["days"] == []                                                              # nothing scored yet in the warm days

@@ -696,6 +696,9 @@ ul.headlines li.new a { color: var(--ink); } ul.headlines li:not(.new) a { color
 .bt-progress.indeterminate i { width: 30%; animation: lslide 1.6s ease-in-out infinite; }
 .ptable { font-family: var(--mono); font-size: 12.5px; }
 .prow { display: grid; grid-template-columns: 1fr 1.5fr .9fr 1fr 1fr .8fr; gap: 8px; padding: 5px 2px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.prow.pday { grid-template-columns: 1.1fr .9fr .9fr .8fr .7fr .7fr .7fr 1.9fr; }
+.prow.pday .gate { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+#bt-days { max-height: 420px; overflow: auto; }
 .prow > span:nth-child(n+3) { text-align: right; font-variant-numeric: tabular-nums; }   /* numeric columns right-aligned so digits line up */
 .prow.ptr > span:nth-child(n+4) { text-align: right; } .prow.ptr > span:nth-child(3) { text-align: left; }
 .prow.phead { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--ink-2); }

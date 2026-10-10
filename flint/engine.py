@@ -1110,7 +1110,8 @@ class Engine:
         return {"progress": pr, "ran_at": b.get("ran_at"), "elapsed_s": b.get("elapsed_s"), "stopped": b.get("stopped"),
                 "error": b.get("error"), "config": b.get("config"),
                 "totals": pr.get("totals") if pr.get("running") else b.get("totals"),
-                "days": (b.get("days") or [])[-260:], "baseline": b.get("baseline"),
+                "days": (pr.get("days") or []) if pr.get("running") else (b.get("days") or [])[-260:],
+                "baseline": b.get("baseline"),
                 "best": [dict(sym=k, **v) for k, v in syms[-8:][::-1]], "worst": [dict(sym=k, **v) for k, v in syms[:8]],
                 "sweep": self.sweep or None}
 
