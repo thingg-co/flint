@@ -713,7 +713,7 @@ function renderStatus() {
 function seedSparks() {
   const f = $("#spark-field");
   if (!f || f.childElementCount) return;
-  const hues = ["#fab219", "#ec835a", "#fff2b0", "#ff8b3a", "#d98a2b"];
+  // ember colours are theme tokens (--ember-1..5), so a theme switch recolours the sparks live
   for (let i = 0; i < 30; i++) {
     const e = document.createElement("i");
     e.className = "ember";
@@ -723,7 +723,7 @@ function seedSparks() {
     e.style.setProperty("--dur", dur.toFixed(2) + "s");
     e.style.setProperty("--delay", (-Math.random() * dur).toFixed(2) + "s");
     e.style.setProperty("--drift", (Math.random() * 60 - 30).toFixed(0) + "px");
-    e.style.setProperty("--hue", hues[i % hues.length]);
+    e.style.setProperty("--hue", `var(--ember-${i % 5 + 1})`);
     f.appendChild(e);
   }
 }
