@@ -16,7 +16,7 @@ feature set reset the model once, so they are batched into a single reset on a w
 | 4 | Ensemble of two 4XL networks | queued | aggregate members' distributions; fits the box next to the replay |
 | 5 | Meta-labeling | queued | a small online classifier on whether acting on each forecast paid after costs; size by its probability |
 | 6 | Calibration to decision loss | queued | size by P(move clears the spread) from the full quantile set |
-| 7 | Policy sweep over stored forecasts | queued | store every backtest forecast; sweep the gates on the first half, confirm on the second; propose on the dashboard, never apply |
+| 7 | Policy sweep over stored forecasts | storage shipped 0.5.14; the sweep is next | every backtest run writes `state/backtest_forecasts_<target>.npz` (raw quantiles, direction probabilities, the label scored against, masks, loadings, timestamps); the sweep over the gates, tuned on the first half and confirmed on the second, proposes on the dashboard and never applies |
 | 8 | SEC filings beyond 13F | queued | Form 4, 13D/G, 8-K item codes as features; free-text filings summarized by a local 7–8B model into a fixed schema; filings as a fourth universe source |
 
 Baseline: the first full walk-forward backtest on the 362-name universe runs the weekend of

@@ -327,7 +327,7 @@ def _backtest() -> None:
                                     progress=prog, hours=opts["hours"] / len(variants), days=opts["days"], warm_days=opts["warm"],
                                     cost_bps=opts["cost"], preset=preset, night_epochs=opts["night"], target=variant,
                                     index_symbols=str(cfg.index_symbols), beta_windows=int(cfg.beta_windows),
-                                    beta_shrink=float(cfg.beta_shrink)))
+                                    beta_shrink=float(cfg.beta_shrink), store=str(state / "backtest_forecasts")))
         print()
         r = reports[-1]
         if r.get("error"):

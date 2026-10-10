@@ -178,13 +178,18 @@ def _bt_cfg():
     return cfg
 
 
-def test_backtest_runs_the_relative_target_hedged_and_reports_it():
+def test_backtest_runs_the_relative_target_hedged_and_reports_it(tmp_path):
     cfg = _bt_cfg()
     rx, ry, rmask, rt = _toy()
     res = run_backtest(cfg, rx, ry, rmask, rt, device="cpu", symbols=["A", "SPY"], warm_days=3, steps_per_day=2,
-                       target="relative", index_symbols="SPY,QQQ", beta_shrink=0.0)
+                       target="relative", index_symbols="SPY,QQQ", beta_shrink=0.0, store=str(tmp_path / "fc"))
     c = res["config"]
     assert c["target"] == "relative" and c["index"] == ["SPY"] and "SPY" not in c["beta"]
+    z = np.load(c["forecasts"])                                       # every forecast the run made, for the policy sweep
+    n_scored = (12 - 3) * 10
+    assert c["forecasts"].endswith("fc_relative.npz") and z["q"].shape == (n_scored, 2, 5) and z["y"].shape == (n_scored, 2)
+    assert z["up"].shape == z["dn"].shape == (n_scored, 2) and z["beta"].shape == (9, 2, 1) and str(z["target"]) == "relative"
+    assert np.allclose(z["t"], rt[z["rows"]]) and list(z["symbols"]) == ["A", "SPY"] and int(z["day_of"].max()) == 8
     assert abs(c["beta"]["A"]["SPY"] - 1.5) < 0.3                     # fit from the days already seen
     assert res["days"] and all("unhedged_bps" in d for d in res["days"])
     assert np.isfinite(res["totals"]["net_bps"]) and "unhedged_bps" in res["totals"]

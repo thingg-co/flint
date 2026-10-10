@@ -1187,7 +1187,8 @@ class Engine:
                         hours=hours_each, days=int(cfg.backtest_days), warm_days=int(cfg.backtest_warm_days),
                         cost_bps=float(cfg.backtest_cost_bps), preset=preset, night_epochs=float(cfg.backtest_night_epochs),
                         target=variant, index_symbols=str(cfg.index_symbols),
-                        beta_windows=int(cfg.beta_windows), beta_shrink=float(cfg.beta_shrink)))
+                        beta_windows=int(cfg.beta_windows), beta_shrink=float(cfg.beta_shrink),
+                        store=os.path.join(cfg.state_dir, "backtest_forecasts")))
                 return combine_reports(reports)
 
             def finish(f: asyncio.Future) -> None:

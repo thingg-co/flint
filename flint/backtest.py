@@ -76,12 +76,15 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                  hours: float = 0.0, days: int = 0, warm_days: int = 10, cost_bps: float | None = None,
                  steps_per_day: int = 0, compile_: bool | None = None, hooks: dict | None = None,
                  preset: str = "", night_epochs: float = 0.0, target: str = "absolute", index_symbols: str = "SPY",
-                 beta_windows: int = 6000, beta_shrink: float = 400.0) -> dict:
+                 beta_windows: int = 6000, beta_shrink: float = 400.0, store: str | None = None) -> dict:
     """See the module docstring. Each day trains the live online budget (steps_per_label per
     bar) plus `night_epochs` passes over everything seen so far, the way the idle trainer does
     each closed session; `hours` > 0 caps the run by shrinking that budget to fit the remaining
     days once the step time is known. `days` > 0 keeps only the last `days` scored days (plus
-    warm_days before them). Returns the report as a JSON-ready dict."""
+    warm_days before them). `store` names a path prefix: every raw forecast the run makes (the
+    quantiles, the direction probabilities, the label it was scored against, the mask and the
+    loadings in force) is written to `<store>_<target>.npz` so the policy's gates can be swept
+    over them in seconds without re-running the net. Returns the report as a JSON-ready dict."""
     t0 = time.time()
     hooks = hooks or {}
     cost = float(cfg.cost_bps if cost_bps is None else cost_bps)
@@ -206,6 +209,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
     steps_lo = steps_hi = 0
     stopped = False
     n_scored = len(groups) - warm_days
+    kept: dict[str, list] = {k: [] for k in ("rows", "q", "up", "dn", "y", "mask", "beta")}   # the forecasts, when `store` is set
 
     for di, (date, idx) in enumerate(groups):
         if should_stop and should_stop():
@@ -219,6 +223,10 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
             if hooks.get("on_predict"):
                 hooks["on_predict"](di)
             q_all, up_all, dn_all = predict(idx)
+            if store:
+                kept["rows"].append(idx); kept["q"].append(q_all.astype(np.float32)); kept["up"].append(up_all.astype(np.float32))
+                kept["dn"].append(dn_all.astype(np.float32)); kept["y"].append(relative(ry[idx], beta, icols).astype(np.float32))
+                kept["mask"].append(rmask[idx].astype(np.uint8)); kept["beta"].append(beta.copy())
         d = {"signals": 0, "gross": 0.0, "net": 0.0, "hits": 0, "decisions": 0, "pin": 0.0, "pin_n": 0, "inside": 0, "inside_n": 0, "long": 0.0,
              "unhedged": 0.0}
         for k in range(len(idx)):
@@ -331,13 +339,26 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
 
     totals = _totals(day_rows, tot, cum, max_dd, long_cum)
     totals["unhedged_bps"] = float(unhedged_cum)
+    stored = None
+    if store and kept["rows"]:
+        try:                                                                # a failed save must never cost the run
+            rows = np.concatenate(kept["rows"])
+            stored = f"{store}_{target.split()[0]}.npz"
+            np.savez(stored, rows=rows, t=rt[rows], q=np.concatenate(kept["q"]), up=np.concatenate(kept["up"]),
+                     dn=np.concatenate(kept["dn"]), y=np.concatenate(kept["y"]), mask=np.concatenate(kept["mask"]),
+                     beta=np.stack(kept["beta"]), day_of=np.concatenate([np.full(len(r), i) for i, r in enumerate(kept["rows"])]),
+                     symbols=np.array(symbols), index=np.array([symbols[c] for c in icols]), target=np.array(target),
+                     quantiles=np.asarray(cfg.quantiles), cost_bps=np.array(cost))
+        except Exception as e:  # noqa: BLE001
+            log.warning("backtest: could not store the forecasts at %s: %s", store, e)
+            stored = None
     per_sym = {symbols[i]: {"signals": int(sym_sig[i]), "net_bps": float(sym_net[i]),
                             "hit": (float(sym_hit[i] / sym_dec[i]) if sym_dec[i] else None), "calls": int(sym_dec[i])}
                for i in range(n_assets)}
     return {"ran_at": t0, "elapsed_s": time.time() - t0, "stopped": stopped,
             "config": {"preset": preset, "d_model": cfg.d_model, "params": sum(p.numel() for p in model.parameters()),
                        "cost_bps": cost, "warm_days": warm_days, "hours": hours, "night_epochs": night_epochs,
-                       "target": target, "index": [symbols[c] for c in icols] if icols else None,
+                       "target": target, "index": [symbols[c] for c in icols] if icols else None, "forecasts": stored,
                        "beta": ({symbols[i]: {symbols[c]: round(float(beta[i, j]), 2) for j, c in enumerate(icols)}
                                  for i in range(n_assets) if i not in icols} if icols else None),
                        "compiled": train_model is not model,
