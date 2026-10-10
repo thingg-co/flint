@@ -151,12 +151,16 @@
     <a href="#learning">4. Learning regimes</a>
     <a href="#calibration">5. Calibration</a>
     <a href="#policy">6. Decision policy and risk</a>
-    <a href="#evaluation">7. Evaluation</a>
+    <a href="#pricing">7. Pricing models</a>
+    <a class="sub" href="#pricing-used">What Flint uses</a>
+    <a class="sub" href="#pricing-missing">What it should borrow</a>
+    <a class="sub" href="#pricing-together">Using them together</a>
+    <a href="#evaluation">8. Evaluation</a>
     <a class="sub" href="#live">Live scoring</a>
     <a class="sub" href="#backtest">Walk-forward backtest</a>
-    <a href="#system">8. System design</a>
-    <a href="#limits">9. Limitations</a>
-    <a href="#future">10. Future work</a>
+    <a href="#system">9. System design</a>
+    <a href="#limits">10. Limitations</a>
+    <a href="#future">11. Future work</a>
     <a href="#refs">References</a>
     <a href="#appendix">Appendix</a>
   </aside>
@@ -181,21 +185,106 @@
       <li><b>Everything observable.</b> Every feed, feature, forecast, decision and training step is traced to a console the operator can read.</li>
       <li><b>One machine, nothing leaves it.</b> Market data comes in; keys, positions and the narrative brief's language model stay local.</li>
     </ol>
+    <div class="fig">
+      <svg viewBox="0 0 980 300" role="img" aria-label="The bar loop: feeds, bars, features, the network, calibration, policy and the paper book, with labels returning to the replay and the learner">
+        <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--muted)"/></marker></defs>
+        <rect class="bx cool" x="10" y="30" width="150" height="66" rx="8"/><text class="lbl b" x="85" y="56" text-anchor="middle">Feeds</text><text class="lbl m" x="85" y="74" text-anchor="middle">priority failover</text><text class="lbl m" x="85" y="88" text-anchor="middle">per name</text>
+        <rect class="bx" x="175" y="30" width="120" height="66" rx="8"/><text class="lbl b" x="235" y="56" text-anchor="middle">Bars</text><text class="lbl m" x="235" y="74" text-anchor="middle">5 min, OHLCV</text><text class="lbl m" x="235" y="88" text-anchor="middle">real trades only</text>
+        <rect class="bx" x="310" y="30" width="120" height="66" rx="8"/><text class="lbl b" x="370" y="56" text-anchor="middle">Features</text><text class="lbl m" x="370" y="74" text-anchor="middle">25 per name</text><text class="lbl m" x="370" y="88" text-anchor="middle">running z-scores</text>
+        <rect class="bx hot" x="445" y="22" width="160" height="82" rx="8"/><text class="lbl b" x="525" y="48" text-anchor="middle">FlintNet</text><text class="lbl m" x="525" y="66" text-anchor="middle">q10..q90, P(up), P(down)</text><text class="lbl m" x="525" y="80" text-anchor="middle">regime gate, attention</text><text class="lbl m" x="525" y="94" text-anchor="middle">128-bar window</text>
+        <rect class="bx" x="620" y="30" width="130" height="66" rx="8"/><text class="lbl b" x="685" y="56" text-anchor="middle">Calibration</text><text class="lbl m" x="685" y="74" text-anchor="middle">band scale s</text><text class="lbl m" x="685" y="88" text-anchor="middle">temperature T</text>
+        <rect class="bx" x="765" y="30" width="205" height="66" rx="8"/><text class="lbl b" x="867" y="56" text-anchor="middle">Policy, then the book</text><text class="lbl m" x="867" y="74" text-anchor="middle">gates, fractional Kelly</text><text class="lbl m" x="867" y="88" text-anchor="middle">stock, puts, straddles</text>
+        <path class="ar" d="M160 63H173"/><path class="ar" d="M295 63H308"/><path class="ar" d="M430 63H443"/><path class="ar" d="M605 63H618"/><path class="ar" d="M750 63H763"/>
+        <rect class="bx" x="310" y="190" width="295" height="70" rx="8"/><text class="lbl b" x="457" y="216" text-anchor="middle">Replay buffer</text><text class="lbl m" x="457" y="234" text-anchor="middle">windows keyed by bar time, 5% held out</text><text class="lbl m" x="457" y="248" text-anchor="middle">byte budget, memory-mapped on disk</text>
+        <rect class="bx hot" x="640" y="190" width="220" height="70" rx="8"/><text class="lbl b" x="750" y="216" text-anchor="middle">Online learner</text><text class="lbl m" x="750" y="234" text-anchor="middle">2 steps per resolved label</text><text class="lbl m" x="750" y="248" text-anchor="middle">night passes, overfit guard</text>
+        <path class="ar" d="M867 96V150H457V188"/><text class="lbl m" x="662" y="166" text-anchor="middle">twelve bars later the forecast resolves: label = log return in bps</text>
+        <path class="ar" d="M605 225H638"/>
+        <path class="ar" d="M750 188V130H525V106"/><text class="lbl m" x="637" y="124" text-anchor="middle">weights</text>
+        <rect class="bx cool" x="10" y="190" width="270" height="70" rx="8"/><text class="lbl b" x="145" y="216" text-anchor="middle">Deep backfill, market closed</text><text class="lbl m" x="145" y="234" text-anchor="middle">5-min candles 200 days back</text><text class="lbl m" x="145" y="248" text-anchor="middle">10-day chunk every 150 s</text>
+        <path class="ar" d="M280 225H308"/>
+      </svg>
+      <div class="cap">Figure 1. The bar loop. Hot boxes run on the GPU. A forecast made at bar <var>t</var> becomes a training label at bar <var>t</var> + 12, so every window is scored before it is learned from.</div>
+    </div>
 
     <h2 id="data">2. Data</h2>
     <h3 id="bars">Bars and features</h3>
     <p>Sources live in a registry with a priority order, and each symbol is owned by the best source that is up and supports it; ownership fails over without operator action. Bars are built only from real trades. Quote and heartbeat ticks update the last price and the bid-ask spread but never form a candle, because a feed that echoes a stale quote while the market is closed would otherwise manufacture flat bars and the model would learn from fiction. Every modeled name needs a price for a bar row to emit, so a name without history is seeded flat at zero rather than allowed to stall the universe.</p>
     <p>Each name contributes 25 features per bar, standardized by a running mean and variance kept per name: nine from the bars themselves (return, range, log volume, trade imbalance, spread, log trade count, close position within the bar, momentum, realized volatility), four from attention and tone (news sentiment and attention, retail-forum sentiment and attention), a fear-and-greed index, derivatives positioning (funding, open-interest change, long/short ratio), the net tilt of tracked fund books and an investor-council bias, two fundamental factors, market breadth and VIX, and at-the-money implied volatility and skew from option chains. The label for a window ending at bar <var>t</var> is the log return in basis points from that bar's close to the close at <var>t</var> + 12, capped at 2,000 bps, with a mask that removes any name that did not trade at both ends.</p>
+    <div class="table-wrap">
+      <table>
+        <caption>Table 0. The 25 features per name per bar and where each comes from. The first nine are computed from the bars; the rest are joined from the signal loops and held constant between their refreshes.</caption>
+        <thead><tr><th>Group</th><th>Feature</th><th>Definition</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="9"><b>Bars</b></td><td><code>ret</code></td><td>log(close / previous close), bps</td></tr>
+          <tr><td><code>range</code></td><td>log(high / low), bps</td></tr>
+          <tr><td><code>logvol</code></td><td>log(1 + volume)</td></tr>
+          <tr><td><code>imbalance</code></td><td>(buy volume − sell volume) / volume from tick classification</td></tr>
+          <tr><td><code>spread</code></td><td>bid-ask spread in bps from the last quote</td></tr>
+          <tr><td><code>logtrades</code></td><td>log(1 + trade count)</td></tr>
+          <tr><td><code>closepos</code></td><td>(close − low) / (high − low)</td></tr>
+          <tr><td><code>mom</code></td><td>sum of the last 12 bar returns</td></tr>
+          <tr><td><code>rvol</code></td><td>standard deviation of the last 12 bar returns (close-to-close; see Section 7)</td></tr>
+          <tr><td rowspan="2"><b>Attention</b></td><td><code>news_sent</code>, <code>news_attn</code></td><td>lexicon sentiment and log-scaled mention weight from company news and market desks</td></tr>
+          <tr><td><code>wsb_sent</code>, <code>wsb_attn</code></td><td>the same from retail-forum chatter</td></tr>
+          <tr><td rowspan="3"><b>Positioning</b></td><td><code>fng</code></td><td>fear-and-greed index, market-wide</td></tr>
+          <tr><td><code>funding</code>, <code>oi_chg</code>, <code>longshort</code></td><td>derivatives positioning where a venue reports it</td></tr>
+          <tr><td><code>guru_net</code>, <code>ethos_bias</code></td><td>net tilt of the tracked 13F books; the investor council's bias for the name</td></tr>
+          <tr><td><b>Fundamentals</b></td><td><code>f_value</code>, <code>f_quality</code></td><td>value and quality factor scores from company fundamentals</td></tr>
+          <tr><td><b>Market</b></td><td><code>breadth</code>, <code>vix</code></td><td>advancers share on the radar; the VIX level</td></tr>
+          <tr><td><b>Options</b></td><td><code>opt_iv</code>, <code>opt_skew</code></td><td>at-the-money implied volatility about 30 days out, and the put-call skew, from the live chain</td></tr>
+        </tbody>
+      </table>
+    </div>
 
     <h3 id="replay">The replay buffer</h3>
     <p>Labeled windows are stored in a ring buffer of shape (windows × names × 128 bars × 25 features) in 32-bit floats. Three decisions about this buffer turned out to matter more than any modeling choice.</p>
     <p><b>Keyed by bar time.</b> Every restart re-walks the last five days of history to warm the feature state. Before windows were keyed, each restart appended another copy of those days: a 526-window buffer was found to hold only 180 distinct label vectors, so the most recent days were being trained on three times over. A window is now stored once per bar timestamp, and a re-walk adds nothing.</p>
     <p><b>Budgeted in bytes.</b> The buffer's capacity is a memory budget, 30 GB on the reference machine, from which the window count follows the universe: about 14,000 windows at 232 names and 7,000 at 400. Growing the universe shrinks the history held rather than the memory left for everything else.</p>
     <p><b>Deep history paged in while the market is closed.</b> A loop pages five-minute candles back in ten-day chunks, one every 150 seconds to respect the provider's rate limit, through an isolated bar and feature pipeline, until 200 days or a full buffer. Paging stops within a chunk of full rather than wrapping the ring onto its newest windows. Five percent of windows, every twentieth by timestamp, are held out of training permanently; the choice is derived from the timestamp so a reload keeps the same slice.</p>
+    <div class="fig">
+      <svg viewBox="0 0 980 250" role="img" aria-label="The replay buffer as a ring of windows keyed by bar time, with every twentieth window held out, and a universe change that keeps retained columns, drops a name and masks a new one until the re-page fills it">
+        <text class="lbl b" x="12" y="22">One window: names × 128 bars × 25 features, plus a label per name and a mask</text>
+        <g transform="translate(12,36)">
+          <rect class="bx" x="0" y="0" width="560" height="34" rx="6"/>
+          <text class="lbl m" x="8" y="22">slot</text>
+          <g id="slots"></g>
+          <rect x="52" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="78" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="104" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="130" y="4" width="22" height="26" rx="3" fill="var(--hot)" stroke="var(--fire)"/><rect x="156" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="182" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="208" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="234" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="260" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="286" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="312" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="338" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="364" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="390" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="416" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="442" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="468" y="4" width="22" height="26" rx="3" fill="var(--surface)" stroke="var(--border)" stroke-dasharray="3 2"/><rect x="494" y="4" width="22" height="26" rx="3" fill="var(--surface)" stroke="var(--border)" stroke-dasharray="3 2"/><rect x="520" y="4" width="22" height="26" rx="3" fill="var(--surface)" stroke="var(--border)" stroke-dasharray="3 2"/>
+          <text class="lbl m" x="141" y="50" text-anchor="middle">held out</text><text class="lbl m" x="505" y="50" text-anchor="middle">free slots</text>
+          <text class="lbl m" x="300" y="50" text-anchor="middle">keyed by bar timestamp; a re-walk of the same bars adds nothing</text>
+        </g>
+        <g transform="translate(600,36)">
+          <text class="lbl b" x="0" y="-8">A universe change, by column</text>
+          <text class="lbl m" x="0" y="18">before</text><rect x="60" y="4" width="34" height="22" rx="3" fill="var(--cool)" stroke="var(--blue)"/><text class="lbl m" x="77" y="19" text-anchor="middle">A</text><rect x="98" y="4" width="34" height="22" rx="3" fill="var(--cool)" stroke="var(--blue)"/><text class="lbl m" x="115" y="19" text-anchor="middle">B</text><rect x="136" y="4" width="34" height="22" rx="3" fill="var(--cool)" stroke="var(--blue)"/><text class="lbl m" x="153" y="19" text-anchor="middle">C</text>
+          <text class="lbl m" x="0" y="56">after</text><rect x="60" y="42" width="34" height="22" rx="3" fill="var(--cool)" stroke="var(--blue)"/><text class="lbl m" x="77" y="57" text-anchor="middle">B</text><rect x="98" y="42" width="34" height="22" rx="3" fill="var(--cool)" stroke="var(--blue)"/><text class="lbl m" x="115" y="57" text-anchor="middle">C</text><rect x="136" y="42" width="34" height="22" rx="3" fill="var(--surface)" stroke="var(--fire)" stroke-dasharray="3 2"/><text class="lbl m" x="153" y="57" text-anchor="middle">D</text>
+          <text class="lbl m" x="0" y="90">A dropped; B, C copied with their embedding rows; D masked until the re-page fills it</text>
+        </g>
+        <g transform="translate(12,150)">
+          <text class="lbl b" x="0" y="0">Memory budget, not window count</text>
+          <text class="lbl m" x="0" y="22">windows = budget / (names × 128 × 25 × 4 bytes)   →   30 GB ≈ 14,000 windows at 232 names, 7,000 at 400</text>
+          <text class="lbl m" x="0" y="44">the deep backfill stops within a chunk of full; a smaller buffer on load keeps the newest windows; written whole as memory-mapped arrays</text>
+          <text class="lbl m" x="0" y="66">every 20th bar by timestamp is validation-only: the honest overfitting signal, since in-sample loss rises on every unseen chunk</text>
+        </g>
+      </svg>
+      <div class="cap">Figure 2. The replay buffer and what a universe change does to it.</div>
+    </div>
 
     <h3 id="universe">A self-updating universe</h3>
     <p>The modeled set is the configured core, every holding in the operator's accounts, and up to a fixed number of promoted names, under a cap of 400. Once a day after the close, candidates are drawn from three organic sources and scored on one 0–100 scale by rank within each source: the market radar's movers, weighted by dollar volume and filtered to liquid names above five dollars; tickers named in headlines, counted only when the symbol is known elsewhere; and the tracked funds' 13F positions by weight. The best rank across sources wins, with a small bonus for appearing in more than one.</p>
     <p>Promotion fills the room left under the cap from the top of the ranking. Demotion is deliberately slow: a promoted name stays while it keeps ranking inside the top one-and-a-half times the slot count, and leaves only after 14 days without such a hit and at least five days of tenure. The asymmetry exists because a demotion forfeits that name's learned representation and its history in the replay, and a day's excitement is not worth that.</p>
+    <div class="fig">
+      <svg viewBox="0 0 980 230" role="img" aria-label="Universe state machine: candidates are scored from three sources, promoted into open slots, retained while they keep ranking, and demoted after a grace period and minimum tenure; core names and holdings are fixed">
+        <rect class="bx" x="10" y="20" width="230" height="86" rx="8"/><text class="lbl b" x="125" y="44" text-anchor="middle">Candidates, scored 0–100</text><text class="lbl m" x="125" y="62" text-anchor="middle">radar movers × dollar volume</text><text class="lbl m" x="125" y="76" text-anchor="middle">tickers named in headlines (known only)</text><text class="lbl m" x="125" y="90" text-anchor="middle">13F positions of tracked funds</text>
+        <rect class="bx hot" x="300" y="20" width="200" height="86" rx="8"/><text class="lbl b" x="400" y="48" text-anchor="middle">Promoted</text><text class="lbl m" x="400" y="68" text-anchor="middle">top of the ranking fills the room</text><text class="lbl m" x="400" y="84" text-anchor="middle">since = today, last_hit = today</text>
+        <rect class="bx" x="560" y="20" width="200" height="86" rx="8"/><text class="lbl b" x="660" y="48" text-anchor="middle">Retained</text><text class="lbl m" x="660" y="68" text-anchor="middle">a hit while in the top 1.5 × count</text><text class="lbl m" x="660" y="84" text-anchor="middle">refreshes last_hit</text>
+        <rect class="bx" x="820" y="20" width="150" height="86" rx="8"/><text class="lbl b" x="895" y="48" text-anchor="middle">Demoted</text><text class="lbl m" x="895" y="68" text-anchor="middle">14 days without a hit</text><text class="lbl m" x="895" y="84" text-anchor="middle">and 5 days of tenure</text>
+        <path class="ar" d="M240 63H298"/><path class="ar" d="M500 63H558"/><path class="ar" d="M760 63H818"/>
+        <path class="ar" d="M895 106V150H660V108"/><text class="lbl m" x="780" y="140" text-anchor="middle">row and history forfeited; may re-enter later as a fresh name</text>
+        <rect class="bx cool" x="10" y="160" width="490" height="52" rx="8"/><text class="lbl b" x="255" y="182" text-anchor="middle">Fixed: the configured core and every holding</text><text class="lbl m" x="255" y="200" text-anchor="middle">never scored, never demoted; a new holding enters within a minute</text>
+        <text class="lbl m" x="740" y="186" text-anchor="middle">room = min(count, cap − fixed); if the room shrinks, the weakest promoted leave first</text>
+        <text class="lbl m" x="740" y="204" text-anchor="middle">runs once a day after the close, only when all three sources have reported</text>
+      </svg>
+      <div class="cap">Figure 3. The universe's promotion and demotion rule. The asymmetry is deliberate: entry is cheap, exit forfeits learning.</div>
+    </div>
     <p>A universe change used to reset the model, which is why no such rule could run automatically. Every parameter in the network is shared across names except a table of per-name embeddings, so a change now migrates: retained names' embedding rows and their optimizer moments are copied, new names receive fresh rows, retained names' replay columns are kept, new names' columns are masked, and the deep backfill re-pages history to fill those columns in. If the saved weights do not fit the current network at all, because the size benchmark landed on a different preset, the network starts fresh but the replay is still kept and migrated; the data outlives the architecture.</p>
 
     <h2 id="model">3. Model</h2>
@@ -203,6 +292,26 @@
     <p><b>Dilated causal convolutions over time.</b> Each name's window is read by a stack of one-dimensional convolutions with dilations 1, 2, 4, 8, 16, 32 and 64, which gives a receptive field over the whole window at a cost linear in its length, and causality by construction.</p>
     <p><b>Cross-asset attention.</b> After the temporal stack, a multi-head attention layer runs across names within the bar, so a forecast for one name can condition on the state of the others. A learned embedding per name lets the network tell the names apart; it is the only per-name parameter, which is what makes universe migration cheap.</p>
     <p><b>A regime gate over expert heads.</b> A pooled summary of the market state selects a soft mixture over twelve expert heads, so different regimes use different heads rather than one blended predictor. The gate's weights are published with each forecast. The quantile head is non-crossing by construction: it predicts the median and non-negative increments on either side.</p>
+    <div class="fig">
+      <svg viewBox="0 0 980 300" role="img" aria-label="FlintNet: per-name dilated causal convolutions over the 128-bar window, a per-name embedding, cross-asset attention across names, a pooled market state feeding a regime gate over twelve expert heads, and quantile and direction outputs">
+        <rect class="bx" x="10" y="30" width="170" height="60" rx="8"/><text class="lbl b" x="95" y="54" text-anchor="middle">Input</text><text class="lbl m" x="95" y="74" text-anchor="middle">N names × 128 bars × 25</text>
+        <rect class="bx hot" x="210" y="20" width="200" height="80" rx="8"/><text class="lbl b" x="310" y="44" text-anchor="middle">Dilated causal convs</text><text class="lbl m" x="310" y="62" text-anchor="middle">dilations 1, 2, 4, 8, 16, 32, 64</text><text class="lbl m" x="310" y="76" text-anchor="middle">per name, shared weights</text><text class="lbl m" x="310" y="90" text-anchor="middle">receptive field: the whole window</text>
+        <rect class="bx" x="440" y="30" width="150" height="60" rx="8"/><text class="lbl b" x="515" y="54" text-anchor="middle">+ name embedding</text><text class="lbl m" x="515" y="74" text-anchor="middle">the only per-name parameter</text>
+        <rect class="bx hot" x="620" y="20" width="180" height="80" rx="8"/><text class="lbl b" x="710" y="44" text-anchor="middle">Cross-asset attention</text><text class="lbl m" x="710" y="62" text-anchor="middle">across the N names in a bar</text><text class="lbl m" x="710" y="76" text-anchor="middle">multi-head; map published</text><text class="lbl m" x="710" y="90" text-anchor="middle">with each forecast</text>
+        <rect class="bx" x="830" y="30" width="140" height="60" rx="8"/><text class="lbl b" x="900" y="54" text-anchor="middle">Pooled state</text><text class="lbl m" x="900" y="74" text-anchor="middle">mean and spread over names</text>
+        <path class="ar" d="M180 60H208"/><path class="ar" d="M410 60H438"/><path class="ar" d="M590 60H618"/><path class="ar" d="M800 60H828"/>
+        <rect class="bx hot" x="620" y="150" width="180" height="60" rx="8"/><text class="lbl b" x="710" y="174" text-anchor="middle">Regime gate</text><text class="lbl m" x="710" y="194" text-anchor="middle">softmax over 12 experts, with noise in training</text>
+        <path class="ar" d="M900 90V180H802"/>
+        <rect class="bx" x="300" y="140" width="290" height="80" rx="8"/><text class="lbl b" x="445" y="164" text-anchor="middle">12 expert heads, mixed by the gate</text><text class="lbl m" x="445" y="184" text-anchor="middle">median + non-negative increments → q10 ≤ q25 ≤ q50 ≤ q75 ≤ q90</text><text class="lbl m" x="445" y="200" text-anchor="middle">logit P(ret &gt; +10 bps), logit P(ret &lt; −10 bps)</text>
+        <path class="ar" d="M710 100V140"/><path class="ar" d="M620 180H592"/><path class="ar" d="M710 210V240"/>
+        <path class="ar" d="M710 100C710 125 600 110 590 150" style="display:none"/>
+        <rect class="bx" x="10" y="140" width="250" height="80" rx="8"/><text class="lbl b" x="135" y="164" text-anchor="middle">Loss</text><text class="lbl m" x="135" y="184" text-anchor="middle">pinball over 5 quantiles + smoothed BCE × 2</text><text class="lbl m" x="135" y="200" text-anchor="middle">masked to names that traded at both ends</text>
+        <path class="ar" d="M300 180H262"/>
+        <text class="lbl m" x="710" y="262" text-anchor="middle">gate weights to the dashboard</text>
+        <text class="lbl m" x="490" y="262" text-anchor="middle">attention from the attention layer: N × N, shown per name</text>
+      </svg>
+      <div class="cap">Figure 4. FlintNet. Width is the preset's d_model (512 or 768 on the reference machine); the temporal stack, the attention and the heads are shared across names.</div>
+    </div>
 
     <h3 id="loss">Objective</h3>
     <p>The loss is the pinball loss over the five quantiles plus a smoothed binary cross-entropy on each direction head, averaged over the names the mask admits:</p>
@@ -232,12 +341,39 @@
       <li><b>Idle passes.</b> While the market is closed, up to two passes over the replay per closed session, a budget bounded by data rather than hours so a long night cannot grind the same windows indefinitely. Every 40 steps the held-out slice is scored, and the session's budget ends when that score has not improved over three checks. In-sample loss cannot serve this purpose: it rises whenever the deep backfill adds unseen history and falls as it is fit.</li>
       <li><b>Deep chunks.</b> Each paged chunk of history is followed by 30 steps so the new windows enter the weights promptly.</li>
     </ul>
+    <div class="fig">
+      <svg viewBox="0 0 980 190" role="img" aria-label="Timeline of a trading week: pre-open warmup, the open session with online learning, the closed session with deep backfill and idle passes, and the weekend walk-forward backtest">
+        <text class="lbl b" x="12" y="20">A week, Eastern time</text>
+        <rect x="12" y="34" width="956" height="30" rx="5" fill="var(--surface2)" stroke="var(--border)"/>
+        <rect x="12" y="34" width="60" height="30" rx="5" class="bx"/><text class="lbl m" x="42" y="53" text-anchor="middle">warmup</text>
+        <rect x="72" y="34" width="250" height="30" class="bx cool"/><text class="lbl m" x="197" y="53" text-anchor="middle">09:30–16:00 open: forecast every bar, 2 steps per resolved label</text>
+        <rect x="322" y="34" width="360" height="30" class="bx hot"/><text class="lbl m" x="502" y="53" text-anchor="middle">closed: deep backfill chunks + 30 steps each, idle passes with the held-out guard, refresh after the close</text>
+        <rect x="682" y="34" width="286" height="30" rx="5" class="bx" style="fill:var(--hot);stroke:var(--gold)"/><text class="lbl m" x="825" y="53" text-anchor="middle">Saturday–Sunday: walk-forward backtest owns the GPU</text>
+        <text class="lbl m" x="12" y="90">Monday to Friday repeat the first three; every closed session has its own idle budget of two passes over the replay, ended early when the held-out loss stalls.</text>
+        <text class="lbl m" x="12" y="112">While the backtest runs: matured labels are stored and trained on afterwards, the idle trainer skips, paging pauses, and the backtest's net is sized to free memory.</text>
+        <text class="lbl m" x="12" y="134">A systemd timer starts the engine each weekday 45 minutes before the open and never restarts a running one; a restart re-runs warmup and resets the live trust count.</text>
+        <text class="lbl m" x="12" y="156">Trust: 48 live labels, about 14:30 on a fresh start, since labels accrue one per bar from an hour after the open.</text>
+        <text class="lbl m" x="12" y="178">Calibration and per-name records update one horizon late in every regime, live and in the backtest alike.</text>
+      </svg>
+      <div class="cap">Figure 5. When each learning regime runs. Nothing heavy ever shares the GPU with anything else heavy.</div>
+    </div>
 
     <h2 id="calibration">5. Calibration</h2>
     <p>Two online corrections sit between the network and the policy, and both are updated per bar rather than per name, because a bar's several hundred labels are one observation of calibration, not several hundred: updating per name compounds into one enormous step and, with the horizon's delay, drives the correction into oscillation between its clips.</p>
     <p>The first is an adaptive conformal scale <var>s</var> on the predicted band widths. The quantiles are widened or narrowed about the median, <var>q̃</var><sub>τ</sub> = <var>q</var><sub>0.5</sub> + <var>s</var>(<var>q</var><sub>τ</sub> − <var>q</var><sub>0.5</sub>), and after each resolved bar the scale moves by</p>
     <div class="eq"><span class="n">(2)</span>s ← clip( s · exp( γ · ((1 − c) − 0.2) ), 0.5, 25 )</div>
     <p>where <var>c</var> is the fraction of that bar's outcomes inside the 10–90 band and γ = 0.05, so the scale settles where one outcome in five falls outside. It starts at 2, wide, and earns its way down. The second is a temperature <var>T</var> on the direction logit, <var>p̃</var> = σ(<var>T</var> · logit(<var>p</var>)), moved by one gradient step of the calibration cross-entropy per bar with rate 0.01, started sceptical at 0.3. Both corrections, and every per-name record the policy consults, are applied one horizon late in the backtest exactly as they are live.</p>
+    <div class="fig">
+      <svg viewBox="0 0 980 170" role="img" aria-label="The calibration loop: raw quantiles are widened by the band scale and the direction probability tempered; twelve bars later the realised outcomes update the scale toward 80 percent coverage and the temperature by one gradient step">
+        <rect class="bx" x="10" y="30" width="190" height="60" rx="8"/><text class="lbl b" x="105" y="54" text-anchor="middle">Raw forecast at t</text><text class="lbl m" x="105" y="74" text-anchor="middle">q10..q90, P(up), P(down)</text>
+        <rect class="bx hot" x="240" y="20" width="230" height="80" rx="8"/><text class="lbl b" x="355" y="44" text-anchor="middle">Calibrated forecast</text><text class="lbl m" x="355" y="62" text-anchor="middle">q̃τ = q50 + s·(qτ − q50)</text><text class="lbl m" x="355" y="76" text-anchor="middle">p̃ = σ(T · logit p)</text><text class="lbl m" x="355" y="90" text-anchor="middle">to the policy and the dashboard</text>
+        <rect class="bx" x="510" y="30" width="200" height="60" rx="8"/><text class="lbl b" x="610" y="54" text-anchor="middle">Outcome at t + 12</text><text class="lbl m" x="610" y="74" text-anchor="middle">y per name, masked</text>
+        <rect class="bx" x="750" y="20" width="220" height="80" rx="8"/><text class="lbl b" x="860" y="44" text-anchor="middle">One update per bar</text><text class="lbl m" x="860" y="62" text-anchor="middle">s ← s·exp(γ((1−c) − 0.2)), clipped</text><text class="lbl m" x="860" y="76" text-anchor="middle">T ← T − η·mean((p̃ − 1[y&gt;0])·logit p)</text><text class="lbl m" x="860" y="90" text-anchor="middle">hit, coverage, pinball recorded</text>
+        <path class="ar" d="M200 60H238"/><path class="ar" d="M470 60H508"/><path class="ar" d="M710 60H748"/>
+        <path class="ar" d="M860 100V140H355V102"/><text class="lbl m" x="608" y="132" text-anchor="middle">the next forecast uses the updated s and T: a lag of one horizon, by design</text>
+      </svg>
+      <div class="cap">Figure 6. The calibration loop. A bar's several hundred labels count as one observation, which keeps the scale from oscillating.</div>
+    </div>
 
     <h2 id="policy">6. Decision policy and risk</h2>
     <p>The policy is a composition of gates on the calibrated distribution followed by a sizing rule. It is deliberately not a learned layer: every gate is a live control, auditable, and testable in isolation, and the backtest can replay the identical gates over history. The score is a Sharpe-like ratio of the median to the calibrated interquartile range, <var>z</var> = <var>q̃</var><sub>0.5</sub> / (<var>q̃</var><sub>0.75</sub> − <var>q̃</var><sub>0.25</sub>). A name may take a side only if all of the following hold: |<var>z</var>| exceeds a threshold; the tempered direction probability sits far enough from one half and agrees with the sign of <var>z</var>; the expected move exceeds the larger of a flat cost and the live bid-ask spread, and the spread is below a limit; the price is above a floor; the name's own record of resolved calls meets a minimum count and hit rate; and the same side has persisted for two consecutive bars. The book as a whole trades only once the model is trusted, after 48 live labels, and only while its hit-rate average beats a coin flip.</p>
@@ -245,14 +381,76 @@
     <div class="eq"><span class="n">(3)</span>w = w<sub>max</sub> · min(1, k · |z|) · max(0.25, min(1, c̄ / 0.8))</div>
     <p>with <var>k</var> = 0.15. A bearish view is a long put and a volatility view, when both direction probabilities are high and the band is wide, is a long straddle, with premium per position capped at 2% of equity; a bullish view is stock. The paper book runs 100,000 dollars with no leverage, a 15% cap per name, fills marked at the spread, a minimum hold of six bars unless the signal reverses, and flattens at the close. With extended hours enabled, stock may trade in the 4:00–9:30 and 16:00–20:00 sessions; options never do. These gates were added after one evening in which churn and a one-dollar stock cost the book seven percent, and the policy's main job since has been to hold when it has no edge.</p>
 
-    <h2 id="evaluation">7. Evaluation</h2>
+    <h2 id="pricing">7. Pricing models: what Flint uses and what it should borrow</h2>
+    <p>Flint is an empirical forecaster, and it was a fair question whether it uses any of the standard pricing models at all. The audit for this version is in Table 3. The short answer is that it uses one, Black-Scholes, in three places, and that the rest of the canon has something to offer, mostly as features and as corrections to the policy rather than as replacements for the network.</p>
+    <h3 id="pricing-used">What Flint uses</h3>
+    <p><b>Black-Scholes-Merton</b> marks every option position in the paper book between quotes, prices the contract selected from the live chain (the at-the-money put about 30 days out for a bearish view; the at-the-money put and call pair for a straddle), and supplies two features from the chain, the at-the-money implied volatility and the put-call skew, which are the market's own forecast of the next month's distribution. The book sizes a put to the delta-equivalent short exposure the policy asked for. <b>Fractional Kelly</b> sizes positions from the score. <b>Factor scores</b> for value and quality, and the fear-and-greed and breadth measures, are joined as features. That is the complete list; realized volatility in the feature set is the plain standard deviation of the last twelve close-to-close bar returns, and the cost of a trade is the quoted spread.</p>
+    <h3 id="pricing-missing">What it should borrow</h3>
+    <div class="table-wrap">
+      <table>
+        <caption>Table 3. The standard models, their status in Flint, and the insight each offers. "Features" means a change to the input set, which resets the network once; "policy" means a change to the gates or the book only.</caption>
+        <thead><tr><th>Model</th><th>Status</th><th>What it offers Flint</th><th>Where</th></tr></thead>
+        <tbody>
+          <tr><td><b>Black-Scholes-Merton</b></td><td>Used</td><td>Beyond marking: the implied volatility scaled to the horizon, σ<sub>1h</sub> = IV·√(1 / (252 × 6.5)), is a market prior for the band width per name and a direct check on the conformal scale. A name whose calibrated band is far narrower or wider than the implied one is miscalibrated in a way the network cannot see.</td><td>features</td></tr>
+          <tr><td><b>Breeden-Litzenberger</b></td><td>Not used</td><td>The second derivative of the call price in strike is the risk-neutral density. Even without the full surface, the 25-delta skew and the wing prices give the market's asymmetry and tail weight for the quantile head to condition on.</td><td>features</td></tr>
+          <tr><td><b>Implied term structure</b></td><td>Not used</td><td>A front-expiry implied volatility far above the next expiry's marks a scheduled event, usually earnings. That is a veto gate: do not hold stock or sell a straddle through it; buy a straddle into it only if the model's move beats the implied one.</td><td>features, policy</td></tr>
+          <tr><td><b>Variance risk premium</b></td><td>Not used</td><td>IV² − RV² over the last month is a regime variable that predicts index returns at horizons of weeks and conditions the gate; it is two numbers the system already has.</td><td>features</td></tr>
+          <tr><td><b>OHLC volatility estimators</b> (Parkinson, Garman-Klass, Rogers-Satchell, Yang-Zhang)</td><td>Not used</td><td>Range-based estimators are five to eight times as efficient as close-to-close for the same bars, and Yang-Zhang handles gaps. The current <code>rvol</code> and <code>range</code> can be replaced in place without changing the feature count.</td><td>features (in place)</td></tr>
+          <tr><td><b>HAR-RV, GARCH(1,1)</b></td><td>Not used</td><td>A heterogeneous-autoregressive forecast of realized variance from daily, weekly and monthly components gives the horizon a volatility forecast that the conformal scale only approximates after the fact.</td><td>features</td></tr>
+          <tr><td><b>CAPM beta</b></td><td>Not used</td><td>The hedge ratio for the market-relative target in Section 11, and a rolling beta per name as a feature, so the network sees how much of a name's move is the index.</td><td>target, features</td></tr>
+          <tr><td><b>Fama-French factors</b></td><td>Partly</td><td>Value and quality are in; the momentum (12-1) and short-term reversal (1-month) factors are cheap daily features with the best-documented premia.</td><td>features</td></tr>
+          <tr><td><b>Greeks on the book</b> (theta, gamma)</td><td>Delta only</td><td>An at-the-money option about 30 days out decays by roughly premium / (2 × 30 × 6.5) per trading hour, a quarter of a percent of premium, which belongs in the cost edge for puts and straddles. A straddle's hourly profit is about ½Γ(ΔS)² − θΔt, so the entry rule should be "the model's expected |move| exceeds the implied one, σ<sub>impl</sub>·S·√Δt", in place of the present band-width threshold.</td><td>policy</td></tr>
+          <tr><td><b>Square-root impact</b> (Almgren-Chriss, Gatheral)</td><td>Not used</td><td>Cost = spread / 2 + η·σ·√(Q / ADV). At 100,000 dollars on large caps impact is negligible; for promoted small caps it is the whole edge. The cost gate should include it.</td><td>policy</td></tr>
+          <tr><td><b>Amihud illiquidity, Kyle's lambda</b></td><td>Not used</td><td>|return| per dollar of volume is a liquidity gate that works for every source, including those with no quotes, where the spread gate is blind.</td><td>policy, features</td></tr>
+          <tr><td><b>Roll spread estimator</b></td><td>Not used</td><td>The effective spread from the negative autocovariance of returns, for names whose source supplies no quotes.</td><td>policy</td></tr>
+          <tr><td><b>Order-flow imbalance</b> (Cont, Kukanov, Stoikov)<sup class="r"><a href="#r10">10</a></sup></td><td>Partly</td><td>The present imbalance feature classifies trades; the quote-size imbalance at the best bid and ask is the stronger, nearly linear predictor of the next move, available where a feed reports sizes.</td><td>features</td></tr>
+          <tr><td><b>Index futures basis, VIX term structure</b></td><td>Not used</td><td>The overnight futures move is the pre-open market factor; the futures basis against the ETF and the VX1−VX2 slope are regime variables. Needs a futures quote source.</td><td>features</td></tr>
+          <tr><td><b>Ornstein-Uhlenbeck, pairs</b></td><td>Not used</td><td>Cross-sectional residuals against the index mean-revert; a fitted half-life per name is a feature and the natural companion of the market-relative target.</td><td>features</td></tr>
+          <tr><td><b>Merton jump-diffusion, Heston</b></td><td>Not used, by choice</td><td>Their lesson, fat tails and clustered volatility, is what the quantile head and the conformal scale learn empirically; the implied surface already encodes the market's version. A parametric model here would constrain what the data should decide.</td><td>none</td></tr>
+          <tr><td><b>Avellaneda-Stoikov</b></td><td>Not applicable</td><td>Inventory-based market making; Flint takes liquidity, it does not provide it.</td><td>none</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The authors' ranking by expected value per unit of effort: first the implied-volatility horizon band, the variance risk premium and the term-structure event flag, three features that reuse data the system already fetches; second the range-based volatility estimators and a HAR forecast, which upgrade existing features in place; third theta and the gamma breakeven in the options policy and the square-root impact and Amihud gates in the cost edge, which change nothing in the network; fourth beta and the market-relative target; fifth a futures feed.</p>
+    <h3 id="pricing-together">Using them together</h3>
+    <p>Nothing prevents all of these from entering at once; each is a few numbers per name, and the network's job is precisely to weigh many weak inputs. Two cautions govern the batch. The inputs should be distinct: four range-based volatility estimators say nearly the same thing, so one of them (Yang-Zhang) plus the HAR components earns its place while the rest add noise and cost samples, which matter with an online learner that sees thousands of windows rather than millions. And any change to the feature set resets the network once, so the batch should land as one change, on a weekend, with the backtest run before and after it. The batch the authors would ship is in Table 4, with one addition that costs no feature at all: macro ETFs as members of the universe. Because the network attends across names, treasuries, credit, the dollar, gold, oil and a volatility product become market factors the moment they are modeled, with no feature engineering.</p>
+    <div class="table-wrap">
+      <table>
+        <caption>Table 4. A feature batch from the pricing canon, computable from data the system already fetches. Thirteen new features plus two replaced in place; one model reset.</caption>
+        <thead><tr><th>Family</th><th>Features</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr><td><b>Option-implied</b></td><td>σ<sub>1h</sub> from at-the-money IV; term slope (front minus next expiry IV, the event flag); butterfly convexity; variance risk premium IV² − RV²; dealer gamma exposure, Σ open interest × gamma by strike, signed by side, which separates pinning days from trending days</td><td>the live chain, already fetched for IV and skew</td></tr>
+          <tr><td><b>Realized volatility</b></td><td>Yang-Zhang in place of <code>rvol</code>; Garman-Klass in place of <code>range</code>; HAR components: realized variance over the last day, week and month</td><td>the bars</td></tr>
+          <tr><td><b>Factors</b></td><td>rolling 60-day beta to the index; momentum 12-1; one-month reversal</td><td>the bars and the index ETF</td></tr>
+          <tr><td><b>Microstructure</b></td><td>Amihud illiquidity over 20 days; quote-size order-flow imbalance where the feed reports sizes; Roll's effective spread as the fallback where it does not</td><td>quotes and bars</td></tr>
+          <tr><td><b>Mechanical</b></td><td>an ex-dividend flag for the bar after the ex-date</td><td>the fundamentals feed</td></tr>
+          <tr><td><b>Macro, as names</b></td><td>TLT, HYG, LQD, UUP, GLD, USO, VIXY added to the core universe</td><td>no feature change; the attention layer does the rest</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 id="evaluation">8. Evaluation</h2>
     <h3 id="live">Live scoring</h3>
     <p>Every forecast is scored when its bar resolves: pinball loss on the raw quantiles, a hit if the median's sign matched the realized sign, coverage of the calibrated band, and paper profit if a position was taken. Three loss figures are shown side by side and mean different things: train pinball is in-sample over the replay; held-out pinball is the 5% slice the trainer never samples; live pinball is out of sample on forecasts made before their labels existed and is the only one that speaks to edge.</p>
 
     <h3 id="backtest">Walk-forward backtest</h3>
     <p>Because live labels accrue only while the market is open, a live record takes weeks. The backtest compresses that into a weekend by replaying the history in the replay with a fresh network of the live preset, day by day in time order. On day <var>D</var> it forecasts every window of the day before it has trained on any label from the day; the live policy's gates and sizing decide; the realized hour-ahead returns score the calls; and only then does the network train on day <var>D</var>, with the online budget plus the idle trainer's passes over everything seen so far. The first ten days are training only; signals wait for the trust rule; calibration and per-name records lag by one horizon. The procedure is therefore out of sample by construction and reproduces the live regimen including its adaptation.</p>
+    <div class="fig">
+      <svg viewBox="0 0 980 200" role="img" aria-label="Walk-forward procedure: for each day D, forecast every window before training on the day, decide with the live gates, score with realised returns, then train on day D with the online budget plus night passes over all history so far">
+        <text class="lbl b" x="12" y="22">For each trading day D in the replay, after `warm_days` of training only</text>
+        <rect class="bx hot" x="12" y="40" width="200" height="64" rx="8"/><text class="lbl b" x="112" y="64" text-anchor="middle">1. Forecast day D</text><text class="lbl m" x="112" y="82" text-anchor="middle">every window, no label of D seen</text><text class="lbl m" x="112" y="96" text-anchor="middle">fresh net of the live preset</text>
+        <rect class="bx" x="252" y="40" width="200" height="64" rx="8"/><text class="lbl b" x="352" y="64" text-anchor="middle">2. Decide</text><text class="lbl m" x="352" y="82" text-anchor="middle">the live gates and sizing</text><text class="lbl m" x="352" y="96" text-anchor="middle">trust rule, records lag by 12 bars</text>
+        <rect class="bx" x="492" y="40" width="200" height="64" rx="8"/><text class="lbl b" x="592" y="64" text-anchor="middle">3. Score</text><text class="lbl m" x="592" y="82" text-anchor="middle">realised y: pinball, hit, coverage</text><text class="lbl m" x="592" y="96" text-anchor="middle">book return per bar, gross ≤ 1</text>
+        <rect class="bx hot" x="732" y="40" width="236" height="64" rx="8"/><text class="lbl b" x="850" y="64" text-anchor="middle">4. Train on D</text><text class="lbl m" x="850" y="82" text-anchor="middle">2 steps per label + night passes</text><text class="lbl m" x="850" y="96" text-anchor="middle">over everything up to D</text>
+        <path class="ar" d="M212 72H250"/><path class="ar" d="M452 72H490"/><path class="ar" d="M692 72H730"/>
+        <path class="ar" d="M850 104V140H112V106"/><text class="lbl m" x="481" y="132" text-anchor="middle">next day; the time budget shrinks step 4 uniformly so the run ends within the weekend</text>
+        <text class="lbl m" x="12" y="170">Day return = mean over bars of (Σ w·y − c·Σ|w|); curve = running sum; compared with an always-long equal-weight book. Report: per day and per name.</text>
+        <text class="lbl m" x="12" y="190">Live training waits for the run; the net is sized to free memory; the run stops itself under the memory floor.</text>
+      </svg>
+      <div class="cap">Figure 7. The walk-forward procedure. Nothing in step 1 can see anything from step 4 of the same day.</div>
+    </div>
     <p>Book accounting is honest about capital. Per bar the signals form a one-hour portfolio with gross weight capped at one; the bar's return is Σ<sub>i</sub> <var>w</var><sub>i</sub><var>y</var><sub>i</sub> − <var>c</var> Σ<sub>i</sub> |<var>w</var><sub>i</sub>|; a day's return is the mean over its bars, because capital can fund only one hour at a time; the curve is the running sum. The report gives per-day pinball, hit rate, coverage, signals, gross and net return, an equity curve against an always-long equal-weight book, and the best and worst names. A time budget shrinks the per-day training uniformly so a run always finishes within the weekend, and the report records what it used.</p>
-    <div class="callout"><b>Results.</b> As of this version no complete run exists; two attempts on the reference machine were interrupted by a universe rebuild and by the memory failure described in Section 8, and the first full run is scheduled for the weekend of October 11, 2026. The authors are not willing to report numbers from partial runs. The paper book's live record to date has been negative, which is consistent with the literature's finding that documented intraday effects are small, and is the motivation for the work in Section 10.</div>
+    <div class="callout"><b>Results.</b> As of this version no complete run exists; two attempts on the reference machine were interrupted by a universe rebuild and by the memory failure described in Section 9, and the first full run is scheduled for the weekend of October 11, 2026. The authors are not willing to report numbers from partial runs. The paper book's live record to date has been negative, which is consistent with the literature's finding that documented intraday effects are small, and is the motivation for the work in Sections 7 and 11.</div>
 
     <h2 id="system">8. System design</h2>
     <p>Flint is one asyncio process: a bar clock, the forecasting path, the four training regimes, and periodic loops for market status, signals, the radar, news, checkpoints, the brief, the portfolio, deep backfill, idle training, the universe refresh and the backtest. A FastAPI server exposes the state as JSON and streams it over one websocket to a dashboard of plain HTML and JavaScript with no build step. The checkpoint is written atomically every five minutes; the replay, tens of gigabytes when full, is written uncompressed as one memory-mapped array per field at most every 30 minutes and at shutdown, swapped into place whole so a crash leaves the previous directory intact.</p>
@@ -293,7 +491,7 @@
       <li><b>Selection in the backtest universe.</b> Names promoted because they moved have their past windows filled by the re-page, so a backtest over the current universe includes names chosen with knowledge of their later behavior. A clean test freezes the universe at each day's date; this is not yet done.</li>
       <li><b>Feature state at ingest.</b> Paged windows are standardized with the normalization state at the time of paging, not the state that prevailed historically.</li>
       <li><b>Execution.</b> Paper fills are marked at the quoted spread with no market impact, no partial fills and no queue position; the extended-hours sessions in particular are thinner than the quotes suggest.</li>
-      <li><b>One machine, one process.</b> The design trades fault isolation for simplicity; a bug in any loop can take the whole engine down, which is why the invariants in Section 8 carry tests.</li>
+      <li><b>One machine, one process.</b> The design trades fault isolation for simplicity; a bug in any loop can take the whole engine down, which is why the invariants in Section 9 carry tests.</li>
       <li><b>No causal claims.</b> Nothing here identifies why a forecast works when it does; the attention map and the regime gate are diagnostics, not explanations.</li>
     </ul>
 
@@ -301,6 +499,7 @@
     <p>Ranked by expected effect per unit of effort, each item is a hypothesis for the walk-forward backtest.</p>
     <ol>
       <li><b>A market-relative target.</b> Over one hour the index dominates every name's move and nothing in a five-minute history predicts the index. Nonlinear models beat linear ones mainly when the target is the market-relative abnormal return<sup class="r"><a href="#r4">4</a></sup>; the label becomes the stock's return minus beta times the index's, with a bearish basket hedged by an index put.</li>
+      <li><b>The pricing-model pass of Section 7</b>, in its stated order: implied-volatility horizon band, variance risk premium and the term-structure event flag; range-based volatility and a HAR forecast; theta, the gamma breakeven, square-root impact and the Amihud gate in the policy.</li>
       <li><b>Calendar and daily-lag features.</b> A name's return in a given half-hour continues at the same half-hour on following days for about forty days, strongest at the open and close<sup class="r"><a href="#r1">1</a></sup>; the first half-hour's index return predicts the last half-hour's<sup class="r"><a href="#r2">2</a></sup>; overnight and intraday components carry opposite, persistent signals<sup class="r"><a href="#r3">3</a></sup>. None are features yet.</li>
       <li><b>An ensemble of mid-size networks.</b> Tens of millions of parameters on some thousands of windows is heavily over-parameterized, as the overfit guard's early stops confirm. Two 4XL networks fit the machine, and aggregating ensemble members' distributions improves accuracy and calibration<sup class="r"><a href="#r8">8</a></sup>.</li>
       <li><b>Meta-labeling.</b> A second, small classifier trained on whether acting on each primary forecast paid after costs, sizing by its probability<sup class="r"><a href="#r5">5</a>,<a href="#r6">6</a></sup>: the evaluable form of a decision layer, trainable online from the outcome records Flint already keeps.</li>
@@ -347,7 +546,7 @@
         </tbody>
       </table>
     </div>
-    <p class="byline">Revision history: v0.5.13, October 10, 2026, first publication.</p>
+    <p class="byline">Revision history: v0.5.13, October 10, 2026, first publication; the same day, figures 1 to 7, the feature table and the pricing-model audit (Section 7) added.</p>
   </article>
 </div>
 
