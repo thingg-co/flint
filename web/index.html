@@ -196,6 +196,7 @@
   <div class="row pcards">
     <section class="panel"><h3>Days <small>newest first, last 30</small></h3><div class="ptable" id="bt-days"></div></section>
     <section class="panel"><h3>Names <small>best and worst by net bps</small></h3><div class="ptable" id="bt-names"></div></section>
+    <section class="panel"><h3>Proposed gates <small id="sw-meta">the policy's gates swept over the run's stored forecasts: tuned on the first half of the days, confirmed on the second; never applied by itself</small></h3><div class="ptable" id="sw-table"></div></section>
   </div>
   <div class="why">Out of sample by construction: a fresh net of the live preset forecasts each day before it trains on that day, the live policy's gates and sizing decide, and the realised hour-ahead returns score it. It runs on the weekend GPU over the timestamped replay; the model that trades is untouched.</div>
 </main>

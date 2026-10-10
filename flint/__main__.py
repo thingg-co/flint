@@ -260,6 +260,51 @@ def _replay() -> None:
         sys.exit(0)
 
 
+def _sweep() -> None:
+    """Sweep the policy's gates over the forecasts the last backtest stored: `flint sweep
+    [path.npz] [--cost BPS]`. Seconds on the CPU; writes state/sweep.json and prints the
+    proposal, which is never applied by itself."""
+    import json
+    import sys
+    from pathlib import Path
+
+    from .config import Config
+    from .engine import clean
+    from .sweep import load_forecasts, run_sweep
+    cfg = Config()
+    state = Path(cfg.state_dir)
+    argv = sys.argv[2:]
+    cost = float(cfg.backtest_cost_bps)
+    path = None
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--cost" and i + 1 < len(argv):
+            cost = float(argv[i + 1]); i += 2; continue
+        path = argv[i]; i += 1
+    if not path:
+        cands = sorted(state.glob("backtest_forecasts_*.npz"), key=lambda p: p.stat().st_mtime)
+        if not cands:
+            print(f"no stored forecasts under {state}; run a backtest first")
+            raise SystemExit(1)
+        path = str(cands[-1])
+    fc = load_forecasts(path)
+    print(f"sweeping the gates over {len(fc['day_of'])} forecasts, {int(fc['day_of'].max()) + 1} days ({fc['target']} target), cost {cost:g} bps")
+    res = run_sweep(fc, cfg, cost, progress=lambda n: print(f"\r  {n} settings tried   ", end="", flush=True))
+    print()
+    if res.get("error"):
+        print(res["error"]); raise SystemExit(1)
+    cur, prop = res["current"], res["proposal"]
+    f = lambda r: f"{r['net_bps_per_day']:+.1f} bps/day over {r['days']} days, {r['signals']} signals, Sharpe {r['sharpe'] if r['sharpe'] is not None else '·'}"  # noqa: E731
+    print(f"current gates: tune {f(cur['tune'])}; confirm {f(cur['confirm'])}")
+    if prop:
+        print("proposal: " + ", ".join(f"{k} {cur['knobs'][k]} -> {v}" for k, v in prop["knobs"].items()))
+        print(f"          tune {f(prop['tune'])}; confirm {f(prop['confirm'])}")
+    print(res["why"])
+    out = state / "sweep.json"
+    out.write_text(json.dumps(clean(res)))
+    print(f"report saved to {out}")
+
+
 def _backtest() -> None:
     """Walk-forward backtest over the saved replay without starting the server, on the cached
     preset: `flint backtest [--days N] [--hours H] [--cost BPS] [--warm N] [--night EPOCHS]
@@ -434,6 +479,9 @@ def main() -> None:
         return
     if len(sys.argv) > 1 and sys.argv[1] == "replay":
         _replay()
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "sweep":
+        _sweep()
         return
     if len(sys.argv) > 1 and sys.argv[1] == "backtest":
         _backtest()

@@ -279,6 +279,13 @@ unless Flint is already up.
   `FLINT_*` environment the launcher uses, or the replay size and universe will be the defaults.
 - The Backtest tab shows the last walk-forward report and live progress; "Run now" queues one. The
   loop logs a one-line summary to the trace when it finishes; `state/backtest.json` holds the report.
+  Each run also stores every raw forecast it made (`state/backtest_forecasts_<target>.npz`) and then
+  runs the policy sweep (`flint/sweep.py`, `flint sweep` by hand): `replay_policy` is the backtest's
+  scoring loop vectorized over names and reproduces the run's net to the bps (`tests/test_sweep.py`
+  checks this on both targets, so change `backtest.decide`, the scoring loop and `replay_policy`
+  together), and `run_sweep` is a coordinate descent over seven gates on the first half of the
+  scored days, confirmed on the second. The result is a proposal on the Backtest tab and in
+  `state/sweep.json`; nothing applies it, the operator changes the live controls or not.
 - Tests: `uv run pytest -q tests`. They cover the memory guard, the paper book's defined-risk
   rules, the policy gates in `_suggest`, checkpoint mismatch handling, bar building, features and
   source failover, key saving and live application, the eager fallback when a compiled step

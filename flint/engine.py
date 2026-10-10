@@ -367,6 +367,12 @@ class Engine:
                 self.backtest = json.load(f)
         except (OSError, ValueError):
             pass
+        self.sweep: dict = {}                     # the last policy sweep over a backtest's stored forecasts (state/sweep.json)
+        try:
+            with open(os.path.join(self.cfg.state_dir, "sweep.json")) as f:
+                self.sweep = json.load(f)
+        except (OSError, ValueError):
+            pass
         self.brief: dict = {"text": None, "takes": {}, "models": {}, "t": None, "generating": False, "error": None}
         self.autotune_info = None
         self._skimming = False
@@ -1088,8 +1094,9 @@ class Engine:
         return {"progress": pr, "ran_at": b.get("ran_at"), "elapsed_s": b.get("elapsed_s"), "stopped": b.get("stopped"),
                 "error": b.get("error"), "config": b.get("config"),
                 "totals": pr.get("totals") if pr.get("running") else b.get("totals"),
-                "days": (b.get("days") or [])[-260:],
-                "best": [dict(sym=k, **v) for k, v in syms[-8:][::-1]], "worst": [dict(sym=k, **v) for k, v in syms[:8]]}
+                "days": (b.get("days") or [])[-260:], "baseline": b.get("baseline"),
+                "best": [dict(sym=k, **v) for k, v in syms[-8:][::-1]], "worst": [dict(sym=k, **v) for k, v in syms[:8]],
+                "sweep": self.sweep or None}
 
     def _backtest_due(self, now: datetime | None = None) -> bool:
         """Once per weekend (Saturday or Sunday ET with the market closed), or on request."""
@@ -1250,6 +1257,50 @@ class Engine:
                                      + ((lambda b: f"; the {b.get('target')} target made net {b.get('totals', {}).get('net_bps', 0):+.0f} bps "
                                                    f"(Sharpe {b.get('totals', {}).get('sharpe') if b.get('totals', {}).get('sharpe') is not None else '·'})")
                                         (res["baseline"]) if res.get("baseline") else ""), "act")
+        path = (res.get("config") or {}).get("forecasts")
+        if path and not res.get("error"):
+            # The policy sweep over the forecasts this run stored: seconds of arithmetic on the
+            # CPU, so it follows every run; the result is a proposal on the dashboard, never applied.
+            try:
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(None, self._sweep_job, str(path)).add_done_callback(self._finish_sweep)
+            except RuntimeError:                                    # no loop (a test calling this directly)
+                self._finish_sweep_result(self._sweep_job(str(path)))
+
+    def _sweep_job(self, path: str) -> dict:
+        from .sweep import load_forecasts, run_sweep
+        return run_sweep(load_forecasts(path), copy.copy(self.cfg), float(self.cfg.backtest_cost_bps))
+
+    def _finish_sweep(self, f) -> None:
+        try:
+            res = f.result()
+        except Exception as e:  # noqa: BLE001
+            log.error("policy sweep failed", exc_info=e)
+            self.trace.emit("learn", f"policy sweep failed: {type(e).__name__}: {str(e)[:120]}", "error")
+            return
+        self._finish_sweep_result(res)
+
+    def _finish_sweep_result(self, res: dict) -> None:
+        self.sweep = res
+        try:
+            tmp = os.path.join(self.cfg.state_dir, "sweep.json.tmp")
+            with open(tmp, "w") as f:
+                json.dump(clean(res), f)
+            os.replace(tmp, os.path.join(self.cfg.state_dir, "sweep.json"))
+        except OSError as e:
+            log.warning("could not save sweep.json: %s", e)
+        if res.get("error"):
+            self.trace.emit("learn", f"policy sweep: {res['error']}", "warn")
+        else:
+            cur, prop = res.get("current") or {}, res.get("proposal")
+            fmt = lambda r: f"{(r or {}).get('net_bps_per_day', 0):+.1f}/day"  # noqa: E731
+            text = (f"policy sweep over {res.get('days')} days ({res.get('evaluations')} settings in {res.get('elapsed_s', 0):.0f} s): "
+                    + (f"proposes {', '.join(f'{k} {v}' for k, v in prop['knobs'].items())}; tune {fmt(prop['tune'])} vs "
+                       f"{fmt(cur.get('tune'))} now, confirm {fmt(prop['confirm'])} vs {fmt(cur.get('confirm'))}; "
+                       + ("worth a look on the Backtest tab" if res.get("accepted") else "not confirmed, so not proposed")
+                       if prop else "no setting beat the current gates"))
+            self.trace.emit("learn", text, "act" if res.get("accepted") else "info")
+        self._publish({"type": "backtest", "backtest": self.backtest_summary()})
 
     async def _idle_train_loop(self) -> None:
         """While the market is closed, train on the replay buffer instead of leaving the GPU

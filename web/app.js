@@ -1477,6 +1477,24 @@ function renderBacktest() {
       names.map(x => `<div class="prow"><span class="psym">${esc(x.sym)}</span>${cell(fmtBps(x.net_bps), x.net_bps >= 0 ? "up" : "down")}${cell(x.signals)}${cell(fmtPct(x.hit))}</div>`).join("")
     : "";
   paintBacktest(b.days || [], (b.baseline && b.baseline.days) || []);
+  renderSweep(b.sweep);
+}
+
+function renderSweep(sw) {
+  const root = $("#sw-table"), meta = $("#sw-meta"); if (!root) return;
+  const cell = (v, cls) => `<span class="num ${cls || ""}">${v}</span>`;
+  if (!sw || sw.error) { root.innerHTML = ""; if (meta && sw && sw.error) meta.textContent = sw.error; return; }
+  const cur = sw.current || {}, prop = sw.proposal, pd = v => v != null ? fmtBps(v) + "/day" : "·";
+  const half = r => r ? `${pd(r.net_bps_per_day)} · ${r.signals} signals · hit ${fmtPct(r.hit_rate)}` : "·";
+  if (meta) meta.textContent = `${sw.days} days, split at day ${sw.split_day}; ${sw.evaluations} settings tried · ${sw.accepted ? "proposal confirmed on the second half" : (prop ? "proposal failed the second half: not recommended" : "no setting beat the current gates")} · ${esc(sw.target || "")} target, cost ${sw.cost_bps} bps`;
+  const rows = [`<div class="prow phead"><span>gate</span>${cell("now")}${cell("proposed")}</div>`];
+  Object.keys(cur.knobs || {}).forEach(k => {
+    const v = cur.knobs[k], pv = prop && prop.knobs && k in prop.knobs ? prop.knobs[k] : null;
+    rows.push(`<div class="prow"><span>${esc(k.replace(/_/g, " "))}</span>${cell(v)}${cell(pv != null ? pv : "—", pv != null ? (sw.accepted ? "up" : "") : "")}</div>`);
+  });
+  rows.push(`<div class="prow"><span>tuning half</span>${cell(half(cur.tune))}${cell(prop ? half(prop.tune) : "·")}</div>`);
+  rows.push(`<div class="prow"><span>confirming half</span>${cell(half(cur.confirm))}${cell(prop ? half(prop.confirm) : "·", prop && sw.accepted ? "up" : prop ? "down" : "")}</div>`);
+  root.innerHTML = rows.join("") + (sw.why ? `<div class="snote">${esc(sw.why)}</div>` : "");
 }
 
 function paintBacktest(days, baseline) {
