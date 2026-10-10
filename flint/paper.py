@@ -75,7 +75,7 @@ class PaperBook:
 
     def rebalance(self, targets: dict, prices: dict, ts: float, quotes: dict | None = None,
                   put_quotes: dict | None = None, straddle_targets: dict | None = None,
-                  straddle_quotes: dict | None = None) -> None:
+                  straddle_quotes: dict | None = None, uncapped: set | None = None) -> None:
         """targets: symbol -> desired signed weight (side * size). A negative weight is a short,
         opened as a delta-equivalent long put from put_quotes[sym] (fetched from a live chain).
         straddle_targets: symbol -> premium budget as a fraction of equity (0/absent = no signal);
@@ -93,8 +93,12 @@ class PaperBook:
             self.started = ts
         self._settle_expired(prices, ts)
         eq = self.equity(prices, ts)
-        tw = {s: max(-self.max_weight, min(self.max_weight, float(w))) for s, w in targets.items()}
-        gross = sum(abs(w) for w in tw.values())
+        # `uncapped` names (the index hedge) take their weight as given, stay out of the leverage
+        # scale and skip the per-position premium cap: a protective put's delta notional is not
+        # capital at risk beyond its premium, and a hedge that stops at the cap is not a hedge.
+        uncapped = uncapped or set()
+        tw = {s: (float(w) if s in uncapped else max(-self.max_weight, min(self.max_weight, float(w)))) for s, w in targets.items()}
+        gross = sum(abs(w) for s, w in tw.items() if s not in uncapped)
         scale = (1.0 / gross) if gross > 1 else 1.0        # no leverage
         min_notional = max(200.0, eq * self.min_trade_frac)
         for s, w in tw.items():
@@ -114,7 +118,7 @@ class PaperBook:
                 if cur > 0:                                 # close any long stock first
                     self._fill(s, cur, -cur, self._exec_price(s, -cur, ref, quotes), ts)
                 if s not in self.puts and s in put_quotes:
-                    self._open_put(s, eq * abs(w) * scale, ref, put_quotes[s], ts, eq)
+                    self._open_put(s, eq * abs(w) * scale, ref, put_quotes[s], ts, None if s in uncapped else eq)
                 # already holding a put -> hold it (marked); wanted-short-but-no-chain -> stay flat
         for s, frac in straddle_targets.items():
             if frac > 0 and s not in self.straddles and s in straddle_quotes:

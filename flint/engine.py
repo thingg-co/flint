@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .autotune import PRESETS, free_memory_gb
-from .backtest import run_backtest
+from .backtest import combine_reports, run_backtest
 from .bars import Bar, BarBuilder
 from .features import FEATURES, N_FEATURES, FeatureBuilder
 from .feed import Tick
@@ -31,6 +31,7 @@ from .paper import PaperBook
 from .schwab import SchwabAuth
 from .etrade import ETradeAuth
 from .signals import FundamentalsProvider, SignalHub
+from .target import hedge_targets, index_columns
 from .sources import AlphaVantage, SourceManager, asset_class
 from .trace import Trace
 from . import clock
@@ -48,6 +49,8 @@ TUNABLE = {"score_threshold": float, "prob_margin": float, "cost_bps": float, "m
            "min_price": float, "option_max_frac": float,
            "backtest_weekends": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
            "backtest_hours": float, "backtest_days": int, "backtest_cost_bps": float, "backtest_night_epochs": float,
+           "backtest_target": lambda v: str(v).lower() if str(v).lower() in ("absolute", "relative", "both") else "both",
+           "hedge_index": lambda v: str(v).lower() in ("1", "true", "yes", "on"), "hedge_min": float,
            "overfit_patience": int, "memory_floor_gb": float,
            "universe_refresh": lambda v: str(v).lower() in ("1", "true", "yes", "on"), "interesting_count": int,
            "size_by_coverage": lambda v: str(v).lower() in ("1", "true", "yes", "on")}
@@ -599,7 +602,15 @@ class Engine:
                 "pending": len(self.pending), "learning": self.learning_enabled, "subscribers": len(self.subs),
                 "market_status": self.market_status,
                 "stalled": bool(getattr(self, "_stalled", False)),
-                "last_bar_age": round(time.time() - getattr(self, "_last_row_at", time.time()))}
+                "last_bar_age": round(time.time() - getattr(self, "_last_row_at", time.time())),
+                "target": self.target_info()}
+
+    def target_info(self) -> dict:
+        """What the net forecasts: each name's return, or its return relative to the index."""
+        L = self.learner
+        return {"mode": L.target_mode, "configured": str(self.cfg.target), "index": [self.symbols[c] for c in L.cols],
+                "configured_index": [s.strip().upper() for s in str(self.cfg.index_symbols).split(",") if s.strip()],
+                "hedge": bool(L.cols and self.cfg.hedge_index)}
 
     def controls(self) -> dict:
         return {k: getattr(self.cfg, k) for k in TUNABLE} | {"learning": self.learning_enabled, "burry": self.burry_enabled, "brief_enabled": self.brief_enabled}
@@ -1126,12 +1137,21 @@ class Engine:
             cfg_bt.d_model, cfg_bt.dilations, cfg_bt.n_experts, cfg_bt.n_heads = int(d_model), tuple(dil), int(n_exp), int(n_heads)
             preset = str(name) + ("" if d_model == cfg.d_model else f" (sized to {free:.0f} GB free; live is "
                                                                      f"{(self.autotune_info or {}).get('preset') or cfg.d_model})")
+            variants = {"absolute": ["absolute"], "relative": ["relative"],
+                        "both": ["absolute", "relative"]}.get(str(cfg.backtest_target).lower(), ["absolute"])
+            if "relative" in variants and not index_columns(self.symbols, cfg.index_symbols):
+                self.trace.emit("learn", f"backtest: none of {cfg.index_symbols} is modeled, so the relative target cannot run; "
+                                         f"absolute only", "warn")
+                variants = ["absolute"]
+            hours_each = float(cfg.backtest_hours) / len(variants) if float(cfg.backtest_hours) > 0 else 0.0
             self._backtesting = True
             started = time.time()
-            self.backtest_progress = {"running": True, "day": 0, "days": 0, "started": started}
+            self.backtest_progress = {"running": True, "day": 0, "days": 0, "started": started,
+                                      "variant": variants[0], "variants": variants}
             self.trace.emit("learn", f"backtest: walking {n} replay windows day by day with a fresh {preset} "
                                      f"(budget {cfg.backtest_hours:g} h, {cfg.backtest_night_epochs:g} night epochs/day, "
-                                     f"cost {cfg.backtest_cost_bps:g} bps); live training waits", "act")
+                                     f"cost {cfg.backtest_cost_bps:g} bps; target{'s' if len(variants) > 1 else ''} "
+                                     f"{' then '.join(variants)}); live training waits", "act")
             self._publish({"type": "backtest", "backtest": self.backtest_summary()})
 
             def should_stop() -> bool:
@@ -1145,8 +1165,30 @@ class Engine:
                 return False
 
             def prog(day: int, total: int, totals: dict) -> None:
-                self.backtest_progress = {"running": True, "day": day, "days": total, "started": started, "totals": totals}
+                self.backtest_progress = {**self.backtest_progress, "running": True, "day": day, "days": total, "started": started,
+                                          "totals": totals}
                 loop.call_soon_threadsafe(self._publish, {"type": "backtest", "backtest": self.backtest_summary()})
+
+            def job() -> dict:
+                # Runs on the worker thread: the variants back to back on one net's worth of memory,
+                # each on its share of the budget; the second report carries the first as its baseline.
+                reports: list[dict] = []
+                for vi, variant in enumerate(variants):
+                    if self._backtest_stop:
+                        break
+                    self.backtest_progress = {"running": True, "day": 0, "days": 0, "started": started,
+                                              "variant": variant, "variants": variants}
+                    if len(variants) > 1:
+                        loop.call_soon_threadsafe(self.trace.emit, "learn",
+                                                  f"backtest {vi + 1}/{len(variants)}: the {variant} target", "info")
+                    reports.append(run_backtest(
+                        cfg_bt, L.rx[:n], L.ry[:n], L.rmask[:n], L.rt[:n], device=dev,
+                        symbols=list(self.symbols), progress=prog, should_stop=should_stop,
+                        hours=hours_each, days=int(cfg.backtest_days), warm_days=int(cfg.backtest_warm_days),
+                        cost_bps=float(cfg.backtest_cost_bps), preset=preset, night_epochs=float(cfg.backtest_night_epochs),
+                        target=variant, index_symbols=str(cfg.index_symbols),
+                        beta_windows=int(cfg.beta_windows), beta_shrink=float(cfg.beta_shrink)))
+                return combine_reports(reports)
 
             def finish(f: asyncio.Future) -> None:
                 # Runs on the event loop when the worker thread exits, whether or not the loop task
@@ -1165,11 +1207,7 @@ class Engine:
                     self._finish_backtest(res)
                 self._publish({"type": "backtest", "backtest": self.backtest_summary()})
 
-            fut = loop.run_in_executor(None, functools.partial(
-                run_backtest, cfg_bt, L.rx[:n], L.ry[:n], L.rmask[:n], L.rt[:n], device=dev,
-                symbols=list(self.symbols), progress=prog, should_stop=should_stop,
-                hours=float(cfg.backtest_hours), days=int(cfg.backtest_days), warm_days=int(cfg.backtest_warm_days),
-                cost_bps=float(cfg.backtest_cost_bps), preset=preset, night_epochs=float(cfg.backtest_night_epochs)))
+            fut = loop.run_in_executor(None, job)
             fut.add_done_callback(finish)
             try:
                 await asyncio.shield(fut)
@@ -1199,7 +1237,11 @@ class Engine:
                                      f"{t.get('days', 0)} days, net {t.get('net_bps', 0):+.0f} bps "
                                      f"({t.get('net_bps_per_day', 0):+.1f}/day, Sharpe {t.get('sharpe') if t.get('sharpe') is not None else '·'}), "
                                      f"hit {((t.get('hit_rate') or 0) * 100):.0f}%, coverage {((t.get('coverage') or 0) * 100):.0f}%, "
-                                     f"{t.get('signals', 0)} signals; always-long {t.get('long_bps', 0):+.0f} bps", "act")
+                                     f"{t.get('signals', 0)} signals; always-long {t.get('long_bps', 0):+.0f} bps"
+                                     + (f" [{(res.get('config') or {}).get('target')} target]" if (res.get('config') or {}).get('target') else "")
+                                     + ((lambda b: f"; the {b.get('target')} target made net {b.get('totals', {}).get('net_bps', 0):+.0f} bps "
+                                                   f"(Sharpe {b.get('totals', {}).get('sharpe') if b.get('totals', {}).get('sharpe') is not None else '·'})")
+                                        (res["baseline"]) if res.get("baseline") else ""), "act")
 
     async def _idle_train_loop(self) -> None:
         """While the market is closed, train on the replay buffer instead of leaving the GPU
@@ -1408,7 +1450,7 @@ class Engine:
             metrics["pnl_by_symbol"] = dict(m.pnl_by_symbol)
             metrics["calib_v"] = self.CALIB_V
             self.learner.save(self.cfg.state_dir, extra={"norm": self.features.norm.state(), "metrics": metrics,
-                                                          "paper": self.paper.to_state(),
+                                                          "paper": self.paper.to_state(), "target": self.learner.target_mode,
                                                           "outcomes": {s: list(d) for s, d in self.outcomes.items() if d}},
                               force_replay=final)
             tmp = os.path.join(self.cfg.state_dir, "universe.json.tmp")
@@ -1493,7 +1535,9 @@ class Engine:
             self.gate = [float(g) for g in pred.gate]
             self.latest = {}
             for i, s in enumerate(self.symbols):
-                self.latest[s] = {**sugg[s], "price": float(closes[i]), "ts": ts}
+                self.latest[s] = {**sugg[s], "price": float(closes[i]), "ts": ts,
+                                  **({"beta": {self.symbols[c]: round(float(self.learner.beta[i, j]), 2)
+                                               for j, c in enumerate(self.learner.cols)}} if self.learner.cols else {})}
             # trade only once the model is trusted AND has shown real directional skill (not just tenure)
             tradeable = self.metrics.trusted and (self.metrics.hit_ema or 0.0) > cfg.min_hit_rate
             targets = {s: (self.latest[s]["side"] * self.latest[s]["size"] if tradeable else 0.0) for s in self.symbols}
@@ -1508,6 +1552,22 @@ class Engine:
                 if t != 0.0 and prev == 0.0:
                     self._held_since[s] = self.bar_index
                 self._last_target[s] = t
+            # The relative target says "beats its indices", so the book holds, per index, the weight
+            # that cancels the basket's loading on it: a put under a long basket, index stock over a
+            # bearish one. An index name is a hedge instrument here, never a signal of its own.
+            hedge_syms: set[str] = set()
+            if self.learner.cols and cfg.hedge_index:
+                hs = hedge_targets(targets, self.learner.beta, self.symbols, self.learner.cols) if tradeable else {}
+                for c in self.learner.cols:
+                    isym = self.symbols[c]
+                    h = hs.get(isym, 0.0)
+                    h = 0.0 if abs(h) < float(cfg.hedge_min) else h
+                    targets[isym] = self._last_target[isym] = h
+                    hedge_syms.add(isym)
+                    self.latest[isym].update({"hedge": round(h, 4), "side": (h > 0) - (h < 0), "size": round(abs(h), 3),
+                                              "action": "HEDGE" if h else "HOLD",
+                                              "why": (f"index hedge: {h:+.0%} of the book cancels the basket's loading on {isym}, as "
+                                                      f"{'index stock' if h > 0 else 'an index put'}") if h else "index hedge: nothing to cancel"})
             put_quotes = {}                                    # a short is opened as a long put (bounded loss), priced off a live chain
             need = [s for s in self.symbols if targets[s] < 0 and s not in self.paper.puts]
             if need and self.schwab_auth.authenticated:
@@ -1542,7 +1602,7 @@ class Engine:
                                  quotes={s: {"bid": self.prices[s].get("bid"), "ask": self.prices[s].get("ask")}
                                          for s in self.symbols},
                                  put_quotes=put_quotes,
-                                 straddle_targets=straddle_targets, straddle_quotes=straddle_quotes)
+                                 straddle_targets=straddle_targets, straddle_quotes=straddle_quotes, uncapped=hedge_syms)
             self.trace.emit("model", f"bar #{self.bar_index}: regime gate " + " ".join(
                 f"E{k + 1}={g:.2f}" for k, g in enumerate(self.gate)) +
                 f" | band scale x{self.metrics.band_scale:.2f}, P(up) temper {self.metrics.p_scale:.2f}")
@@ -1575,9 +1635,9 @@ class Engine:
                 y = (np.log(closes / pp.closes) * 1e4).astype(np.float32)
             y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)   # a 0-seeded / history-less symbol yields no return, not a NaN that poisons the whole batch
             mask = (pp.real & real_now).astype(np.float32) if real_now is not None else None   # train only on symbols that really traded at both ends
-            self.learner.add(pp.x, y, mask, ts=pp.ts)
+            self.learner.add(pp.x, y, mask, ts=pp.ts)       # the replay keeps the absolute label
             if pp.pred is not None:
-                self._score(pp, y)
+                self._score(pp, self.learner.target(y))     # the forecast was made on the configured target
             n += 1
         self.metrics.labels = self.learner.labels
         self.metrics.trusted = self.metrics.live_labels >= self.cfg.min_labels

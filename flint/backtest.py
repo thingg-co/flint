@@ -29,6 +29,7 @@ import torch
 
 from .autotune import autocast
 from .model import FlintNet, flint_loss
+from .target import estimate_beta, index_columns, prior_beta, relative
 
 log = logging.getLogger(__name__)
 NY = ZoneInfo("America/New_York")
@@ -74,7 +75,8 @@ def decide(cfg, q, p_raw, p_down_raw, band_scale, p_scale, coverage_ema, judged,
 def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, progress=None, should_stop=None,
                  hours: float = 0.0, days: int = 0, warm_days: int = 10, cost_bps: float | None = None,
                  steps_per_day: int = 0, compile_: bool | None = None, hooks: dict | None = None,
-                 preset: str = "", night_epochs: float = 0.0) -> dict:
+                 preset: str = "", night_epochs: float = 0.0, target: str = "absolute", index_symbols: str = "SPY",
+                 beta_windows: int = 6000, beta_shrink: float = 400.0) -> dict:
     """See the module docstring. Each day trains the live online budget (steps_per_label per
     bar) plus `night_epochs` passes over everything seen so far, the way the idle trainer does
     each closed session; `hours` > 0 caps the run by shrinking that budget to fit the remaining
@@ -85,6 +87,13 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
     cost = float(cfg.cost_bps if cost_bps is None else cost_bps)
     n_assets, n_feat = rx.shape[1], rx.shape[-1]
     symbols = list(symbols or [f"#{i}" for i in range(n_assets)])
+    # The target: with "relative" every label the net trains on and is scored against is the
+    # name's return minus its loadings on the modeled indices' returns, loadings refit each day
+    # from the days already seen; the indices' own weights are the hedges that cancel the
+    # basket's loadings, so the book's return is the basket's relative return, as it would be live.
+    icols = index_columns(symbols, index_symbols) if str(target).lower() == "relative" else []
+    target = "relative" if icols else ("absolute (no index modeled)" if str(target).lower() == "relative" else "absolute")
+    beta = prior_beta(n_assets, icols)
     keyed = np.flatnonzero(rt > 0)
     keyed = keyed[np.argsort(rt[keyed], kind="stable")]
     groups: list[tuple[str, np.ndarray]] = []
@@ -128,7 +137,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
             uniform = seen[rng.integers(0, len(seen), batch - k_recent)]
             idx = np.concatenate([recent, uniform])
             x = torch.from_numpy(rx[idx]).to(dev)
-            y = torch.from_numpy(ry[idx]).to(dev)
+            y = torch.from_numpy(relative(ry[idx], beta, icols)).to(dev)
             mk = torch.from_numpy(rmask[idx]).to(dev)
             if cfg.input_noise > 0:
                 x = x + cfg.input_noise * torch.randn_like(x)
@@ -185,7 +194,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
 
     day_rows: list[dict] = []
     cum = peak = max_dd = 0.0
-    long_cum = 0.0
+    long_cum = unhedged_cum = 0.0
     sym_net = np.zeros(n_assets)
     sym_sig = np.zeros(n_assets, dtype=np.int64)
     sym_hit = np.zeros(n_assets, dtype=np.int64)
@@ -204,11 +213,14 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
             break
         scoring = di >= warm_days
         q_all = up_all = dn_all = None
+        if icols and len(seen) >= 20:                                       # yesterday's labels at the latest: nothing of today
+            beta = estimate_beta(ry[seen], rmask[seen], icols, recent=beta_windows, shrink=beta_shrink)
         if scoring:
             if hooks.get("on_predict"):
                 hooks["on_predict"](di)
             q_all, up_all, dn_all = predict(idx)
-        d = {"signals": 0, "gross": 0.0, "net": 0.0, "hits": 0, "decisions": 0, "pin": 0.0, "pin_n": 0, "inside": 0, "inside_n": 0, "long": 0.0}
+        d = {"signals": 0, "gross": 0.0, "net": 0.0, "hits": 0, "decisions": 0, "pin": 0.0, "pin_n": 0, "inside": 0, "inside_n": 0, "long": 0.0,
+             "unhedged": 0.0}
         for k in range(len(idx)):
             bar_no += 1
             while pending and pending[0][0] + cfg.horizon <= bar_no:
@@ -216,7 +228,8 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
             if not scoring:
                 continue
             row = idx[k]
-            y = ry[row]
+            y_abs = ry[row]
+            y = relative(y_abs, beta, icols)
             mk = rmask[row]
             traded = mk > 0
             tradeable = hit_ema is not None and hit_ema > cfg.min_hit_rate       # the live trust rule
@@ -252,18 +265,26 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                     pc = 1.0 / (1.0 + math.exp(-p_scale * z))
                     p_grads.append((pc - (1.0 if yi > 0 else 0.0)) * z)
             pending.append((bar_no, hits_b, insides, p_grads, per_name))
+            if icols:
+                w[icols] = 0.0
             gross_w = float(np.abs(w).sum())
             if gross_w > 1.0:
                 w /= gross_w                                                    # no leverage, as the paper book
-            ret = float((w * y).sum())
+            unhedged = float((w * y_abs).sum())
+            hedge_gross = 0.0
+            if icols:
+                w[icols] = -(w @ beta)                                          # the index hedges: the basket's return becomes its relative return
+                hedge_gross = float(np.abs(w[icols]).sum())
+            ret = float((w * y_abs).sum())
             fee = cost * float(np.abs(w).sum())
-            d["signals"] += int((w != 0).sum())
+            d["signals"] += int((w != 0).sum()) - (int((w[icols] != 0).sum()) if icols else 0)
             d["gross"] += ret
             d["net"] += ret - fee
-            sym_net += w * y - cost * np.abs(w)
+            d["unhedged"] += unhedged - cost * (float(np.abs(w).sum()) - hedge_gross)
+            sym_net += w * y_abs - cost * np.abs(w)
             sym_sig += (w != 0)
             if traded.any():
-                d["long"] += float(y[traded].mean())                            # a 1/N always-long book, for scale
+                d["long"] += float(y_abs[traded].mean())                        # a 1/N always-long book, for scale
         if stopped:
             break
         # today's labels are known now: train on everything up to and including today
@@ -288,6 +309,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
         if scoring:
             nb = max(1, len(idx))
             daily_net, daily_gross, daily_long = d["net"] / nb, d["gross"] / nb, d["long"] / nb
+            unhedged_cum += d["unhedged"] / nb
             cum += daily_net
             long_cum += daily_long
             peak = max(peak, cum)
@@ -302,21 +324,43 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                              "coverage": (d["inside"] / d["inside_n"]) if d["inside_n"] else None,
                              "gross_bps": daily_gross, "net_bps": daily_net, "cum_net_bps": cum, "long_bps": daily_long,
                              "cum_long_bps": long_cum, "steps": steps, "loss": loss,
+                             "unhedged_bps": d["unhedged"] / nb, "cum_unhedged_bps": unhedged_cum,
                              "band_scale": band_scale, "p_scale": p_scale, "hit_ema": hit_ema})
             if progress:
                 progress(len(day_rows), n_scored, _totals(day_rows, tot, cum, max_dd, long_cum))
 
     totals = _totals(day_rows, tot, cum, max_dd, long_cum)
+    totals["unhedged_bps"] = float(unhedged_cum)
     per_sym = {symbols[i]: {"signals": int(sym_sig[i]), "net_bps": float(sym_net[i]),
                             "hit": (float(sym_hit[i] / sym_dec[i]) if sym_dec[i] else None), "calls": int(sym_dec[i])}
                for i in range(n_assets)}
     return {"ran_at": t0, "elapsed_s": time.time() - t0, "stopped": stopped,
             "config": {"preset": preset, "d_model": cfg.d_model, "params": sum(p.numel() for p in model.parameters()),
                        "cost_bps": cost, "warm_days": warm_days, "hours": hours, "night_epochs": night_epochs,
+                       "target": target, "index": [symbols[c] for c in icols] if icols else None,
+                       "beta": ({symbols[i]: {symbols[c]: round(float(beta[i, j]), 2) for j, c in enumerate(icols)}
+                                 for i in range(n_assets) if i not in icols} if icols else None),
                        "compiled": train_model is not model,
                        "steps_per_day": [steps_lo, steps_hi], "device": device, "history_days": len(groups),
                        "windows": int(len(keyed))},
             "days": day_rows, "totals": totals, "symbols": per_sym}
+
+
+def combine_reports(reports: list[dict]) -> dict:
+    """One report from the variants a run walked back to back: the last complete one, carrying
+    the earlier ones' totals and curves as `baseline` so the dashboard can show both. A run cut
+    short before its second variant simply reports its first."""
+    done = [r for r in reports if r and not r.get("error")]
+    if not done:
+        return reports[-1] if reports else {"error": "no report", "days": [], "totals": {}}
+    final = done[-1]
+    if len(done) > 1:
+        b = done[0]
+        final["baseline"] = {"target": (b.get("config") or {}).get("target"), "totals": b.get("totals"), "stopped": b.get("stopped"),
+                             "elapsed_s": b.get("elapsed_s"),
+                             "days": [{k: d.get(k) for k in ("date", "net_bps", "cum_net_bps", "hit", "coverage", "signals")}
+                                      for d in (b.get("days") or [])]}
+    return final
 
 
 def _totals(day_rows, tot, cum, max_dd, long_cum) -> dict:

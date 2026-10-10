@@ -16,6 +16,7 @@ import torch
 
 from .autotune import autocast, configure_backend, pick_device
 from .model import FlintNet, flint_loss
+from .target import estimate_beta, index_columns, prior_beta, relative
 
 log = logging.getLogger(__name__)
 HOLDOUT_EVERY = 20       # every 20th bar by timestamp is validation-only: 5% the trainer never sees
@@ -67,6 +68,14 @@ class OnlineLearner:
         self.train_model = self._compiled(self.model)
         self.lock = threading.Lock()
         self.n_features = n_features
+        # The target. The replay keeps absolute labels; with the relative target every consumer
+        # (training, validation, live scoring) sees the residual against the modeled index names
+        # instead, so the switch needs no reset. No columns means absolute, also when no index
+        # is modeled.
+        self.cols = (index_columns(cfg.symbols, getattr(cfg, "index_symbols", "SPY"))
+                     if str(getattr(cfg, "target", "absolute")).lower() == "relative" else [])
+        self.beta = prior_beta(cfg.n_assets, self.cols)
+        self._beta_at = -10**9                           # labels count at the last beta fit
         self._alloc()
         self._seen: set[int] = set()                     # timestamps in the buffer, so a restart's re-walk of the same history adds nothing
         self._slot: dict[int, int] = {}                  # timestamp -> ring slot, so a re-walk can fill new names' columns
@@ -220,6 +229,28 @@ class OnlineLearner:
         replay saved before this existed gets the same slice; untimed windows are never held out."""
         return bool(ts) and (int(round(ts)) // max(1, int(self.cfg.bar_seconds))) % HOLDOUT_EVERY == 0
 
+    @property
+    def target_mode(self) -> str:
+        return "relative" if self.cols else "absolute"
+
+    def target(self, y):
+        """Labels as the net is trained to predict them: absolute, or relative to the indices."""
+        return relative(y, self.beta, self.cols)
+
+    def refresh_beta(self) -> np.ndarray:
+        """Refit each name's index loadings from the labels held, oldest first; a no-op on the
+        absolute target. Called once a session from the training step and after a load."""
+        if not self.cols:
+            return self.beta
+        cap = self.rx.shape[0]
+        rows = np.arange(self.size) if self.size < cap else (self.ptr + np.arange(cap)) % cap
+        if len(rows):
+            self.beta = estimate_beta(self.ry[rows], self.rmask[rows], self.cols,
+                                      recent=int(getattr(self.cfg, "beta_windows", 6000)),
+                                      shrink=float(getattr(self.cfg, "beta_shrink", 400.0)))
+        self._beta_at = self.labels
+        return self.beta
+
     def _sample(self, batch: int):
         cap = self.rx.shape[0]
         n_recent = min(self.cfg.recent_n, self.size)
@@ -233,7 +264,7 @@ class OnlineLearner:
                 break
             idx[bad] = self.rng.integers(0, self.size, int(bad.sum()))
             bad = self.rhold[idx]
-        return torch.from_numpy(self.rx[idx]), torch.from_numpy(self.ry[idx]), torch.from_numpy(self.rmask[idx])
+        return torch.from_numpy(self.rx[idx]), torch.from_numpy(self.target(self.ry[idx])), torch.from_numpy(self.rmask[idx])
 
     def validate(self) -> dict | None:
         """Pinball and direction loss on the held-out windows, which no training step ever
@@ -248,7 +279,7 @@ class OnlineLearner:
             for k in range(0, len(idx), 8):                  # small batches: an eval pass must not widen the allocator's footprint
                 j = idx[k:k + 8]
                 x = torch.from_numpy(self.rx[j]).to(self.device)
-                y = torch.from_numpy(self.ry[j]).to(self.device)
+                y = torch.from_numpy(self.target(self.ry[j])).to(self.device)
                 mk = torch.from_numpy(self.rmask[j]).to(self.device)
                 q, up, dn, gate, _ = self.model(x)
                 _, parts = flint_loss(q.float(), up.float(), dn.float(), gate.float(), y, self.cfg.quantiles,
@@ -264,6 +295,8 @@ class OnlineLearner:
             return None
         batch = min(self.cfg.batch_size, self.size)
         parts = None
+        if self.cols and self.labels - self._beta_at >= 78:              # about one session of labels
+            self.refresh_beta()
         with self.lock:
             self.model.train()
             for _ in range(n):
@@ -444,6 +477,11 @@ class OnlineLearner:
         extra = ck.get("extra", {}) or {}
         if model_fresh:                                              # the book and the feature normalization outlive the net; its metrics do not
             extra = {k: v for k, v in extra.items() if k in ("norm", "paper")}
+        self.refresh_beta()
+        saved_target = str(extra.get("target") or "absolute")
+        if not model_fresh and saved_target != self.target_mode:
+            log.warning("checkpoint was trained on the %s target and this run uses the %s one; the net adapts "
+                        "online, but its first forecasts carry the old target", saved_target, self.target_mode)
         return extra
 
     def _copy_replay(self, rep: dict, n: int, src_syms: list[str], skip: int = 0) -> None:

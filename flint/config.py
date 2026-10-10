@@ -198,6 +198,15 @@ class Config:
     window: int = _env("WINDOW", 64)      # bars of context fed to the model
     horizon: int = _env("HORIZON", 12)    # bars ahead (12 x 5min = 1h forecast)
     quantiles: tuple[float, ...] = (0.1, 0.25, 0.5, 0.75, 0.9)
+    # The target: "absolute" trains on each name's log return; "relative" on the return minus beta
+    # times the index's (the market-relative abnormal return), with the index hedged in the book.
+    # The replay stores absolute labels either way, so this is a run-time switch, not a reset.
+    target: str = _env("TARGET", "absolute")
+    index_symbols: str = _env("INDEX_SYMBOLS", "SPY,QQQ,IWM,SMH,XLF")  # "the market" for the relative target: modeled index names, first = the prior; unmodeled ones are ignored
+    hedge_index: bool = _env("HEDGE_INDEX", "1") not in ("0", "false", "no")  # relative target: hold, per index, the weight that cancels the book's loading on it
+    hedge_min: float = _env("HEDGE_MIN", 0.01)          # an index hedge smaller than this share of the book is not worth its cost
+    beta_windows: int = _env("BETA_WINDOWS", 6000)      # label rows the loadings are fit on (about 77 sessions)
+    beta_shrink: float = _env("BETA_SHRINK", 400.0)     # pseudo-observations behind the prior (1 on the first index, 0 on the rest)
 
     # Compute + auto-sizing (benchmarks the machine on first run and picks the biggest
     # model that still trains in real time; cached to <state_dir>/machine.json).
@@ -312,6 +321,7 @@ class Config:
     backtest_days: int = _env("BACKTEST_DAYS", 0)             # score only the last N days (0 = all timestamped history)
     backtest_cost_bps: float = _env("BACKTEST_COST_BPS", 5.0)  # round-trip cost per unit of position in the backtest (the live book charges the quoted spread)
     backtest_warm_days: int = _env("BACKTEST_WARM_DAYS", 10)   # training-only days before scoring starts, like warmup
+    backtest_target: str = _env("BACKTEST_TARGET", "both")    # absolute | relative | both (two runs, each on half the budget, reported side by side)
     memory_floor_gb: float = _env("MEMORY_FLOOR_GB", 10.0)   # GB that must stay free: the backtest sizes its net to fit above it and stops below it; deep paging pauses near it (a live control)
 
     def __post_init__(self):

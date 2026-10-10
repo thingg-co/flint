@@ -456,7 +456,7 @@ function renderDetail() {
   // KPIs
   const q = L.q || [];
   $(".dkpis", d).innerHTML =
-    kpi("median", bps(q[2]), "1-hour expected move", sgn(q[2])) +
+    kpi("median", bps(q[2]), (state.status && state.status.target && state.status.target.mode === "relative") ? `1-hour move vs ${(state.status.target.index || []).join(", ")}` : "1-hour expected move", sgn(q[2])) +
     kpi("10–90 band", q.length ? `${(q[4] - q[0]).toFixed(0)} bps` : "·", q.length ? `${bps(q[0])} … ${bps(q[4])}` : "") +
     kpi("P(up)", pct(L.p_up), `raw ${pct(L.p_raw)}`, L.p_up > 0.5 ? "good" : "") +
     kpi("P(down)", pct(L.p_down), `raw ${pct(L.p_down_raw)}`, L.p_down > 0.5 ? "bad" : "") +
@@ -466,7 +466,8 @@ function renderDetail() {
   const qr = L.q_raw || [];
   const fc = row("calibrated quantiles", q.length ? q.map(x => x.toFixed(0)).join(" / ") : "·") + row("raw quantiles", qr.length ? qr.map(x => x.toFixed(0)).join(" / ") : "·")
     + row("middle-50% width", bps(L.iqr)) + row("band scale", num(L.band_scale)) + row("P(up) scaling", num(L.p_scale))
-    + row("fat tails", L.straddle ? "yes — straddle candidate" : "no") + (L.base_action && L.base_action !== L.action ? row("model said", esc(L.base_action)) : "")
+    + row("fat tails", L.straddle ? "yes — straddle candidate" : "no") + (L.beta && typeof L.beta === "object" ? row("index loadings", Object.entries(L.beta).map(([k, v]) => `${esc(k)} ${num(v)}`).join(" · ")) : "") + (L.hedge != null ? row("index hedge", `${(L.hedge * 100).toFixed(1)}% of the book`) : "")
+    + (L.base_action && L.base_action !== L.action ? row("model said", esc(L.base_action)) : "")
     + (L.overlay && L.overlay.length ? row("overlay", esc(L.overlay.join("; "))) : "") + (L.muted ? row("muted", "yes") : "");
   const outs = state.outcomes[sym] || [];
   const hits = outs.filter(o => o.hit === true).length, judged = outs.filter(o => o.hit != null).length;
@@ -1443,9 +1444,12 @@ function renderBacktest() {
     ["net", fmtBps(t.net_bps)], ["per day", fmtBps(t.net_bps_per_day)], ["Sharpe", f2(t.sharpe)], ["max drawdown", fmtBps(t.max_drawdown_bps)],
     ["hit rate", fmtPct(t.hit_rate)], ["10-90 coverage", fmtPct(t.coverage)], ["pinball", f1(t.pinball)],
     ["signals", t.signals ?? 0], ["days", `${t.days ?? 0}${pr.running ? " / " + (pr.days || "?") : ""}`], ["always long", fmtBps(t.long_bps)],
+    ...(c.target === "relative" ? [["unhedged", fmtBps(t.unhedged_bps)]] : []),
+    ...(b.baseline && b.baseline.totals ? [[`${b.baseline.target || "other"} target`, `${fmtBps(b.baseline.totals.net_bps)} · Sharpe ${f2(b.baseline.totals.sharpe)}`]] : []),
   ].map(([k, v]) => `<div class="pstat"><label>${esc(k)}</label><b>${esc(String(v))}</b></div>`).join("");
-  if (meta) meta.textContent = pr.running ? `running: day ${pr.day} of ${pr.days || "?"}`
-    : (b.ran_at ? `ran ${fmtTime(b.ran_at)} · ${c.preset || "model"}${c.params ? " " + (c.params / 1e6).toFixed(1) + "M params" : ""} · cost ${c.cost_bps} bps · ${c.history_days} days of history, ${c.warm_days} warm · ${b.stopped ? "stopped early" : "complete"}` : "");
+  const variant = pr.variant && pr.variants && pr.variants.length > 1 ? ` (${pr.variant} target, ${pr.variants.indexOf(pr.variant) + 1} of ${pr.variants.length})` : "";
+  if (meta) meta.textContent = pr.running ? `running: day ${pr.day} of ${pr.days || "?"}${variant}`
+    : (b.ran_at ? `ran ${fmtTime(b.ran_at)} · ${c.preset || "model"}${c.params ? " " + (c.params / 1e6).toFixed(1) + "M params" : ""} · ${c.target || "absolute"} target${c.index && c.index.length ? " vs " + c.index.join(", ") : ""} · cost ${c.cost_bps} bps · ${c.history_days} days of history, ${c.warm_days} warm · ${b.stopped ? "stopped early" : "complete"}` : "");
   const days = (b.days || []).slice(-30).reverse();
   const cell = (v, cls) => `<span class="num ${cls || ""}">${v}</span>`;
   $("#bt-days").innerHTML = days.length
@@ -1457,19 +1461,22 @@ function renderBacktest() {
     ? `<div class="prow phead"><span>name</span>${cell("net bps")}${cell("signals")}${cell("hit")}</div>` +
       names.map(x => `<div class="prow"><span class="psym">${esc(x.sym)}</span>${cell(fmtBps(x.net_bps), x.net_bps >= 0 ? "up" : "down")}${cell(x.signals)}${cell(fmtPct(x.hit))}</div>`).join("")
     : "";
-  paintBacktest(b.days || []);
+  paintBacktest(b.days || [], (b.baseline && b.baseline.days) || []);
 }
 
-function paintBacktest(days) {
+function paintBacktest(days, baseline) {
   const canvas = $("#bt-curve"); if (!canvas) return;
   const { ctx: g, w: W, h: H } = ctx2d(canvas);
   if (days.length < 2) return;
   const cs = getComputedStyle(document.body), v = n => cs.getPropertyValue(n).trim();
+  // grey: always long; green: the run; amber: the other target's run over the same days, when there was one
+  const byDate = new Map((baseline || []).map(d => [d.date, d.cum_net_bps]));
   const series = [[days.map(d => d.cum_long_bps || 0), v("--muted") || "#888", 1], [days.map(d => d.cum_net_bps), v("--good") || "#3c6", 2]];
-  const all = series.flatMap(s => s[0]), lo = Math.min(0, ...all), hi = Math.max(0, ...all), span = (hi - lo) || 1;
+  if (byDate.size) series.push([days.map(d => byDate.has(d.date) ? byDate.get(d.date) : null), v("--warning") || "#da3", 1.5]);
+  const all = series.flatMap(s => s[0]).filter(y => y != null), lo = Math.min(0, ...all), hi = Math.max(0, ...all), span = (hi - lo) || 1;
   const X = i => 8 + (W - 16) * i / (days.length - 1), Y = y => H - 8 - (H - 16) * (y - lo) / span;
   g.strokeStyle = v("--line") || "#444"; g.lineWidth = 1; g.beginPath(); g.moveTo(8, Y(0)); g.lineTo(W - 8, Y(0)); g.stroke();
-  series.forEach(([vals, color, lw]) => { g.strokeStyle = color; g.lineWidth = lw; g.beginPath(); vals.forEach((y, i) => i ? g.lineTo(X(i), Y(y)) : g.moveTo(X(i), Y(y))); g.stroke(); });
+  series.forEach(([vals, color, lw]) => { g.strokeStyle = color; g.lineWidth = lw; g.beginPath(); let pen = false; vals.forEach((y, i) => { if (y == null) { pen = false; return; } if (pen) g.lineTo(X(i), Y(y)); else g.moveTo(X(i), Y(y)); pen = true; }); g.stroke(); });
   g.fillStyle = v("--ink-2") || "#aaa"; g.font = "11px system-ui, sans-serif"; g.fillText(fmtBps(hi), 10, 14); g.fillText(fmtBps(lo), 10, H - 4);
 }
 

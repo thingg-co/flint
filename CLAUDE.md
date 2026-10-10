@@ -197,6 +197,23 @@ unless Flint is already up.
   capped at `option_max_frac` of equity. These exist because of the 2026-09-02 session (churn and a
   $1 stock cost 7% in a night).
 - The Portfolio tab and account access are strictly read-only; Flint never places, changes, or cancels an order on any provider.
+- The target is a run-time switch (`FLINT_TARGET=absolute|relative`, `flint/target.py`). The replay
+  always stores absolute labels (the hour-ahead log return in bps); with `relative` every consumer
+  of labels (the training step, the held-out validation, the live scoring in `_mature`, the
+  backtest) sees the residual against the modeled index names instead (`index_symbols`, default
+  SPY,QQQ,IWM,SMH,XLF; unmodeled ones are ignored, none modeled means absolute). Loadings are a
+  ridge regression per name on the last `beta_windows` label rows with `beta_shrink`
+  pseudo-observations behind the prior (1 on the first index, 0 on the rest), refit once a session
+  in `train_steps` and after a load; the backtest refits from the days already seen. Index names
+  keep absolute labels (zero rows). The paper book then holds, per index, the weight that cancels
+  the basket's loading (`hedge_targets`: an index put under a long basket, index stock over a
+  bearish one), passed to `rebalance` as `uncapped` so the hedge skips the per-position weight cap,
+  the leverage scale and the premium cap; below `hedge_min` it is not placed. Switching the target
+  does not reset the model: the checkpoint records the target it was trained on and `load` warns
+  when it differs. `backtest_target` (default `both`) runs the variants back to back on halves of
+  the budget and the second report carries the first as `baseline`, which the Backtest tab plots
+  as the amber curve. `tests/test_target.py` covers the fit, the transform, the hedge, both
+  learner and backtest modes and the uncapped hedge weight.
 - The backtest (`_backtest_loop`, Backtest tab, `/api/backtest`, `flint backtest`) never touches the
   live model. It runs in process, once per weekend (Saturday or Sunday ET, market closed) or on the
   `backtest` control action, only after the deep backfill has finished paging (so the ring cannot move

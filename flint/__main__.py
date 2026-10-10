@@ -262,8 +262,9 @@ def _replay() -> None:
 
 def _backtest() -> None:
     """Walk-forward backtest over the saved replay without starting the server, on the cached
-    preset: `flint backtest [--days N] [--hours H] [--cost BPS] [--warm N] [--night EPOCHS]`. The live server runs
-    its own on weekends; do not run this next to one, it loads the replay and a second model."""
+    preset: `flint backtest [--days N] [--hours H] [--cost BPS] [--warm N] [--night EPOCHS]
+    [--target absolute|relative|both]`. The live server runs its own on weekends; do not run this
+    next to one, it loads the replay and a second model."""
     import json
     import sys
     import time
@@ -272,7 +273,7 @@ def _backtest() -> None:
     import torch
 
     from .autotune import configure_backend, pick_device
-    from .backtest import run_backtest
+    from .backtest import combine_reports, run_backtest
     from .config import Config
 
     cfg = Config()
@@ -301,7 +302,7 @@ def _backtest() -> None:
         except Exception:  # noqa: BLE001
             pass
     opts = {"days": int(cfg.backtest_days), "hours": float(cfg.backtest_hours), "cost": float(cfg.backtest_cost_bps),
-            "warm": int(cfg.backtest_warm_days), "night": float(cfg.backtest_night_epochs)}
+            "warm": int(cfg.backtest_warm_days), "night": float(cfg.backtest_night_epochs), "target": str(cfg.backtest_target)}
     argv = sys.argv[2:]
     for i, a in enumerate(argv):
         if a.startswith("--") and a[2:] in opts and i + 1 < len(argv):
@@ -309,25 +310,36 @@ def _backtest() -> None:
     device = pick_device(cfg.device)
     configure_backend(device)
     mask = np.asarray(z["mask"])
+    variants = {"absolute": ["absolute"], "relative": ["relative"], "both": ["absolute", "relative"]}.get(opts["target"].lower(), ["absolute"])
     print(f"walking {int((np.asarray(z['t']) > 0).sum())} timestamped windows on {device} ({preset or 'config'} preset), "
-          f"cost {opts['cost']:g} bps, warm {opts['warm']} days, budget {opts['hours']:g} h")
+          f"cost {opts['cost']:g} bps, warm {opts['warm']} days, budget {opts['hours']:g} h, target{'s' if len(variants) > 1 else ''} "
+          f"{' then '.join(variants)}")
 
     def prog(day, total, t):
         print(f"\r  day {day}/{total}  net {t['net_bps']:+.0f} bps  per day {t['net_bps_per_day']:+.1f}  "
               f"hit {((t['hit_rate'] or 0) * 100):.0f}%  signals {t['signals']}   ", end="", flush=True)
 
-    res = run_backtest(cfg, z["x"], np.asarray(z["y"]), mask, np.asarray(z["t"]), device=device, symbols=symbols, progress=prog,
-                       hours=opts["hours"], days=opts["days"], warm_days=opts["warm"], cost_bps=opts["cost"], preset=preset,
-                       night_epochs=opts["night"])
-    print()
-    if res.get("error"):
-        print(res["error"])
-        raise SystemExit(1)
-    t = res["totals"]
-    print(f"{t['days']} days scored in {res['elapsed_s'] / 60:.0f} min: net {t['net_bps']:+.0f} bps "
-          f"({t['net_bps_per_day']:+.1f}/day, Sharpe {t['sharpe'] if t['sharpe'] is not None else '·'}, "
-          f"max drawdown {t['max_drawdown_bps']:.0f} bps), hit {((t['hit_rate'] or 0) * 100):.0f}%, "
-          f"coverage {((t['coverage'] or 0) * 100):.0f}%, {t['signals']} signals; always-long {t['long_bps']:+.0f} bps")
+    reports = []
+    for variant in variants:
+        if len(variants) > 1:
+            print(f"-- {variant} target")
+        reports.append(run_backtest(cfg, z["x"], np.asarray(z["y"]), mask, np.asarray(z["t"]), device=device, symbols=symbols,
+                                    progress=prog, hours=opts["hours"] / len(variants), days=opts["days"], warm_days=opts["warm"],
+                                    cost_bps=opts["cost"], preset=preset, night_epochs=opts["night"], target=variant,
+                                    index_symbols=str(cfg.index_symbols), beta_windows=int(cfg.beta_windows),
+                                    beta_shrink=float(cfg.beta_shrink)))
+        print()
+        r = reports[-1]
+        if r.get("error"):
+            print(r["error"])
+            raise SystemExit(1)
+        t = r["totals"]
+        print(f"{t['days']} days scored in {r['elapsed_s'] / 60:.0f} min [{r['config'].get('target')} target]: net {t['net_bps']:+.0f} bps "
+              f"({t['net_bps_per_day']:+.1f}/day, Sharpe {t['sharpe'] if t['sharpe'] is not None else '·'}, "
+              f"max drawdown {t['max_drawdown_bps']:.0f} bps), hit {((t['hit_rate'] or 0) * 100):.0f}%, "
+              f"coverage {((t['coverage'] or 0) * 100):.0f}%, {t['signals']} signals; always-long {t['long_bps']:+.0f} bps"
+              + (f"; unhedged {t['unhedged_bps']:+.0f} bps" if "unhedged_bps" in t and r['config'].get('target') == 'relative' else ""))
+    res = combine_reports(reports)
     out = state / "backtest.json"
     from .engine import clean
     out.write_text(json.dumps(clean(res)))
