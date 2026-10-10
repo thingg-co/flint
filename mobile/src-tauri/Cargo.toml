@@ -2,6 +2,8 @@
 name = "flint-mobile"
 version = "0.3.0"
 description = "Flint dashboard client"
+authors = ["thingg, LLC"]
+license = "PolyForm-Noncommercial-1.0.0"
 edition = "2021"
 
 [lib]

@@ -172,7 +172,7 @@
   <article>
     <div class="eyebrow">Whitepaper · version 0.5.13 · October 2026</div>
     <h1>Flint: design of a continuously learning intraday market model</h1>
-    <p class="byline">thingg.co · Source at <a href="https://github.com/thingg-co/flint">github.com/thingg-co/flint</a> · PolyForm Noncommercial<br>A companion to the <a href="index.html">product page</a>. Flint is a research instrument, not investment advice.</p>
+    <p class="byline">thingg, LLC · Source at <a href="https://github.com/thingg-co/flint">github.com/thingg-co/flint</a> · PolyForm Noncommercial<br>A companion to the <a href="index.html">product page</a>. Flint is a research instrument, not investment advice.</p>
 
     <div class="abstract" id="abstract"><b>Abstract</b>
       Flint is a single-process, self-hosted system that forecasts the distribution of each stock's return over the next hour on five-minute bars for several hundred names at once, trains online as those forecasts resolve, and acts on the forecasts through a defined-risk paper book. This paper records the design decisions and the reasons behind them. We argue for distributional outputs with online conformal calibration over point forecasts; for a single cross-sectional network with a regime gate rather than one model per name; for a replay buffer keyed by bar time that survives restarts and universe changes; for a universe that maintains itself through a promotion and demotion rule; for a policy composed of auditable gates rather than a learned decision layer; and for a walk-forward backtest that is out of sample by construction and runs on the weekend GPU. We also document the engineering invariants that a shared-memory GPU imposes on such a system, several of which were learned by taking the machine down. The question of whether the forecasts carry economic edge after costs is left open and is precisely what the backtest exists to answer.
@@ -625,7 +625,7 @@
     <span class="brand"><span class="fire">🔥</span> Flint</span>
     <span>a self-hosted market model</span>
     <a href="https://github.com/thingg-co/flint">github.com/thingg-co/flint ↗</a>
-    <span class="copy">© 2026 <a href="https://thingg.co">thingg.co</a> · PolyForm Noncommercial</span>
+    <span class="copy">© 2026 <a href="https://thingg.co">thingg, LLC</a> · PolyForm Noncommercial</span>
   </div>
 </footer>
 </body>

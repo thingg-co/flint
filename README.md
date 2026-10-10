@@ -139,6 +139,6 @@ non-zero when the model would not fit.
 ## License
 
 PolyForm Noncommercial 1.0.0: free for personal, hobby, research and other noncommercial use.
-Commercial use needs a separate license. See LICENSE and NOTICE.
+Commercial use needs a separate license from thingg, LLC. See LICENSE and NOTICE.
 
-© 2026 thingg LLC · [thingg.co](https://thingg.co)
+© 2026 thingg, LLC · [thingg.co](https://thingg.co)

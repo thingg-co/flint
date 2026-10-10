@@ -1,7 +1,10 @@
-Flint is licensed under the PolyForm Noncommercial License 1.0.0 (see LICENSE):
-free for personal, hobby, research, educational and other noncommercial use.
-Commercial use needs a separate license from the author.
+Required Notice: Copyright thingg, LLC (https://thingg.co)
 
-Flint is a research toy, not financial advice. Market data fetched at runtime is
-covered by the terms of whichever provider supplies it (Schwab, Finnhub, Alpaca,
-FMP, and the rest); Python dependencies install from PyPI under their own licenses.
+Flint is created by thingg, LLC and licensed under the PolyForm Noncommercial License 1.0.0
+(see LICENSE): free for personal, hobby, research, educational and other noncommercial
+use. Commercial use needs a separate license from thingg, LLC: https://thingg.co
+
+Flint is a research toy, not financial advice. Market data fetched at runtime is covered
+by the terms of whichever provider supplies it (Schwab, Finnhub, Alpaca, FMP, and the
+rest); the headline-tone model (ProsusAI/finbert) is fetched from the Hugging Face hub
+under its own terms; Python dependencies install from PyPI under their own licenses.

@@ -21,6 +21,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "thingg, LLC",
+    "copyright": "© 2026 thingg, LLC · PolyForm Noncommercial 1.0.0",
+    "license": "PolyForm-Noncommercial-1.0.0",
+    "licenseFile": "../../LICENSE",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
