@@ -259,6 +259,19 @@ class Config:
     skill_min_n: int = _env("SKILL_MIN_N", 8)                # matured direction calls a name needs before it may trade
     confirm_bars: int = _env("CONFIRM_BARS", 2)              # the same side must persist this many bars before entry
     stock_min_hold_bars: int = _env("STOCK_MIN_HOLD_BARS", 6)  # a stock position is kept at least this long unless the signal reverses
+    # The cost edge beyond the quoted spread (flint/policy.py): square-root price impact of the order
+    # the signal would place, the hourly decay of the put a bearish view buys, and an illiquidity gate
+    # on Amihud's measure (the price move the order would buy) that works where no quote exists.
+    impact_eta: float = _env("IMPACT_ETA", 0.1)              # square-root impact coefficient: cost = eta * sigma_daily * sqrt(Q / ADV)
+    max_impact_bps: float = _env("MAX_IMPACT_BPS", 10.0)     # a name whose Amihud illiquidity says the order would move it more than this does not trade
+    theta_in_edge: bool = _env("THETA_IN_EDGE", "1") not in ("0", "false", "no")  # charge a put's hourly decay against a bearish signal's edge
+    straddle_edge: float = _env("STRADDLE_EDGE", 1.0)        # a straddle needs the model's expected |move| above this times the implied one-sigma move, plus the decay
+    # Exits on stock positions (0 = off) and a daily loss limit that stops new entries for the day.
+    stop_loss_bps: float = _env("STOP_LOSS_BPS", 200.0)      # close a stock position down this much from entry, min hold or not
+    take_profit_bps: float = _env("TAKE_PROFIT_BPS", 0.0)    # close a stock position up this much from entry (0: the forecast decides)
+    max_hold_bars: int = _env("MAX_HOLD_BARS", 0)            # close a stock position held this many bars (0: the forecast decides)
+    exit_cooldown_bars: int = _env("EXIT_COOLDOWN_BARS", 12)  # after an exit the name waits this many bars before re-entering
+    daily_loss_limit: float = _env("DAILY_LOSS_LIMIT", 0.02)  # fraction of the day's opening equity lost before new entries stop for the day (0 = off)
     max_spread_bps: float = _env("MAX_SPREAD_BPS", 25.0)     # names quoting wider than this do not trade; the live spread also replaces cost_bps when larger
     min_price: float = _env("MIN_PRICE", 5.0)                # names under this price do not trade (penny names: fake spreads, fake fills)
     size_by_coverage: bool = _env("SIZE_BY_COVERAGE", "1") not in ("0", "false", "no")  # scale size by band coverage / 0.8, so an overconfident model trades small

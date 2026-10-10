@@ -12,7 +12,7 @@ feature set reset the model once, so they are batched into a single reset on a w
 | 2b | Calendar and daily-lag features | queued | same-half-hour lag over 40 days, first-half-hour index return, overnight vs intraday split. Joins the reset of item 2 |
 | 2c | Valuation features | queued | sector-relative EV/EBITDA, P/B, FCF yield, dividend yield; a DCF gap; quality composite. Joins the reset of item 2 |
 | 2d | Other forecasters as opinions | queued | GARCH/HAR size, implied distribution, OU residual z and half-life, Kalman trend, ridge and GBM baselines. Joins the reset of item 2 |
-| 3 | Policy pass (no reset) | queued | theta in the option cost edge, the gamma breakeven for straddles, square-root impact, the Amihud gate; exits with target, stop, time and daily loss limits |
+| 3 | Policy pass (no reset) | shipped 0.5.14 | put decay and square-root impact in the cost edge, the Amihud illiquidity gate, the straddle's gamma breakeven against the implied move; stop (on), profit target and time limit (off) exits with a cooldown, and a daily loss limit on new entries. Deploys on the next restart after the weekend backtest |
 | 4 | Ensemble of two 4XL networks | queued | aggregate members' distributions; fits the box next to the replay |
 | 5 | Meta-labeling | queued | a small online classifier on whether acting on each forecast paid after costs; size by its probability |
 | 6 | Calibration to decision loss | queued | size by P(move clears the spread) from the full quantile set |

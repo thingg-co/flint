@@ -195,7 +195,19 @@ unless Flint is already up.
   live bid/ask spread replaces `cost_bps` when larger and `max_spread_bps` / `min_price` block
   illiquid and penny names; size scales with band coverage / 0.8; option premium per position is
   capped at `option_max_frac` of equity. These exist because of the 2026-09-02 session (churn and a
-  $1 stock cost 7% in a night).
+  $1 stock cost 7% in a night). Since 0.5.14 the edge also pays the square-root price impact of the
+  order the signal would place (`impact_eta`, from the bars' dollar volume and volatility) and, for
+  a bearish view bought as a put, the put's hourly decay (`theta_in_edge`, from the chain's ATM IV
+  kept raw in `option_iv`); Amihud's illiquidity blocks a name whose order would move the price more
+  than `max_impact_bps`, which works where no quote exists; a straddle needs the model's expected
+  |move| (folded-normal mean of the quantiles) above `straddle_edge` times the implied one-sigma
+  move plus the decay over the hold, falling back to the width rule when no IV is known. Stock
+  positions exit on `stop_loss_bps` (200 by default), `take_profit_bps` and `max_hold_bars` (both
+  off), overriding the minimum hold, then wait `exit_cooldown_bars`; once the book is down
+  `daily_loss_limit` of the day's opening equity no new entry opens that day. All of it is
+  `flint/policy.py` (pure functions) and `tests/test_policy.py`; the backtest's `decide` cannot
+  mirror the impact, decay and illiquidity terms because the replay holds standardized features,
+  not raw volume or IV, so the backtest's flat cost stays the conservative floor.
 - The Portfolio tab and account access are strictly read-only; Flint never places, changes, or cancels an order on any provider.
 - The target is a run-time switch (`FLINT_TARGET=absolute|relative`, `flint/target.py`). The replay
   always stores absolute labels (the hour-ahead log return in bps); with `relative` every consumer

@@ -34,7 +34,7 @@ from .signals import FundamentalsProvider, SignalHub
 from .target import hedge_targets, index_columns
 from .sources import AlphaVantage, SourceManager, asset_class
 from .trace import Trace
-from . import clock
+from . import clock, policy
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +47,9 @@ TUNABLE = {"score_threshold": float, "prob_margin": float, "cost_bps": float, "m
            "train_in_session": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
            "skill_min_n": int, "confirm_bars": int, "stock_min_hold_bars": int, "max_spread_bps": float,
            "min_price": float, "option_max_frac": float,
+           "impact_eta": float, "max_impact_bps": float, "theta_in_edge": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
+           "straddle_edge": float, "stop_loss_bps": float, "take_profit_bps": float, "max_hold_bars": int,
+           "exit_cooldown_bars": int, "daily_loss_limit": float,
            "backtest_weekends": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
            "backtest_hours": float, "backtest_days": int, "backtest_cost_bps": float, "backtest_night_epochs": float,
            "backtest_target": lambda v: str(v).lower() if str(v).lower() in ("absolute", "relative", "both") else "both",
@@ -406,6 +409,10 @@ class Engine:
         self.prices = {s: {"price": None, "bid": None, "ask": None, "ts": None} for s in self.symbols}
         self.tick_counts = {s: 0 for s in self.symbols}
         self.bars: dict[str, deque[Bar]] = {s: deque(maxlen=cfg.chart_bars) for s in self.symbols}
+        self.option_iv: dict[str, float] = {}             # raw ATM implied vol per name, for the policy's decay and breakeven arithmetic
+        self._cooldown: dict[str, int] = {}               # bar index of a name's last exit (stop, target, time limit)
+        self._day_open_equity: tuple[str, float] | None = None   # (ET date, book equity at the day's first bar) for the daily loss limit
+        self._book_equity = 0.0
         self._streak: dict[str, tuple[int, int]] = {}    # symbol -> (raw side, consecutive bars) for the confirmation gate
         self._held_since: dict[str, int] = {}             # symbol -> bar index a nonzero paper target began
         self._last_target: dict[str, float] = {}
@@ -1530,6 +1537,8 @@ class Engine:
                                      + ("training waits for the backtest" if self._backtesting else "learning is paused"))
 
         if x is not None:
+            closes_d = {s: float(closes[i]) for i, s in enumerate(self.symbols)}
+            self._book_equity = float(self.paper.equity(closes_d, ts))
             pred = self.learner.predict(x)
             sugg = {s: self._suggest(i, s, pred) for i, s in enumerate(self.symbols)}
             self.pending.append(Pending(self.bar_index, ts, x, closes, real_now, pred, sugg))
@@ -1553,6 +1562,32 @@ class Engine:
                 if t != 0.0 and prev == 0.0:
                     self._held_since[s] = self.bar_index
                 self._last_target[s] = t
+            # Exits: a stop, a profit target and a time limit on stock positions, each overriding the
+            # minimum hold; a name that exits waits out a cooldown before it may re-enter; and once
+            # the book has lost `daily_loss_limit` of the day's opening equity, no new entries today.
+            for s, why in policy.exit_decisions(self.paper.pos, self.paper.avg, closes_d, self._held_since, self.bar_index, cfg).items():
+                if targets.get(s, 0.0) > 0:
+                    targets[s] = self._last_target[s] = 0.0
+                    self._cooldown[s] = self.bar_index
+                    self.latest[s].update({"side": 0, "size": 0.0, "action": "HOLD", "why": "exit: " + why})
+                    self._log(f"{s} exit: {why}", "act")
+            cooldown = int(getattr(cfg, "exit_cooldown_bars", 0) or 0)
+            day = datetime.fromtimestamp(ts, ZoneInfo("America/New_York")).date().isoformat()
+            if not self._day_open_equity or self._day_open_equity[0] != day:
+                self._day_open_equity = (day, self._book_equity)
+            limit = float(getattr(cfg, "daily_loss_limit", 0.0) or 0.0)
+            down = 1.0 - self._book_equity / self._day_open_equity[1] if self._day_open_equity[1] > 0 else 0.0
+            for s in self.symbols:
+                if targets[s] == 0.0 or self.paper.pos.get(s) or s in self.paper.puts:
+                    continue                                                     # only new entries are held back
+                if cooldown and self.bar_index - self._cooldown.get(s, -10**9) < cooldown:
+                    targets[s] = self._last_target[s] = 0.0
+                    self.latest[s].update({"side": 0, "size": 0.0, "action": "HOLD",
+                                           "why": f"cooling down after an exit ({self.bar_index - self._cooldown[s]}/{cooldown} bars)"})
+                elif limit > 0 and down >= limit:
+                    targets[s] = self._last_target[s] = 0.0
+                    self.latest[s].update({"side": 0, "size": 0.0, "action": "HOLD",
+                                           "why": f"daily loss limit: the book is down {down * 100:.1f}% today, no new entries"})
             # The relative target says "beats its indices", so the book holds, per index, the weight
             # that cancels the basket's loading on it: a put under a long basket, index stock over a
             # bearish one. An index name is a hedge instrument here, never a signal of its own.
@@ -1690,7 +1725,18 @@ class Engine:
         pr = self.prices.get(s) or {}
         bid, ask = pr.get("bid"), pr.get("ask")
         spread_bps = (ask - bid) / ((ask + bid) / 2) * 1e4 if bid and ask and ask > bid > 0 else None
-        edge = abs(q50) - max(cfg.cost_bps, spread_bps or 0.0)
+        # Beyond the spread, an hour of this position costs the impact of the order it would place
+        # and, for a bearish view bought as a put, the put's decay; the edge has to cover all of it.
+        bars_s = self.bars.get(s) or ()
+        eq = float(getattr(self, "_book_equity", 0.0) or 0.0) or 100_000.0
+        size0 = cfg.max_size * min(1.0, cfg.kelly_fraction * abs(score))        # the size this signal would take
+        adv = policy.dollar_volume(bars_s)
+        impact = policy.impact_bps(eq * size0, adv, policy.sigma_daily(bars_s), float(getattr(cfg, "impact_eta", 0.1)))
+        iv = (getattr(self, "option_iv", None) or {}).get(s)
+        theta = (policy.theta_bps_per_hour(iv, cfg.option_dte)
+                 if score < 0 and iv and getattr(cfg, "theta_in_edge", True) else 0.0)
+        edge = abs(q50) - max(cfg.cost_bps, spread_bps or 0.0) - impact - theta
+        kyle = policy.kyle_impact_bps(policy.amihud(bars_s), eq * size0)
         conviction = abs(2 * p - 1)
         reasons = []
         if abs(score) < cfg.score_threshold:
@@ -1698,7 +1744,14 @@ class Engine:
         if conviction < 2 * cfg.prob_margin:
             reasons.append(f"direction is near a coin flip ({p * 100:.0f}% up)")
         if edge <= 0:
-            reasons.append("the expected move does not cover trading cost" + (f" ({spread_bps:.0f} bps spread)" if spread_bps else ""))
+            parts = [f"{spread_bps:.0f} bps spread"] if spread_bps else []
+            if impact >= 0.5:
+                parts.append(f"{impact:.1f} bps of impact")
+            if theta >= 0.5:
+                parts.append(f"{theta:.1f} bps/h of put decay")
+            reasons.append("the expected move does not cover trading cost" + (f" ({', '.join(parts)})" if parts else ""))
+        if kyle > float(getattr(cfg, "max_impact_bps", 10.0)):
+            reasons.append(f"too illiquid: a {size0 * 100:.0f}% position would move the price about {kyle:.0f} bps")
         if spread_bps is not None and spread_bps > cfg.max_spread_bps:
             reasons.append(f"spread {spread_bps:.0f} bps is wider than the {cfg.max_spread_bps:.0f} bps limit")
         # per-name skill: a name earns the right to trade with its own record, not the book's
@@ -1743,7 +1796,16 @@ class Engine:
         width = q90 - q10
         # A fat-tail forecast is tradeable without direction: a long straddle wins on |move|,
         # loss capped at the premium. Requires a live bar and market hours like any entry.
-        straddle = (cfg.straddle_enabled and fat_tails and width >= cfg.straddle_band_bps
+        if iv:
+            # Gamma breakeven: a straddle pays only when the move beats what its premium already
+            # prices in (the implied one-sigma move over the hold) plus the decay over that hold.
+            hold_h = float(getattr(cfg, "straddle_hold_bars", 12)) * float(getattr(cfg, "bar_seconds", 300)) / 3600.0
+            implied = policy.implied_move_bps(iv, hours=hold_h)
+            decay = policy.theta_bps_per_hour(iv, cfg.option_dte) * hold_h
+            big = policy.expected_abs_move_bps(qc) > float(getattr(cfg, "straddle_edge", 1.0)) * implied + decay
+        else:
+            big = width >= cfg.straddle_band_bps
+        straddle = (cfg.straddle_enabled and fat_tails and big
                     and bool(bar and bar.volume > 0) and self._regular_session())
         if fat_tails:
             why += "  |  both tails fat — expect a big move, direction unclear"
@@ -2108,6 +2170,7 @@ class Engine:
                 n = 0
                 for s, r in res:
                     if r:
+                        self.option_iv[s] = float(r["iv"])
                         self.features.set_exo(s, {"opt_iv": max(-1, min(1, (r["iv"] - 0.30) * 2.5)),
                                                   "opt_skew": max(-1, min(1, r["skew"] * 15))})
                         n += 1
