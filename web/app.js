@@ -2,10 +2,29 @@
 "use strict";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
-const C = { blue: "#3987e5", orange: "#d95926", aqua: "#199e70", yellow: "#c98500", magenta: "#d55181", violet: "#9085e9",
-  good: "#0ca30c", warning: "#fab219", serious: "#ec835a", critical: "#d03b3b",
-  ink: "#ffffff", ink2: "#c3c2b7", muted: "#898781", grid: "#2c2c2a", axis: "#383835", surface: "#1a1a19" };
-const SERIES = [C.blue, C.orange, C.aqua, C.yellow, C.magenta, C.violet];
+// The canvas palette is read from the stylesheet's tokens, so the charts follow the theme; it is
+// re-read when the header toggle flips the theme (applyTheme) and every canvas repaints.
+function palette() {
+  const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim();
+  return { blue: v("--blue"), orange: v("--orange"), aqua: v("--aqua"), yellow: v("--yellow"), magenta: v("--magenta"), violet: v("--violet"),
+    good: v("--good"), warning: v("--warning"), serious: v("--serious"), critical: v("--critical"),
+    ink: v("--ink"), ink2: v("--ink-2"), muted: v("--muted"), grid: v("--grid"), axis: v("--axis"), surface: v("--surface"),
+    up: v("--up"), down: v("--down"), upSoft: v("--up-soft"), downSoft: v("--down-soft"), upFill: v("--up-fill"), downFill: v("--down-fill"),
+    fanOuter: v("--fan-outer"), fanInner: v("--fan-inner"), signal: v("--signal"), labelBg: v("--label-bg"),
+    heatUp: v("--heat-up") || "12,163,12", heatDown: v("--heat-down") || "208,59,59", onColor: v("--on-color") || "rgba(255,255,255,0.92)" };
+}
+let C = palette();
+let SERIES = [C.blue, C.orange, C.aqua, C.yellow, C.magenta, C.violet];
+function currentTheme() {
+  return document.documentElement.dataset.theme || (window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+}
+function applyTheme(next) {
+  if (next) { document.documentElement.dataset.theme = next; try { localStorage.setItem("flint.theme", next); } catch (e) { /* storage may be unavailable */ } }
+  C = palette(); SERIES = [C.blue, C.orange, C.aqua, C.yellow, C.magenta, C.violet];
+  const b = $("#theme-toggle");
+  if (b) { const dark = currentTheme() === "dark"; b.textContent = dark ? "☀" : "☾"; b.title = dark ? "Switch to light mode" : "Switch to dark mode"; b.setAttribute("aria-label", b.title); }
+  if (typeof redrawCharts === "function") requestAnimationFrame(() => { redrawCharts(); if (typeof renderAll === "function" && state.config) renderAll(); });
+}
 const CHANNELS = {
   feed: "tick counts per bar, backfill, reconnects",
   bars: "closed bars: close, return, trades, volume",
@@ -128,7 +147,7 @@ function drawChart(card) {
   const dx = (plotW - fanW) / (n - 1);
   const xs = i => Math.min(padL + i * dx, padL + plotW);
   const closes = bars.map(b => b.c);
-  const upC = "#26a269", downC = "#e0574b";
+  const upC = C.up, downC = C.down;
   const cw = Math.max(1, Math.min(dx * 0.68, 9));
 
   // panes: price on top, a volume strip, then MACD below (shared x axis, no overlap)
@@ -153,7 +172,7 @@ function drawChart(card) {
     const v = lo + (hi - lo) * (0.14 + 0.36 * k), y = Math.round(ys(v)) + 0.5;
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
     const label = fmtPrice(v), tw = ctx.measureText(label).width;
-    ctx.fillStyle = "rgba(26,26,25,0.85)"; ctx.fillRect(padL, y - 13, tw + 4, 12);
+    ctx.fillStyle = C.labelBg; ctx.fillRect(padL, y - 13, tw + 4, 12);
     ctx.fillStyle = C.muted; ctx.fillText(label, padL + 2, y - 7);
   }
 
@@ -163,7 +182,7 @@ function drawChart(card) {
     bars.forEach((b, i) => {
       const v = b.v || 0; if (v <= 0) return;
       const vh = (v / maxVol) * volPaneH;
-      ctx.fillStyle = b.c >= b.o ? "rgba(38,160,105,0.65)" : "rgba(224,87,75,0.65)";
+      ctx.fillStyle = b.c >= b.o ? C.upSoft : C.downSoft;
       ctx.fillRect(xs(i) - cw / 2, vB - vh, cw, Math.max(1, vh));
     });
     ctx.strokeStyle = C.grid; ctx.lineWidth = 1;
@@ -179,11 +198,11 @@ function drawChart(card) {
     ctx.save();
     ctx.beginPath(); ctx.rect(padL, pT, w - padL - padR, pB - pT); ctx.clip();   // keep the fan inside the price pane
     const wedge = (a, b, color) => { ctx.beginPath(); ctx.moveTo(xLast, ys(anchor)); ctx.lineTo(xEnd, ys(a)); ctx.lineTo(xEnd, ys(b)); ctx.closePath(); ctx.fillStyle = color; ctx.fill(); };
-    wedge(fan[0], fan[4], "rgba(57,135,229,0.16)");
-    wedge(fan[1], fan[3], "rgba(57,135,229,0.30)");
+    wedge(fan[0], fan[4], C.fanOuter);
+    wedge(fan[1], fan[3], C.fanInner);
     // fat-tail forecasts (straddle signal) flag their outer edges in orange: big move, direction unclear
     if (L.straddle) {
-      ctx.setLineDash([2, 3]); ctx.strokeStyle = "rgba(224,145,59,0.85)"; ctx.lineWidth = 1.2;
+      ctx.setLineDash([2, 3]); ctx.strokeStyle = C.signal; ctx.lineWidth = 1.2;
       ctx.beginPath(); ctx.moveTo(xLast, ys(anchor)); ctx.lineTo(xEnd, ys(fan[0])); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(xLast, ys(anchor)); ctx.lineTo(xEnd, ys(fan[4])); ctx.stroke();
     }
@@ -253,16 +272,16 @@ function drawChart(card) {
   mmax *= 1.15;
   const ym = v => (mT + mB) / 2 - (v / mmax) * (macdH / 2);
   const hw = Math.max(1, Math.min(dx * 0.6, 7));
-  hist.forEach((v, i) => { const x = xs(i), y0 = ym(0), y1 = ym(v); ctx.fillStyle = v >= 0 ? "rgba(38,160,105,0.55)" : "rgba(224,87,75,0.55)"; ctx.fillRect(x - hw / 2, Math.min(y0, y1), hw, Math.max(1, Math.abs(y1 - y0))); });
+  hist.forEach((v, i) => { const x = xs(i), y0 = ym(0), y1 = ym(v); ctx.fillStyle = v >= 0 ? C.upSoft : C.downSoft; ctx.fillRect(x - hw / 2, Math.min(y0, y1), hw, Math.max(1, Math.abs(y1 - y0))); });
   const zeroY = Math.round(ym(0)) + 0.5;
   ctx.strokeStyle = C.grid; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(padL, zeroY); ctx.lineTo(xLast, zeroY); ctx.stroke();
   const drawLine = (arr, color) => { ctx.strokeStyle = color; ctx.lineWidth = 1.3; ctx.lineJoin = "round"; ctx.beginPath(); for (let i = 0; i < n; i++) { const x = xs(i), y = ym(arr[i]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); } ctx.stroke(); };
-  drawLine(mline, "#3987e5");
-  drawLine(sigl, "#e0913b");
+  drawLine(mline, C.blue);
+  drawLine(sigl, C.signal);
   ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
   let lx = padL + 1;
-  ctx.fillStyle = "#3987e5"; ctx.fillText("MACD", lx, mT + 9); lx += ctx.measureText("MACD").width + 6;
-  ctx.fillStyle = "#e0913b"; ctx.fillText("signal", lx, mT + 9); lx += ctx.measureText("signal").width + 6;
+  ctx.fillStyle = C.blue; ctx.fillText("MACD", lx, mT + 9); lx += ctx.measureText("MACD").width + 6;
+  ctx.fillStyle = C.signal; ctx.fillText("signal", lx, mT + 9); lx += ctx.measureText("signal").width + 6;
   ctx.fillStyle = C.muted; ctx.fillText("12·26·9", lx, mT + 9);
 
   // x axis + now marker — show dates when the window spans more than a day, so a multi-day
@@ -1362,7 +1381,7 @@ function renderBrief() {
   // sectors
   const sectorPanel = m.sectors && m.sectors.length ? `<div class="bpanel"><h3>Sector rotation</h3><div class="sector-heat">` +
     m.sectors.map(sc => { const t = Math.max(-1, Math.min(1, sc.chg / 2));
-      const bg = t >= 0 ? `rgba(12,163,12,${0.25 + 0.55 * t})` : `rgba(208,59,59,${0.25 + 0.55 * -t})`;
+      const bg = t >= 0 ? `rgba(${C.heatUp},${0.25 + 0.55 * t})` : `rgba(${C.heatDown},${0.25 + 0.55 * -t})`;
       return `<div class="sc tk" data-sym="${esc(sc.etf)}" data-etf="${esc(sc.etf)}" data-chg="${sc.chg}" style="background:${bg}" title="${esc(sc.name)}"><span>${esc(sc.etf)}</span><b>${sc.chg >= 0 ? "+" : ""}${sc.chg.toFixed(1)}</b></div>`; }).join("") + `</div></div>` : "";
 
   box.innerHTML = hero + gaugeRow + `<div class="brief-grid">` +
@@ -1602,10 +1621,10 @@ function drawEquityCurve(p) {
   const y0 = ys(p.start); ctx.setLineDash([4, 3]); ctx.strokeStyle = C.muted;
   ctx.beginPath(); ctx.moveTo(padL, y0); ctx.lineTo(w - padR, y0); ctx.stroke(); ctx.setLineDash([]);
   const up = eqs[eqs.length - 1] >= p.start;
-  ctx.strokeStyle = up ? "#26a269" : "#e0574b"; ctx.lineWidth = 2; ctx.lineJoin = "round";
+  ctx.strokeStyle = up ? C.up : C.down; ctx.lineWidth = 2; ctx.lineJoin = "round";
   ctx.beginPath(); pts.forEach((x, i) => i ? ctx.lineTo(xs(i), ys(x.eq)) : ctx.moveTo(xs(i), ys(x.eq))); ctx.stroke();
   ctx.lineTo(xs(pts.length - 1), ys(lo)); ctx.lineTo(xs(0), ys(lo)); ctx.closePath();
-  ctx.fillStyle = up ? "rgba(38,160,105,0.10)" : "rgba(224,87,75,0.10)"; ctx.fill();
+  ctx.fillStyle = up ? C.upFill : C.downFill; ctx.fill();
 }
 
 function renderMarket() {
@@ -1624,7 +1643,7 @@ function renderMarket() {
     cr.btc_dom ? `<div class="mstat">BTC dom <b>${cr.btc_dom.toFixed(1)}%</b></div>` : "",
   ];
   $("#market-stats").innerHTML = stats.join("");
-  const heatColor = c => { const t = Math.max(-1, Math.min(1, c / 2)); return t >= 0 ? `rgba(12,163,12,${0.25 + 0.55 * t})` : `rgba(208,59,59,${0.25 + 0.55 * -t})`; };
+  const heatColor = c => { const t = Math.max(-1, Math.min(1, c / 2)); return t >= 0 ? `rgba(${C.heatUp},${0.25 + 0.55 * t})` : `rgba(${C.heatDown},${0.25 + 0.55 * -t})`; };
   $("#sector-heat").innerHTML = (m.sectors || []).map(sc =>
     `<div class="sc tk" data-sym="${esc(sc.etf)}" data-etf="${esc(sc.etf)}" data-chg="${sc.chg}" title="${esc(sc.name)}"><span>${esc(sc.etf)}</span><b>${sc.chg >= 0 ? "+" : ""}${sc.chg.toFixed(1)}</b></div>`).join("");
   drawHeatmap(m);
@@ -1705,12 +1724,12 @@ function drawHeatmap(m) {
   heatBlocks = best;
   const mono = getComputedStyle(document.body).getPropertyValue("--mono") || "monospace";
   const color = c => { const t = Math.max(-1, Math.min(1, c / 5)); const a = 0.22 + 0.7 * Math.abs(t);
-    return t >= 0 ? `rgba(12,163,12,${a})` : `rgba(208,59,59,${a})`; };
+    return t >= 0 ? `rgba(${C.heatUp},${a})` : `rgba(${C.heatDown},${a})`; };
   for (const b of heatBlocks) {
     ctx.fillStyle = color(b.chg); ctx.fillRect(b.x, b.y, Math.max(0, b.w - 1), Math.max(0, b.h - 1));
     {
       const big = b.w > 62 && b.h > 34;
-      ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillStyle = C.onColor; ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.font = `${big ? 600 : 500} ${big ? 12 : 10}px ${mono}`;
       ctx.fillText(b.symbol, b.x + b.w / 2, b.y + b.h / 2 - (big ? 7 : 0), b.w - 6);
       if (big) { ctx.font = `500 10.5px ${mono}`; ctx.fillStyle = "rgba(255,255,255,0.8)"; ctx.fillText(`${b.chg >= 0 ? "+" : ""}${b.chg.toFixed(1)}%`, b.x + b.w / 2, b.y + b.h / 2 + 8, b.w - 6); }
@@ -1980,6 +1999,8 @@ function showTab(tab, updateHash) {
   return true;
 }
 $$(".tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab, true));
+{ const b = $("#theme-toggle"); if (b) b.onclick = () => applyTheme(currentTheme() === "dark" ? "light" : "dark"); applyTheme(null);
+  if (window.matchMedia) matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => applyTheme(null)); }
 { const b = $("#bt-run"); if (b) b.onclick = async () => { b.disabled = true; const r = await control({ action: "backtest" }); b.textContent = r && r.backtest ? r.backtest : "Run now"; setTimeout(() => { b.disabled = false; b.textContent = "Run now"; }, 4000); }; }
 // routes: #<tab> or #<tab>/<SYMBOL> (symbol detail open). Back/forward and refresh replay them.
 function route() {
