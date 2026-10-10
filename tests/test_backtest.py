@@ -115,6 +115,11 @@ def test_weekend_schedule():
     assert not due(now=datetime(2026, 10, 9, 12, 0, tzinfo=NY))                       # a Friday
     fake.backtest = {"ran_at": sat.timestamp() - 3600}
     assert not due(now=sat)                                                           # already ran this weekend
+    fake.backtest = {"ran_at": sat.timestamp() - 3600, "stopped": True, "totals": {"days": 0}}
+    assert due(now=sat)                                                               # a run that scored nothing does not count
+    fake.backtest = {"ran_at": sat.timestamp() - 3600, "stopped": True, "totals": {"days": 12}}
+    assert not due(now=sat)                                                           # a partial run does
+    fake.backtest = {"ran_at": sat.timestamp() - 3600}
     assert due(now=datetime(2026, 10, 17, 12, 0, tzinfo=NY))                          # next Saturday
     fake.market_status = {"isOpen": None}
     assert not due(now=datetime(2026, 10, 17, 12, 0, tzinfo=NY))                      # unknown status: wait
@@ -154,3 +159,13 @@ def test_backtest_waits_for_paging_only_while_the_ring_has_room():
     assert Engine._paging_pending(fake) is False                       # paged to the configured depth
     fake.cfg.deep_backfill_days = 0
     assert Engine._paging_pending(fake) is False                       # deep backfill off
+
+
+def test_memory_low_needs_two_low_readings():
+    from flint.engine import memory_low
+    reads = iter([2.0, 30.0])
+    assert memory_low("cuda", 10.0, reader=lambda d: next(reads), settle=0.0) is None     # a dip that passed
+    reads = iter([2.0, 3.0])
+    assert memory_low("cuda", 10.0, reader=lambda d: next(reads), settle=0.0) == 2.0      # still low: stop
+    assert memory_low("cuda", 10.0, reader=lambda d: 40.0, settle=0.0) is None
+    assert memory_low("cuda", 10.0, reader=lambda d: None, settle=0.0) is None            # no figure: never stop on it

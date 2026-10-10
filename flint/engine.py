@@ -225,6 +225,21 @@ def pick_universe(core: list[str], held, current: list[str], candidates: dict[st
     return out, rec, promoted, demoted
 
 
+def memory_low(device: str, floor_gb: float, reader=free_memory_gb, settle: float = 3.0) -> float | None:
+    """The free memory figure when it sits under `floor_gb` on two readings `settle` seconds
+    apart, else None. One reading is not enough: a compile's autotuning or a cache release in
+    flight can dip free memory for a moment, and a stop on that moment threw a weekend run away
+    on 2026-10-10 two minutes in."""
+    f = reader(device)
+    if f is None or f >= floor_gb:
+        return None
+    time.sleep(settle)
+    g = reader(device)
+    if g is None or g >= floor_gb:
+        return None
+    return min(f, g)
+
+
 def backtest_preset_for(free_gb: float | None, live_d_model: int, live_peak_gb: float, *, floor: float = 10.0, presets=PRESETS):
     """The widest preset, no wider than the live one, whose training peak fits in the memory free
     right now with `floor` GB left for everything else. A training peak scales about linearly
@@ -1099,7 +1114,9 @@ class Engine:
                 "sweep": self.sweep or None}
 
     def _backtest_due(self, now: datetime | None = None) -> bool:
-        """Once per weekend (Saturday or Sunday ET with the market closed), or on request."""
+        """Once per weekend (Saturday or Sunday ET with the market closed), or on request. A run
+        that stopped before scoring a day (a memory squeeze at the start) does not count as the
+        weekend's run, so the schedule tries again."""
         if self._backtest_requested:
             return True
         if not getattr(self.cfg, "backtest_weekends", True):
@@ -1107,6 +1124,9 @@ class Engine:
         now = now or datetime.now(ZoneInfo("America/New_York"))
         if now.weekday() < 5 or self.market_status.get("isOpen") is not False:
             return False
+        last = self.backtest or {}
+        if last.get("stopped") and not (last.get("totals") or {}).get("days"):
+            return True
         return now.timestamp() - float((self.backtest or {}).get("ran_at") or 0) > 4 * 86400
 
     async def _backtest_loop(self) -> None:
@@ -1170,9 +1190,9 @@ class Engine:
             def should_stop() -> bool:
                 if self._backtest_stop:
                     return True
-                f = free_memory_gb(dev)
-                if f is not None and f < float(cfg.memory_floor_gb):
-                    self._backtest_stop_reason = f"memory low ({f:.0f} GB free)"
+                low = memory_low(dev, float(cfg.memory_floor_gb))
+                if low is not None:
+                    self._backtest_stop_reason = f"memory low ({low:.0f} GB free)"
                     self._backtest_stop = True
                     return True
                 return False
