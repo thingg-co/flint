@@ -849,10 +849,11 @@ function setTermFollow(on) {
   });
 })();
 
+function ctlValue(v) { return v == null ? "" : typeof v === "boolean" ? (v ? 1 : 0) : v; }   // a number input rejects "true"/"false"
 function buildControls() {
   const form = $("#controls");
   form.innerHTML = CONTROL_FIELDS.map(([k, label, step]) =>
-    `<label>${label}<input name="${k}" type="number" step="${step}" value="${state.controls[k] ?? ""}"></label>`).join("") +
+    `<label>${label}<input name="${k}" type="number" step="${step}" value="${ctlValue(state.controls[k])}"></label>`).join("") +
     `<button type="submit">Apply</button>`;
   form.onsubmit = async e => {
     e.preventDefault();
@@ -865,7 +866,7 @@ function buildControls() {
 function syncControls() {
   const form = $("#controls");
   if (!form.elements.length) return;
-  CONTROL_FIELDS.forEach(([k]) => { const inp = form.elements[k]; if (inp && document.activeElement !== inp) { const v = state.controls[k]; inp.value = v == null ? "" : typeof v === "boolean" ? (v ? 1 : 0) : v; } });
+  CONTROL_FIELDS.forEach(([k]) => { const inp = form.elements[k]; if (inp && document.activeElement !== inp) inp.value = ctlValue(state.controls[k]); });
   const b = $("#btn-pause");
   b.textContent = state.controls.learning === false ? "Resume learning" : "Pause learning";
   b.dataset.action = state.controls.learning === false ? "resume" : "pause";
