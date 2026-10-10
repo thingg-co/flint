@@ -19,6 +19,8 @@ from datetime import datetime
 
 import httpx
 
+from .sentiment import _NEG, _POS, NEGATIVE, POSITIVE, get_scorer, lexicon_tone  # noqa: F401 -- re-exported for callers and tests that read the lists
+
 log = logging.getLogger(__name__)
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
@@ -89,22 +91,34 @@ GENERIC_TERMS = [r"crypto", r"cryptocurrenc", r"digital asset", r"stablecoin", r
                  r"\bstocks?\b", r"\bnasdaq\b", r"s&p", r"\bdow\b", r"\bfed\b", r"\bearnings\b", r"\btariff",
                  r"inflation", r"treasur", r"wall street", r"\bmarkets?\b"]
 
-POSITIVE = ["surge", "surges", "soar", "soars", "rally", "rallies", "jump", "jumps", "gain", "gains", "record", "high",
-            "highs", "approve", "approves", "approval", "adoption", "inflow", "inflows", "upgrade", "breakout", "bull",
-            "bullish", "rebound", "rebounds", "partnership", "launch", "launches", "buy", "buys", "buying", "accumulate",
-            "milestone", "boost", "boosts", "climb", "climbs", "recover", "recovers", "recovery", "optimism", "outperform",
-            "rise", "rises", "rising", "up", "growth", "wins", "win"]
-NEGATIVE = ["plunge", "plunges", "crash", "crashes", "drop", "drops", "fall", "falls", "slump", "slumps", "slide", "slides",
-            "hack", "hacked", "exploit", "lawsuit", "sue", "sues", "sued", "ban", "bans", "outflow", "outflows", "sell-off",
-            "selloff", "liquidation", "liquidations", "bear", "bearish", "fraud", "halt", "halts", "fine", "fined", "probe",
-            "delay", "delays", "dump", "dumps", "low", "lows", "decline", "declines", "loss", "losses", "warning", "warns",
-            "risk", "fear", "tumble", "tumbles", "sink", "sinks", "collapse", "scam", "charges", "charged", "bankrupt",
-            "bankruptcy", "down", "falling", "dip", "dips", "crackdown"]
-
-_POS = re.compile(r"\b(" + "|".join(map(re.escape, POSITIVE)) + r")\b", re.I)
-_NEG = re.compile(r"\b(" + "|".join(map(re.escape, NEGATIVE)) + r")\b", re.I)
 _ASSET = {k: re.compile("|".join(v), re.I) for k, v in ASSET_TERMS.items()}
 _GENERIC = re.compile("|".join(GENERIC_TERMS), re.I)
+
+
+def attention_of(mentions: int, top: int) -> float:
+    """A name's share of the pass's leading coverage: 1 for the most-covered name, 0 for none,
+    the square root of the share between, so the low end is not crushed."""
+    if not top or mentions <= 0:
+        return 0.0
+    return round(min(1.0, math.sqrt(mentions / top)), 3)
+
+
+def name_tone(direct, market: float, prior: float = 1.0) -> float:
+    """The tone of a name's own headlines, with the market tone as one headline's worth of
+    prior: a name with no coverage reads the market, a well-covered one reads itself."""
+    n = len(direct)
+    if n == 0:
+        return float(market)
+    return (sum(h.sentiment for h in direct) + prior * float(market)) / (n + prior)
+
+
+async def rescore(scorer, headlines) -> None:
+    """Replace the word-list tone with the scorer's, off the event loop; a no-op without one."""
+    if scorer is None or not headlines:
+        return
+    vals = await asyncio.to_thread(scorer.score, [h.title for h in headlines])
+    for h, v in zip(headlines, vals):
+        h.sentiment = float(v)
 
 
 @dataclass
@@ -125,10 +139,7 @@ class Headline:
 def score_headline(text: str, asset_rx: dict[str, re.Pattern] | None = None) -> tuple[list[str], bool, float]:
     assets = [a for a, rx in (asset_rx if asset_rx is not None else _ASSET).items() if rx.search(text)]
     generic = bool(_GENERIC.search(text))
-    pos = len(_POS.findall(text))
-    neg = len(_NEG.findall(text))
-    sent = (pos - neg) / (pos + neg) if pos + neg else 0.0
-    return assets, generic, sent
+    return assets, generic, lexicon_tone(text)
 
 
 JS_EXTRACT = r"""() => {
@@ -191,7 +202,8 @@ class NewsSkimmer:
     id = "browser"
     name = "Headless browser"
 
-    def __init__(self, symbols: list[str], sources_spec: str = "", use_browser: bool = True):
+    def __init__(self, symbols: list[str], sources_spec: str = "", use_browser: bool = True, scorer=None):
+        self.scorer = scorer                      # graded tone (flint/sentiment.py); None keeps the word lists
         self.symbols = symbols
         self.bases = {s: s.split("-")[0].upper() for s in symbols}
         self.asset_rx = asset_patterns(self.bases)
@@ -244,19 +256,18 @@ class NewsSkimmer:
                 is_new = key not in self.seen
                 self.seen.setdefault(key, now)
                 headlines.append(Headline(title, name, url, assets, generic, sent, is_new, now))
+        await rescore(self.scorer, headlines)
 
         per_asset: dict[str, dict] = {}
+        generic = [h for h in headlines if h.generic and not h.assets]
+        market = sum(h.sentiment for h in generic) / len(generic) if generic else 0.0
         for sym, base in self.bases.items():
             direct = [h for h in headlines if base in h.assets]
-            generic = [h for h in headlines if h.generic and not h.assets]
-            weight = len(direct) + 0.5 * len(generic)
-            sent = (sum(h.sentiment for h in direct) + 0.5 * sum(h.sentiment for h in generic)) / weight if weight else 0.0
-            attention = min(1.0, math.log1p(weight) / math.log1p(120.0))
             per_asset[sym] = {
                 "mentions": len(direct),
                 "generic": len(generic),
-                "sentiment": round(sent, 3),
-                "attention": round(attention, 3),
+                "sentiment": round(name_tone(direct, market), 3),
+                "attention": attention_of(len(direct), max((len([h for h in headlines if b in h.assets]) for b in self.bases.values()), default=0)),
                 "top": [h.title for h in sorted(direct, key=lambda h: -abs(h.sentiment))[:3]],
             }
         return {
@@ -431,7 +442,8 @@ class FinnhubNews:
     REST = "https://finnhub.io/api/v1"
     KEEP_S = 3 * 86400
 
-    def __init__(self, symbols: list[str], key_getter, per_skim: int = 30):
+    def __init__(self, symbols: list[str], key_getter, per_skim: int = 30, scorer=None):
+        self.scorer = scorer
         self.symbols = symbols
         self.equities = [s for s in symbols if not is_crypto(s)]
         self.key_getter = key_getter
@@ -493,14 +505,15 @@ class FinnhubNews:
             self.cache[sym] = [h for h in self.cache[sym] if now - h.ts < self.KEEP_S]
         self.status["finnhub"] = f"{fetched} names refreshed, {sum(len(v) for v in self.cache.values())} company headlines"
         headlines = [h for hs in self.cache.values() for h in hs] + self.general
+        await rescore(self.scorer, headlines)                           # cached per title: inference only for new ones
         per_asset: dict[str, dict] = {}
         gen = self.general
+        market = sum(h.sentiment for h in gen) / len(gen) if gen else 0.0
+        top_n = max((len(self.cache.get(sym, [])) for sym in self.equities), default=0)
         for sym in self.equities:
             direct = self.cache.get(sym, [])
-            weight = len(direct) + 0.5 * len(gen)
-            sent = (sum(h.sentiment for h in direct) + 0.5 * sum(h.sentiment for h in gen)) / weight if weight else 0.0
-            per_asset[sym] = {"mentions": len(direct), "generic": len(gen), "sentiment": round(sent, 3),
-                              "attention": round(min(1.0, math.log1p(weight) / math.log1p(120.0)), 3),
+            per_asset[sym] = {"mentions": len(direct), "generic": len(gen), "sentiment": round(name_tone(direct, market), 3),
+                              "attention": attention_of(len(direct), top_n),
                               "top": [h.title for h in sorted(direct, key=lambda h: -abs(h.sentiment))[:3]]}
         return {"t": now, "method": f"finnhub ({fetched} names)", "status": dict(self.status),
                 "headlines": [h.to_json() for h in headlines], "per_asset": per_asset}
@@ -515,11 +528,12 @@ class NewsHub:
         self.sources: dict[str, object] = {}
         self.enabled: dict[str, bool] = {}
         off = {x.strip() for x in cfg.news_off.split(",") if x.strip()}
-        browser = NewsSkimmer(symbols, cfg.news_sources, cfg.news_browser)
+        self.scorer = get_scorer(cfg)
+        browser = NewsSkimmer(symbols, cfg.news_sources, cfg.news_browser, scorer=self.scorer)
         self.sources[browser.id] = browser
         self.enabled[browser.id] = "browser" not in off
         if any(not is_crypto(s) for s in symbols):
-            fn = FinnhubNews(symbols, lambda: getattr(cfg, "finnhub_key", ""))
+            fn = FinnhubNews(symbols, lambda: getattr(cfg, "finnhub_key", ""), scorer=self.scorer)
             self.sources[fn.id] = fn
             self.enabled[fn.id] = "finnhub" not in off
         if av.key:
@@ -572,10 +586,18 @@ class NewsHub:
                 tops += pa.get("top", [])
             per_asset[sym] = {"mentions": mentions, "generic": 0, "sentiment": round(weighted / wsum, 3) if wsum else 0.0,
                               "attention": round(attn, 3), "top": tops[:3]}
+        # Attention is relative: the name with the most headlines this pass is 1, one with none is 0,
+        # the rest by the square root of their share, so 1 of 10 reads 0.32 and 5 of 10 reads 0.71.
+        # Before 0.5.14 every name's weight carried half of the same general headlines and a log
+        # scale against 120, so 8 and 10 headlines both read 0.76 and the feature said nothing.
+        top_n = max((pa["mentions"] for pa in per_asset.values()), default=0)
+        for pa in per_asset.values():
+            pa["attention"] = attention_of(pa["mentions"], top_n)
         methods = ", ".join(r.get("method", sid) for sid, r in results) or "no sources enabled"
         ideas = self._ideas(per_asset)
         return {"t": time.time(), "method": methods, "sources": self.status(), "headlines": headlines,
-                "per_asset": per_asset, "ideas": ideas, "new": sum(1 for h in headlines if h.get("new"))}
+                "per_asset": per_asset, "ideas": ideas, "new": sum(1 for h in headlines if h.get("new")),
+                "scorer": getattr(self.scorer, "name", "lexicon")}
 
     def _ideas(self, per_asset: dict) -> list[str]:
         """Names with coverage, most covered first, then one line for the rest."""

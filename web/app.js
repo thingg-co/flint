@@ -1889,7 +1889,7 @@ function renderNews() {
   const quiet = pa.length - covered.length;
   const gen = (n.headlines || []).filter(h => !h.assets || !h.assets.length);
   const tone = gen.length ? gen.reduce((s, h) => s + h.sentiment, 0) / gen.length : 0;
-  $("#news-meta").textContent = `${fmtTime(n.t)} via ${n.method}, ${n.headlines.length} headlines (${n.new} new), ${covered.length} of ${pa.length} names covered`;
+  $("#news-meta").textContent = `${fmtTime(n.t)} via ${n.method}, ${n.headlines.length} headlines (${n.new} new), ${covered.length} of ${pa.length} names covered${n.scorer ? ` · tone by ${n.scorer}` : ""}`;
   // one row per covered name: tone bar and count, with its leading headline underneath (linked when it is in the list)
   const byTitle = new Map((n.headlines || []).map(h => [h.title, h.url]));
   $("#tone").innerHTML = covered.slice(0, 16).map(([s, a]) => {

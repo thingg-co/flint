@@ -312,6 +312,8 @@ class Config:
     # News skimmer
     news_enabled: bool = _env("NEWS", "1") not in ("0", "false", "no")
     news_minutes: float = _env("NEWS_MINUTES", 3.0)
+    news_scorer: str = _env("NEWS_SCORER", "finbert")     # headline tone: finbert (ProsusAI/finbert on the CPU, graded) or lexicon (word lists)
+    finbert_model: str = _env("FINBERT_MODEL", "ProsusAI/finbert")
     news_browser: bool = _env("NEWS_BROWSER", "1") not in ("0", "false", "no")
     news_off: str = _env("NEWS_OFF", "")           # news source ids off by default: browser, alphavantage
     news_sources: str = _env("NEWS_SOURCES", "")   # "Name|https://url,Name2|https://url2" to override the browser defaults

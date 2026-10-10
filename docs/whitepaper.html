@@ -234,7 +234,7 @@
           <tr><td><code>closepos</code></td><td>(close − low) / (high − low)</td></tr>
           <tr><td><code>mom</code></td><td>sum of the last 12 bar returns</td></tr>
           <tr><td><code>rvol</code></td><td>standard deviation of the last 12 bar returns (close-to-close; see Section 7)</td></tr>
-          <tr><td rowspan="2"><b>Attention</b></td><td><code>news_sent</code>, <code>news_attn</code></td><td>lexicon sentiment and log-scaled mention weight from company news and market desks</td></tr>
+          <tr><td rowspan="2"><b>Attention</b></td><td><code>news_sent</code>, <code>news_attn</code></td><td>tone from a local FinBERT (P(positive) − P(negative) per headline, the name's own headlines with the market tone as one headline of prior) and attention as the name's share of the pass's most-covered name, from company news and market desks</td></tr>
           <tr><td><code>wsb_sent</code>, <code>wsb_attn</code></td><td>the same from retail-forum chatter</td></tr>
           <tr><td rowspan="3"><b>Positioning</b></td><td><code>fng</code></td><td>fear-and-greed index, market-wide</td></tr>
           <tr><td><code>funding</code>, <code>oi_chg</code>, <code>longshort</code></td><td>derivatives positioning where a venue reports it</td></tr>

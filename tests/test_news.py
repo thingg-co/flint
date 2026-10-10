@@ -164,21 +164,21 @@ class TestScoreHeadline:
     """Tests for score_headline function."""
 
     def test_score_headline_positive_sentiment(self):
-        """Two positive words, no negative = sentiment 1.0."""
+        """Two positive words, no negative = +0.67: graded, one word short of certain."""
         # "surge" and "rally" are both in POSITIVE
         result = score_headline("Markets surge and rally hard")
         assets, generic, sent = result
-        assert sent == 1.0
+        assert abs(sent - 2 / 3) < 1e-3
         assert assets == []
         assert generic is True      # "markets" is market tone since 0.5.11; a headline with no market word is not
         assert score_headline("Widgets surge and rally hard")[1] is False
 
     def test_score_headline_negative_sentiment(self):
-        """Two negative words, no positive = sentiment -1.0."""
+        """Two negative words, no positive = -0.67."""
         # "plunge" and "crash" are both in NEGATIVE
         result = score_headline("Markets plunge and crash")
         assets, generic, sent = result
-        assert sent == -1.0
+        assert abs(sent + 2 / 3) < 1e-3
 
     def test_score_headline_mixed_sentiment(self):
         """One positive, one negative = sentiment 0.0."""
@@ -197,7 +197,7 @@ class TestScoreHeadline:
         result = score_headline("Bitcoin surges past $60K")
         assets, generic, sent = result
         assert "BTC" in assets
-        assert sent == 1.0
+        assert sent == 0.5                                            # one tone word: halfway, not certain
 
     def test_score_headline_assets_eth(self):
         """ETH asset is detected."""

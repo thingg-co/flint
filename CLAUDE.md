@@ -265,6 +265,17 @@ unless Flint is already up.
   `FinnhubNews`, company news keyed by ticker (30 names per pass in rotation, three days kept), with
   general market news for the tone; headline text matches a ticker only as an upper-case word of
   three or more letters outside `TICKER_STOPLIST`. The Control panel lists only covered names.
+  Headline tone is graded (`flint/sentiment.py`): `news_scorer=finbert` (the default) runs
+  ProsusAI/finbert locally on the CPU, tone = P(positive) − P(negative), fetched from the Hugging
+  Face hub on first use (about 440 MB, cached under ~/.cache/huggingface) and cached per title so a
+  pass costs inference only for new headlines (about 20 ms each on the Spark); `lexicon` is the
+  graded word lists (one tone word ±0.5, two ±0.67, a hedge takes a third off), also the fallback
+  when the model cannot load. Before 0.5.14 the word count gave every headline −1, 0 or +1. Per-name
+  attention is relative to the pass's most-covered name (`attention_of`: the square root of the
+  share, 0 for no coverage) and a name's tone is its own headlines with the market tone as one
+  headline of prior (`name_tone`); before, half of the same general headlines entered every name's
+  weight, so attention read 0.76 for everyone and tone was the market's. Both feed `news_sent` and
+  `news_attn`; the feature count is unchanged, so no reset.
 
 ## Working on it
 
