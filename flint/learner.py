@@ -431,8 +431,8 @@ class OnlineLearner:
                     self._seen = {int(round(t)) for t in self.rt[:n] if t}
                     self._slot = {int(round(t)): i for i, t in enumerate(self.rt[:n]) if t}
                     self.rhold[:n] = [self._held_out(float(t)) for t in self.rt[:n]]
-                    if model_fresh:
-                        self.labels = n
+                    if model_fresh or self.labels < n:
+                        self.labels = n                                   # the counter can never read below the windows held
                     self._replay_labels = self.labels                    # what is on disk is what is in memory
                     self.size = n
                     self.ptr = (int(rep["ptr"]) % self.rx.shape[0] if (n == self.rx.shape[0] and skip == 0)

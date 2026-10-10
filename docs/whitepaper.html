@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-0W099NHD80"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-0W099NHD80');
+</script>
+<title>Flint: design of a continuously learning intraday market model</title>
+<meta name="description" content="A whitepaper on Flint's design: online learning on five-minute bars, calibrated return distributions, a self-updating universe, a defined-risk policy, a walk-forward backtest, and the engineering rules that keep one machine honest.">
+<meta property="og:title" content="Flint: design of a continuously learning intraday market model">
+<meta property="og:description" content="Design decisions, with reasons, for a self-hosted market model that learns as its own forecasts resolve.">
+<meta property="og:type" content="article">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<script src="theme.js"></script>
+<style>
+  :root{
+    --bg:#0b0b0a; --surface:#151513; --surface2:#1c1c19; --border:#2b2b27;
+    --ink:#f6f5f0; --ink2:#c6c5ba; --muted:#8c8a81;
+    --blue:#3987e5; --green:#26a269; --red:#e0574b; --fire:#ff7a1a; --gold:#ffd479;
+    --hot:#2a1a0f; --cool:#10203a; --shade:#3a3a34; --shade2:#2a2a26; --code-bg:#0d0d0c;
+    color-scheme:dark;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --serif:"Source Serif 4",Georgia,"Times New Roman",serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --max:1080px; --col:72ch;
+  }
+  @media (prefers-color-scheme: light){
+    :root:not([data-theme="dark"]){
+      --bg:#faf9f5; --surface:#ffffff; --surface2:#f1efe8; --border:#e2dfd5;
+      --ink:#1b1a17; --ink2:#3f3d37; --muted:#7a776d;
+      --blue:#2563c4; --green:#1e8449; --red:#c23b30; --fire:#d95d0e; --gold:#9a6b12;
+      --hot:#fbe6d6; --cool:#dde8f8; --shade:#d9d6cc; --shade2:#e8e5dc; --code-bg:#f3f1ea;
+      color-scheme:light;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#faf9f5; --surface:#ffffff; --surface2:#f1efe8; --border:#e2dfd5;
+    --ink:#1b1a17; --ink2:#3f3d37; --muted:#7a776d;
+    --blue:#2563c4; --green:#1e8449; --red:#c23b30; --fire:#d95d0e; --gold:#9a6b12;
+    --hot:#fbe6d6; --cool:#dde8f8; --shade:#d9d6cc; --shade2:#e8e5dc; --code-bg:#f3f1ea;
+    color-scheme:light;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink2);font-family:var(--serif);line-height:1.65;font-size:17.5px;-webkit-font-smoothing:antialiased}
+  a{color:var(--blue);text-decoration:none} a:hover{text-decoration:underline}
+  h1,h2,h3,h4{color:var(--ink);line-height:1.15;margin:0 0 .5em;font-family:var(--sans);letter-spacing:-.01em}
+  .wrap{max-width:var(--max);margin:0 auto;padding:0 24px}
+  .mono{font-family:var(--mono)}
+  header.nav{position:sticky;top:0;z-index:10;background:color-mix(in srgb,var(--bg) 84%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--border);font-family:var(--sans)}
+  .nav .wrap{display:flex;align-items:center;gap:18px;height:60px}
+  .brand{font-weight:700;font-size:19px;color:var(--ink);display:flex;align-items:center;gap:8px}
+  .brand a{color:var(--ink)}
+  .brand .fire{filter:drop-shadow(0 0 6px rgba(255,122,26,.5))}
+  .nav nav{margin-left:auto;display:flex;gap:22px;align-items:center;font-size:14px}
+  .nav nav a{color:var(--ink2)}
+  .nav .gh{border:1px solid var(--border);border-radius:8px;padding:7px 13px;color:var(--ink)}
+  .nav .gh:hover{border-color:var(--ink2);text-decoration:none}
+  .nav .tgl{border:1px solid var(--border);border-radius:8px;padding:5px 10px;background:transparent;color:var(--ink);font:inherit;font-size:15px;line-height:1;cursor:pointer}
+  .nav .tgl:hover{border-color:var(--ink2)}
+  @media(max-width:640px){.nav nav a.hide-sm{display:none}}
+  .paper{display:grid;grid-template-columns:220px minmax(0,1fr);gap:48px;padding:56px 0 80px}
+  @media(max-width:900px){.paper{grid-template-columns:minmax(0,1fr)}}
+  .toc{position:sticky;top:84px;align-self:start;font-family:var(--sans);font-size:13.5px;line-height:1.5}
+  .toc .t{font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--fire);font-family:var(--mono);margin-bottom:10px}
+  .toc a{display:block;color:var(--ink2);padding:3px 0}
+  .toc a.sub{padding-left:14px;color:var(--muted)}
+  .toc a:hover{color:var(--ink);text-decoration:none}
+  @media(max-width:900px){.toc{position:static;border:1px solid var(--border);border-radius:10px;padding:14px 16px;columns:2;column-gap:24px} .toc .t{column-span:all}}
+  article{max-width:var(--col);min-width:0}
+  .eyebrow{font-family:var(--mono);font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--fire);margin-bottom:14px}
+  article h1{font-size:clamp(30px,4.2vw,44px);margin-bottom:.4em}
+  .byline{font-family:var(--sans);font-size:14px;color:var(--muted);margin:0 0 30px;line-height:1.6}
+  .abstract{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--fire);border-radius:8px;padding:18px 20px;margin:0 0 36px;font-size:16.5px}
+  .abstract b{color:var(--ink);font-family:var(--sans);font-size:13px;letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:8px}
+  article h2{font-size:26px;margin-top:2.2em;padding-top:.6em;border-top:1px solid var(--border)}
+  article h3{font-size:19px;margin-top:1.6em}
+  article p{margin:0 0 1.05em}
+  article ul,article ol{padding-left:1.3em;margin:0 0 1.05em}
+  article li{margin-bottom:.4em}
+  .eq{font-family:var(--serif);font-style:italic;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin:14px 0 18px;overflow-x:auto;color:var(--ink);font-size:17px;white-space:nowrap}
+  .eq .n{float:right;font-style:normal;color:var(--muted);font-family:var(--mono);font-size:12.5px}
+  .eq sub,.eq sup{font-style:normal;font-size:.75em}
+  var{font-style:italic}
+  code{font-family:var(--mono);font-size:.85em;color:var(--ink);background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1px 5px}
+  .table-wrap{overflow-x:auto;margin:16px 0 22px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}
+  table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:13.5px;line-height:1.45}
+  caption{text-align:left;padding:10px 12px;color:var(--muted);font-size:12.5px;caption-side:top}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{font-weight:600;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2);background:var(--surface2);white-space:nowrap}
+  tbody tr:last-child td{border-bottom:0}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  td b{color:var(--ink);font-weight:600}
+  .callout{border:1px solid var(--border);border-left:3px solid var(--gold);border-radius:8px;padding:14px 18px;background:var(--surface);margin:18px 0 22px;font-size:16px}
+  .callout b{color:var(--ink)}
+  .fig{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px 18px 14px;margin:20px 0 26px}
+  .fig .cap{font-family:var(--sans);font-size:13px;color:var(--muted);margin-top:10px;line-height:1.5}
+  .fig svg{display:block;width:100%;height:auto;max-width:100%}
+  .lbl{font-family:var(--sans);font-size:12px;fill:var(--ink2)}
+  .lbl.b{fill:var(--ink);font-weight:600}
+  .lbl.m{font-family:var(--mono);font-size:11px;fill:var(--muted)}
+  .bx{fill:var(--surface2);stroke:var(--border);stroke-width:1}
+  .bx.hot{fill:var(--hot);stroke:var(--fire)}
+  .bx.cool{fill:var(--cool);stroke:var(--blue)}
+  .ar{fill:none;stroke:var(--muted);stroke-width:1.4;marker-end:url(#arr)}
+  .refs{font-family:var(--sans);font-size:14px;padding-left:1.6em}
+  .refs li{margin-bottom:8px;line-height:1.5}
+  .refs a{word-break:break-word}
+  sup.r{font-family:var(--sans);font-size:11px;color:var(--fire);line-height:0;margin-left:1px}
+  sup.r a{color:var(--fire)}
+  footer{border-top:1px solid var(--border);padding:30px 0;color:var(--muted);font-size:14px;font-family:var(--sans)}
+  footer .wrap{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+  footer .brand{font-size:16px}
+  footer a{margin-left:auto}
+  footer .copy{margin-left:auto;color:var(--muted)}
+</style>
+</head>
+<body>
+<header class="nav">
+  <div class="wrap">
+    <span class="brand"><span class="fire">🔥</span> <a href="index.html">Flint</a></span>
+    <nav>
+      <a class="hide-sm" href="index.html#features">Features</a>
+      <a class="hide-sm" href="index.html#how">How it works</a>
+      <a class="hide-sm" href="index.html#quickstart">Quickstart</a>
+      <a class="hide-sm" href="whitepaper.html">Whitepaper</a>
+      <a class="gh" href="https://github.com/thingg-co/flint">GitHub ↗</a>
+      <button id="theme-toggle" class="tgl" type="button" aria-label="Switch theme">☀</button>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap paper">
+  <aside class="toc" aria-label="Contents">
+    <div class="t">Contents</div>
+    <a href="#abstract">Abstract</a>
+    <a href="#intro">1. Problem and principles</a>
+    <a href="#data">2. Data</a>
+    <a class="sub" href="#bars">Bars and features</a>
+    <a class="sub" href="#replay">The replay buffer</a>
+    <a class="sub" href="#universe">A self-updating universe</a>
+    <a href="#model">3. Model</a>
+    <a class="sub" href="#loss">Objective</a>
+    <a class="sub" href="#sizing">Sizing to the machine</a>
+    <a href="#learning">4. Learning regimes</a>
+    <a href="#calibration">5. Calibration</a>
+    <a href="#policy">6. Decision policy and risk</a>
+    <a href="#evaluation">7. Evaluation</a>
+    <a class="sub" href="#live">Live scoring</a>
+    <a class="sub" href="#backtest">Walk-forward backtest</a>
+    <a href="#system">8. System design</a>
+    <a href="#limits">9. Limitations</a>
+    <a href="#future">10. Future work</a>
+    <a href="#refs">References</a>
+    <a href="#appendix">Appendix</a>
+  </aside>
+
+  <article>
+    <div class="eyebrow">Whitepaper · version 0.5.13 · October 2026</div>
+    <h1>Flint: design of a continuously learning intraday market model</h1>
+    <p class="byline">thingg.co · Source at <a href="https://github.com/thingg-co/flint">github.com/thingg-co/flint</a> · PolyForm Noncommercial<br>A companion to the <a href="index.html">product page</a>. Flint is a research instrument, not investment advice.</p>
+
+    <div class="abstract" id="abstract"><b>Abstract</b>
+      Flint is a single-process, self-hosted system that forecasts the distribution of each stock's return over the next hour on five-minute bars for several hundred names at once, trains online as those forecasts resolve, and acts on the forecasts through a defined-risk paper book. This paper records the design decisions and the reasons behind them. We argue for distributional outputs with online conformal calibration over point forecasts; for a single cross-sectional network with a regime gate rather than one model per name; for a replay buffer keyed by bar time that survives restarts and universe changes; for a universe that maintains itself through a promotion and demotion rule; for a policy composed of auditable gates rather than a learned decision layer; and for a walk-forward backtest that is out of sample by construction and runs on the weekend GPU. We also document the engineering invariants that a shared-memory GPU imposes on such a system, several of which were learned by taking the machine down. The question of whether the forecasts carry economic edge after costs is left open and is precisely what the backtest exists to answer.
+    </div>
+
+    <h2 id="intro">1. Problem and principles</h2>
+    <p>The task is short-horizon, cross-sectional return forecasting under a regime of continual change: the distribution of one-hour returns is non-stationary, the set of names worth modeling changes week to week, and the data arrives as a stream. Classical practice fits a model to a fixed history and evaluates it on a held-out period. Flint takes the opposite stance, closer to how a discretionary trader operates: a single model that is always on, scores itself on every forecast an hour after making it, and is judged primarily on that live, out-of-sample record.</p>
+    <p>Six principles follow from that stance and recur throughout the design.</p>
+    <ol>
+      <li><b>Distributions, not points.</b> A one-hour return is dominated by noise. A forecast of five quantiles and two direction probabilities carries its own uncertainty, which the policy can act on; a point forecast cannot.</li>
+      <li><b>Online, with the clock as the only split.</b> Every label is used for training only after the forecast it scores has been recorded. There is no separate validation period; the validation is the live record plus a held-out slice of the replay.</li>
+      <li><b>One network for the whole cross-section.</b> Names move together. A network that sees all of them at once can condition each forecast on the others and on the pooled market state.</li>
+      <li><b>Defined risk only.</b> No position the system takes, on paper or in principle, may carry unlimited loss.</li>
+      <li><b>Everything observable.</b> Every feed, feature, forecast, decision and training step is traced to a console the operator can read.</li>
+      <li><b>One machine, nothing leaves it.</b> Market data comes in; keys, positions and the narrative brief's language model stay local.</li>
+    </ol>
+
+    <h2 id="data">2. Data</h2>
+    <h3 id="bars">Bars and features</h3>
+    <p>Sources live in a registry with a priority order, and each symbol is owned by the best source that is up and supports it; ownership fails over without operator action. Bars are built only from real trades. Quote and heartbeat ticks update the last price and the bid-ask spread but never form a candle, because a feed that echoes a stale quote while the market is closed would otherwise manufacture flat bars and the model would learn from fiction. Every modeled name needs a price for a bar row to emit, so a name without history is seeded flat at zero rather than allowed to stall the universe.</p>
+    <p>Each name contributes 25 features per bar, standardized by a running mean and variance kept per name: nine from the bars themselves (return, range, log volume, trade imbalance, spread, log trade count, close position within the bar, momentum, realized volatility), four from attention and tone (news sentiment and attention, retail-forum sentiment and attention), a fear-and-greed index, derivatives positioning (funding, open-interest change, long/short ratio), the net tilt of tracked fund books and an investor-council bias, two fundamental factors, market breadth and VIX, and at-the-money implied volatility and skew from option chains. The label for a window ending at bar <var>t</var> is the log return in basis points from that bar's close to the close at <var>t</var> + 12, capped at 2,000 bps, with a mask that removes any name that did not trade at both ends.</p>
+
+    <h3 id="replay">The replay buffer</h3>
+    <p>Labeled windows are stored in a ring buffer of shape (windows × names × 128 bars × 25 features) in 32-bit floats. Three decisions about this buffer turned out to matter more than any modeling choice.</p>
+    <p><b>Keyed by bar time.</b> Every restart re-walks the last five days of history to warm the feature state. Before windows were keyed, each restart appended another copy of those days: a 526-window buffer was found to hold only 180 distinct label vectors, so the most recent days were being trained on three times over. A window is now stored once per bar timestamp, and a re-walk adds nothing.</p>
+    <p><b>Budgeted in bytes.</b> The buffer's capacity is a memory budget, 30 GB on the reference machine, from which the window count follows the universe: about 14,000 windows at 232 names and 7,000 at 400. Growing the universe shrinks the history held rather than the memory left for everything else.</p>
+    <p><b>Deep history paged in while the market is closed.</b> A loop pages five-minute candles back in ten-day chunks, one every 150 seconds to respect the provider's rate limit, through an isolated bar and feature pipeline, until 200 days or a full buffer. Paging stops within a chunk of full rather than wrapping the ring onto its newest windows. Five percent of windows, every twentieth by timestamp, are held out of training permanently; the choice is derived from the timestamp so a reload keeps the same slice.</p>
+
+    <h3 id="universe">A self-updating universe</h3>
+    <p>The modeled set is the configured core, every holding in the operator's accounts, and up to a fixed number of promoted names, under a cap of 400. Once a day after the close, candidates are drawn from three organic sources and scored on one 0–100 scale by rank within each source: the market radar's movers, weighted by dollar volume and filtered to liquid names above five dollars; tickers named in headlines, counted only when the symbol is known elsewhere; and the tracked funds' 13F positions by weight. The best rank across sources wins, with a small bonus for appearing in more than one.</p>
+    <p>Promotion fills the room left under the cap from the top of the ranking. Demotion is deliberately slow: a promoted name stays while it keeps ranking inside the top one-and-a-half times the slot count, and leaves only after 14 days without such a hit and at least five days of tenure. The asymmetry exists because a demotion forfeits that name's learned representation and its history in the replay, and a day's excitement is not worth that.</p>
+    <p>A universe change used to reset the model, which is why no such rule could run automatically. Every parameter in the network is shared across names except a table of per-name embeddings, so a change now migrates: retained names' embedding rows and their optimizer moments are copied, new names receive fresh rows, retained names' replay columns are kept, new names' columns are masked, and the deep backfill re-pages history to fill those columns in. If the saved weights do not fit the current network at all, because the size benchmark landed on a different preset, the network starts fresh but the replay is still kept and migrated; the data outlives the architecture.</p>
+
+    <h2 id="model">3. Model</h2>
+    <p>FlintNet maps a tensor of (names × 128 bars × 25 features) to, per name, five return quantiles at the 10th, 25th, 50th, 75th and 90th percentiles, a probability that the return exceeds +10 bps and a probability that it falls below −10 bps, plus a regime mixture and an attention map that are exposed for inspection. Three architectural choices carry the design.</p>
+    <p><b>Dilated causal convolutions over time.</b> Each name's window is read by a stack of one-dimensional convolutions with dilations 1, 2, 4, 8, 16, 32 and 64, which gives a receptive field over the whole window at a cost linear in its length, and causality by construction.</p>
+    <p><b>Cross-asset attention.</b> After the temporal stack, a multi-head attention layer runs across names within the bar, so a forecast for one name can condition on the state of the others. A learned embedding per name lets the network tell the names apart; it is the only per-name parameter, which is what makes universe migration cheap.</p>
+    <p><b>A regime gate over expert heads.</b> A pooled summary of the market state selects a soft mixture over twelve expert heads, so different regimes use different heads rather than one blended predictor. The gate's weights are published with each forecast. The quantile head is non-crossing by construction: it predicts the median and non-negative increments on either side.</p>
+
+    <h3 id="loss">Objective</h3>
+    <p>The loss is the pinball loss over the five quantiles plus a smoothed binary cross-entropy on each direction head, averaged over the names the mask admits:</p>
+    <div class="eq"><span class="n">(1)</span>L = (1/|M|) Σ<sub>i∈M</sub> [ Σ<sub>τ</sub> ρ<sub>τ</sub>(y<sub>i</sub> − q<sub>i,τ</sub>) + BCE(p<sub>i</sub><sup>up</sup>, 1[y<sub>i</sub> &gt; θ]) + BCE(p<sub>i</sub><sup>down</sup>, 1[y<sub>i</sub> &lt; −θ]) ]</div>
+    <p>where ρ<sub>τ</sub>(<var>u</var>) = <var>u</var>(τ − 1[<var>u</var> &lt; 0]) is the quantile check function, θ = 10 bps is the direction deadband, and the direction targets are smoothed by 0.1 so the network cannot be certain. Gaussian noise with standard deviation 0.1 is added to the standardized inputs during training. On CUDA the forward pass runs under bfloat16 autocast with the loss in 32-bit; the training forward is compiled, which doubles throughput on the reference hardware.</p>
+
+    <h3 id="sizing">Sizing to the machine</h3>
+    <p>Rather than fix a network size, a benchmark at start climbs a ladder of presets and keeps the largest whose training step fits a time budget: the warmup ceiling of 300 seconds over 60 steps, so 5,000 ms per step. Memory is checked separately, before each rung is benchmarked and once more before the start: the rung's measured peak times 1.25, plus the replay budget, plus a 3 GB headroom must fit in what is free. The estimate for the next rung scales the last rung's measured peak by width, since a training peak grows about linearly with model width; a rung whose projected step time is far over budget, or whose need exceeds the machine next to the replay, ends the ladder honestly, while a transient squeeze from another tenant refuses the start rather than caching a downgrade for good.</p>
+    <div class="table-wrap">
+      <table>
+        <caption>Table 1. The preset ladder as benchmarked at 232 and 362 names on the reference machine (NVIDIA GB10, 121 GB unified memory), eager mode, batch 16. Step time grows with the universe, so the chosen rung falls from 5XL to 4XL as the universe grows past about 300 names.</caption>
+        <thead><tr><th>Preset</th><th class="num">Width</th><th class="num">Params</th><th class="num">ms/step, 232 names</th><th class="num">Peak GB</th><th class="num">ms/step, 362 names</th><th class="num">Peak GB</th></tr></thead>
+        <tbody>
+          <tr><td>XXL</td><td class="num">256</td><td class="num">4.4M</td><td class="num">960</td><td class="num">14.4</td><td class="num">1,507</td><td class="num">22.4</td></tr>
+          <tr><td>XXXL</td><td class="num">384</td><td class="num">11.1M</td><td class="num">1,800</td><td class="num">25.4</td><td class="num">2,801</td><td class="num">39.5</td></tr>
+          <tr><td>4XL</td><td class="num">512</td><td class="num">19.6M</td><td class="num">2,402</td><td class="num">33.9</td><td class="num">3,737</td><td class="num">52.8</td></tr>
+          <tr><td>5XL</td><td class="num">768</td><td class="num">46.3M</td><td class="num">3,992</td><td class="num">51.0</td><td class="num" colspan="2">not benchmarked: about 110 GB next to the replay</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 id="learning">4. Learning regimes</h2>
+    <p>Four regimes share one network and one replay, and are never allowed to contend for the GPU at once.</p>
+    <ul>
+      <li><b>Warmup.</b> At start, after the checkpoint and replay load and the five-day backfill, 60 optimizer steps over the replay before the engine goes live. A live forecast before this point would be noise.</li>
+      <li><b>Online.</b> Each bar whose forecasts have resolved yields up to eight steps, two per matured label, on batches of 16 drawn 30% from the newest 256 windows and 70% uniformly from the whole buffer. The recency bias is the mechanism of adaptation; the uniform share is the defense against forgetting.</li>
+      <li><b>Idle passes.</b> While the market is closed, up to two passes over the replay per closed session, a budget bounded by data rather than hours so a long night cannot grind the same windows indefinitely. Every 40 steps the held-out slice is scored, and the session's budget ends when that score has not improved over three checks. In-sample loss cannot serve this purpose: it rises whenever the deep backfill adds unseen history and falls as it is fit.</li>
+      <li><b>Deep chunks.</b> Each paged chunk of history is followed by 30 steps so the new windows enter the weights promptly.</li>
+    </ul>
+
+    <h2 id="calibration">5. Calibration</h2>
+    <p>Two online corrections sit between the network and the policy, and both are updated per bar rather than per name, because a bar's several hundred labels are one observation of calibration, not several hundred: updating per name compounds into one enormous step and, with the horizon's delay, drives the correction into oscillation between its clips.</p>
+    <p>The first is an adaptive conformal scale <var>s</var> on the predicted band widths. The quantiles are widened or narrowed about the median, <var>q̃</var><sub>τ</sub> = <var>q</var><sub>0.5</sub> + <var>s</var>(<var>q</var><sub>τ</sub> − <var>q</var><sub>0.5</sub>), and after each resolved bar the scale moves by</p>
+    <div class="eq"><span class="n">(2)</span>s ← clip( s · exp( γ · ((1 − c) − 0.2) ), 0.5, 25 )</div>
+    <p>where <var>c</var> is the fraction of that bar's outcomes inside the 10–90 band and γ = 0.05, so the scale settles where one outcome in five falls outside. It starts at 2, wide, and earns its way down. The second is a temperature <var>T</var> on the direction logit, <var>p̃</var> = σ(<var>T</var> · logit(<var>p</var>)), moved by one gradient step of the calibration cross-entropy per bar with rate 0.01, started sceptical at 0.3. Both corrections, and every per-name record the policy consults, are applied one horizon late in the backtest exactly as they are live.</p>
+
+    <h2 id="policy">6. Decision policy and risk</h2>
+    <p>The policy is a composition of gates on the calibrated distribution followed by a sizing rule. It is deliberately not a learned layer: every gate is a live control, auditable, and testable in isolation, and the backtest can replay the identical gates over history. The score is a Sharpe-like ratio of the median to the calibrated interquartile range, <var>z</var> = <var>q̃</var><sub>0.5</sub> / (<var>q̃</var><sub>0.75</sub> − <var>q̃</var><sub>0.25</sub>). A name may take a side only if all of the following hold: |<var>z</var>| exceeds a threshold; the tempered direction probability sits far enough from one half and agrees with the sign of <var>z</var>; the expected move exceeds the larger of a flat cost and the live bid-ask spread, and the spread is below a limit; the price is above a floor; the name's own record of resolved calls meets a minimum count and hit rate; and the same side has persisted for two consecutive bars. The book as a whole trades only once the model is trusted, after 48 live labels, and only while its hit-rate average beats a coin flip.</p>
+    <p>Size is fractional Kelly on the score, hard-capped, then scaled by band coverage relative to the 80% target so an overconfident model trades small:</p>
+    <div class="eq"><span class="n">(3)</span>w = w<sub>max</sub> · min(1, k · |z|) · max(0.25, min(1, c̄ / 0.8))</div>
+    <p>with <var>k</var> = 0.15. A bearish view is a long put and a volatility view, when both direction probabilities are high and the band is wide, is a long straddle, with premium per position capped at 2% of equity; a bullish view is stock. The paper book runs 100,000 dollars with no leverage, a 15% cap per name, fills marked at the spread, a minimum hold of six bars unless the signal reverses, and flattens at the close. With extended hours enabled, stock may trade in the 4:00–9:30 and 16:00–20:00 sessions; options never do. These gates were added after one evening in which churn and a one-dollar stock cost the book seven percent, and the policy's main job since has been to hold when it has no edge.</p>
+
+    <h2 id="evaluation">7. Evaluation</h2>
+    <h3 id="live">Live scoring</h3>
+    <p>Every forecast is scored when its bar resolves: pinball loss on the raw quantiles, a hit if the median's sign matched the realized sign, coverage of the calibrated band, and paper profit if a position was taken. Three loss figures are shown side by side and mean different things: train pinball is in-sample over the replay; held-out pinball is the 5% slice the trainer never samples; live pinball is out of sample on forecasts made before their labels existed and is the only one that speaks to edge.</p>
+
+    <h3 id="backtest">Walk-forward backtest</h3>
+    <p>Because live labels accrue only while the market is open, a live record takes weeks. The backtest compresses that into a weekend by replaying the history in the replay with a fresh network of the live preset, day by day in time order. On day <var>D</var> it forecasts every window of the day before it has trained on any label from the day; the live policy's gates and sizing decide; the realized hour-ahead returns score the calls; and only then does the network train on day <var>D</var>, with the online budget plus the idle trainer's passes over everything seen so far. The first ten days are training only; signals wait for the trust rule; calibration and per-name records lag by one horizon. The procedure is therefore out of sample by construction and reproduces the live regimen including its adaptation.</p>
+    <p>Book accounting is honest about capital. Per bar the signals form a one-hour portfolio with gross weight capped at one; the bar's return is Σ<sub>i</sub> <var>w</var><sub>i</sub><var>y</var><sub>i</sub> − <var>c</var> Σ<sub>i</sub> |<var>w</var><sub>i</sub>|; a day's return is the mean over its bars, because capital can fund only one hour at a time; the curve is the running sum. The report gives per-day pinball, hit rate, coverage, signals, gross and net return, an equity curve against an always-long equal-weight book, and the best and worst names. A time budget shrinks the per-day training uniformly so a run always finishes within the weekend, and the report records what it used.</p>
+    <div class="callout"><b>Results.</b> As of this version no complete run exists; two attempts on the reference machine were interrupted by a universe rebuild and by the memory failure described in Section 8, and the first full run is scheduled for the weekend of October 11, 2026. The authors are not willing to report numbers from partial runs. The paper book's live record to date has been negative, which is consistent with the literature's finding that documented intraday effects are small, and is the motivation for the work in Section 10.</div>
+
+    <h2 id="system">8. System design</h2>
+    <p>Flint is one asyncio process: a bar clock, the forecasting path, the four training regimes, and periodic loops for market status, signals, the radar, news, checkpoints, the brief, the portfolio, deep backfill, idle training, the universe refresh and the backtest. A FastAPI server exposes the state as JSON and streams it over one websocket to a dashboard of plain HTML and JavaScript with no build step. The checkpoint is written atomically every five minutes; the replay, tens of gigabytes when full, is written uncompressed as one memory-mapped array per field at most every 30 minutes and at shutdown, swapped into place whole so a crash leaves the previous directory intact.</p>
+    <p>The reference machine's unified memory is shared by the model, the replay and everything else, and its GPU allocations are invisible to process accounting and outside any control-group limit. Several invariants exist because this was learned the hard way.</p>
+    <div class="fig">
+      <svg viewBox="0 0 980 230" role="img" aria-label="Memory map of the reference machine: training peak, replay budget, weights, system, backtest net, and the floor kept free">
+        <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--muted)"/></marker></defs>
+        <text class="lbl b" x="12" y="24">121 GB of unified memory at 362 names, 4XL, during a weekend backtest</text>
+        <rect x="12" y="44" width="956" height="44" rx="6" fill="var(--surface2)" stroke="var(--border)"/>
+        <rect x="12" y="44" width="236" height="44" rx="6" class="bx cool"/><text class="lbl b" x="130" y="62" text-anchor="middle">replay 30 GB</text><text class="lbl m" x="130" y="78" text-anchor="middle">host memory, mmap on disk</text>
+        <rect x="248" y="44" width="16" height="44" fill="var(--shade)"/><text class="lbl m" x="256" y="104" text-anchor="middle">weights 2</text>
+        <rect x="264" y="44" width="55" height="44" fill="var(--shade2)"/><text class="lbl m" x="291" y="66" text-anchor="middle">system</text><text class="lbl m" x="291" y="80" text-anchor="middle">7</text>
+        <rect x="319" y="44" width="416" height="44" rx="6" class="bx hot"/><text class="lbl b" x="527" y="62" text-anchor="middle">backtest net 53 GB at peak</text><text class="lbl m" x="527" y="78" text-anchor="middle">sized to what is free; the live net does not train meanwhile</text>
+        <rect x="735" y="44" width="79" height="44" fill="var(--surface)" stroke="var(--gold)" stroke-dasharray="4 3"/><text class="lbl m" x="774" y="62" text-anchor="middle">floor 10</text><text class="lbl m" x="774" y="78" text-anchor="middle">kept free</text>
+        <text class="lbl m" x="890" y="70" text-anchor="middle">headroom 19</text>
+        <text class="lbl" x="12" y="140">What the same 121 GB held on October 10 before the rules below, with no backtest running:</text>
+        <rect x="12" y="152" width="956" height="36" rx="6" fill="var(--surface2)" stroke="var(--border)"/>
+        <rect x="12" y="152" width="94" height="36" rx="6" class="bx cool"/><text class="lbl m" x="59" y="174" text-anchor="middle">replay 12</text>
+        <rect x="106" y="152" width="710" height="36" rx="6" class="bx hot"/><text class="lbl b" x="461" y="169" text-anchor="middle">about 90 GB of cached allocator blocks outside any process</text><text class="lbl m" x="461" y="183" text-anchor="middle">one working set each for the training step, the validation pass and per-bar prediction</text>
+        <text class="lbl m" x="892" y="174" text-anchor="middle">14 free</text>
+        <text class="lbl m" x="12" y="215">Earlier that night two such training peaks ran at once and the driver refused allocations; the machine rebooted.</text>
+      </svg>
+      <div class="cap">Figure 1. The memory map that the rules in this section enforce, and the two states that preceded them.</div>
+    </div>
+    <ul>
+      <li><b>A backtest owns the GPU.</b> While one runs, matured labels are stored and trained on afterwards, the idle trainer skips, deep paging pauses so the replay cannot grow, and a manually requested run waits for paging to finish. The backtest sizes its network to the memory actually free by scaling the live rung's measured peak by width, and stops itself at the next day boundary if free memory falls below a floor.</li>
+      <li><b>The caching allocator is bounded.</b> The allocator keeps blocks per shape, so the training step, the validation pass and per-bar prediction each held their own working set. Validation now runs at small batch and releases the cache after; the idle trainer and the deep loop release it every 40 steps; the allocator runs with expandable segments.</li>
+      <li><b>A benchmark measures only its own peak,</b> above whatever the process already holds, and a universe rebuild stops a running backtest first. A benchmark that ran beside a backtest once read the backtest's working set as its own and refused.</li>
+      <li><b>A failed rebuild never leaves the engine dead.</b> It saves, restores the full list the model was last built for, and resumes the lifecycle on the model it still has.</li>
+      <li><b>A compile failure costs speed, not the engine.</b> The first compiled training step is where the compiler really compiles; a toolchain problem there logs its cause once and the learner trains eagerly thereafter. An engine that died at this point while its server kept answering was the first incident of the day.</li>
+      <li><b>Shutdown must complete.</b> The server's graceful shutdown waits for every websocket handler to return and cancels nothing, so a push-only handler held the termination signal until the service manager killed the process and the final save never ran. Handlers now read their sockets, and the graceful wait is capped.</li>
+      <li><b>Keys apply live and are verified across the board.</b> A key saved on the dashboard is written to the file the configuration reads on the next start and pushed into every consumer that copied it at construction, and one test walks every service through save, status, restart read-back and live apply.</li>
+    </ul>
+
+    <h2 id="limits">9. Limitations and threats to validity</h2>
+    <ul>
+      <li><b>Small effects.</b> The intraday regularities the literature documents explain about two percent of variance at best<sup class="r"><a href="#r1">1</a>,<a href="#r2">2</a></sup>, and daily-frequency deep models have generally failed to beat buy-and-hold after costs<sup class="r"><a href="#r9">9</a></sup>. Edges of a few basis points are the expectation, and the backtest's cost assumption of five basis points a round trip may be generous for the less liquid promoted names.</li>
+      <li><b>Selection in the backtest universe.</b> Names promoted because they moved have their past windows filled by the re-page, so a backtest over the current universe includes names chosen with knowledge of their later behavior. A clean test freezes the universe at each day's date; this is not yet done.</li>
+      <li><b>Feature state at ingest.</b> Paged windows are standardized with the normalization state at the time of paging, not the state that prevailed historically.</li>
+      <li><b>Execution.</b> Paper fills are marked at the quoted spread with no market impact, no partial fills and no queue position; the extended-hours sessions in particular are thinner than the quotes suggest.</li>
+      <li><b>One machine, one process.</b> The design trades fault isolation for simplicity; a bug in any loop can take the whole engine down, which is why the invariants in Section 8 carry tests.</li>
+      <li><b>No causal claims.</b> Nothing here identifies why a forecast works when it does; the attention map and the regime gate are diagnostics, not explanations.</li>
+    </ul>
+
+    <h2 id="future">10. Future work</h2>
+    <p>Ranked by expected effect per unit of effort, each item is a hypothesis for the walk-forward backtest.</p>
+    <ol>
+      <li><b>A market-relative target.</b> Over one hour the index dominates every name's move and nothing in a five-minute history predicts the index. Nonlinear models beat linear ones mainly when the target is the market-relative abnormal return<sup class="r"><a href="#r4">4</a></sup>; the label becomes the stock's return minus beta times the index's, with a bearish basket hedged by an index put.</li>
+      <li><b>Calendar and daily-lag features.</b> A name's return in a given half-hour continues at the same half-hour on following days for about forty days, strongest at the open and close<sup class="r"><a href="#r1">1</a></sup>; the first half-hour's index return predicts the last half-hour's<sup class="r"><a href="#r2">2</a></sup>; overnight and intraday components carry opposite, persistent signals<sup class="r"><a href="#r3">3</a></sup>. None are features yet.</li>
+      <li><b>An ensemble of mid-size networks.</b> Tens of millions of parameters on some thousands of windows is heavily over-parameterized, as the overfit guard's early stops confirm. Two 4XL networks fit the machine, and aggregating ensemble members' distributions improves accuracy and calibration<sup class="r"><a href="#r8">8</a></sup>.</li>
+      <li><b>Meta-labeling.</b> A second, small classifier trained on whether acting on each primary forecast paid after costs, sizing by its probability<sup class="r"><a href="#r5">5</a>,<a href="#r6">6</a></sup>: the evaluable form of a decision layer, trainable online from the outcome records Flint already keeps.</li>
+      <li><b>Calibration to decision loss net of costs</b><sup class="r"><a href="#r7">7</a></sup>, sizing by the probability that the move clears the spread from the full quantile set rather than the median alone; and exits with a profit target, a stop, a time limit and a daily loss limit.</li>
+      <li><b>A policy sweep over stored forecasts.</b> Storing every forecast a backtest makes allows the gates to be swept in seconds, tuned on the first half of the history and confirmed on the second, with the result proposed on the dashboard rather than applied.</li>
+      <li><b>SEC filings beyond 13F.</b> Form 4 insider transactions, 13D and 13G stakes and 8-K item codes as direct features; free-text filings summarized by a local 7–8B language model into a fixed schema of direction, materiality, horizon and topic flags, one cached call per filing; and notable filings as a fourth candidate source for the universe.</li>
+    </ol>
+
+    <h2 id="refs">References</h2>
+    <ol class="refs">
+      <li id="r1">S. L. Heston, R. A. Korajczyk and R. Sadka, "Intraday Patterns in the Cross-section of Stock Returns," <i>Journal of Finance</i> 65(4), 2010. <a href="https://www.bauer.uh.edu/departments/finance/documents/Heston_Korajczyk_Sadka_paper_UH.pdf">PDF</a></li>
+      <li id="r2">L. Gao, Y. Han, S. Z. Li and G. Zhou, "Market Intraday Momentum," <i>Journal of Financial Economics</i>, 2018. <a href="https://alphaarchitect.com/2014/08/attention-prop-traders-the-first-half-hour-of-trading-predicts-the-last-half-hour/">Summary</a></li>
+      <li id="r3">D. Lou, C. Polk and S. Skouras, "A Tug of War: Overnight versus Intraday Expected Returns," <i>Journal of Financial Economics</i>, 2019. <a href="https://personal.lse.ac.uk/polk/research/TugOfWar.pdf">PDF</a></li>
+      <li id="r4">"Design Choices in Machine Learning for Stock Returns," review of target and model choices. <a href="https://hedgefundalpha.com/strategies/design-choices-machine-learning-stock-returns/">Article</a></li>
+      <li id="r5">M. López de Prado, <i>Advances in Financial Machine Learning</i>, Wiley, 2018: triple-barrier labeling and meta-labeling. <a href="https://hudsonthames.org/?p=3502">Overview</a></li>
+      <li id="r6">Hudson &amp; Thames, "Does Meta-Labeling Add to Signal Efficacy?" <a href="https://hudsonthames.org/does-meta-labeling-add-to-signal-efficacy/">Article</a></li>
+      <li id="r7">"Utility-Weighted Forecasting and Calibration for Risk-Adjusted Decisions under Trading Frictions," arXiv:2601.07852, 2026. <a href="https://arxiv.org/abs/2601.07852">Abstract</a></li>
+      <li id="r8">Aggregation of deep-ensemble predictive distributions, <i>Machine Learning</i>, 2025. <a href="https://publikationen.bibliothek.kit.edu/1000193481/181607624">Record</a></li>
+      <li id="r9">Transformer-based deep learning for stock return forecasting, with transaction costs. <a href="https://www.utupub.fi/bitstreams/2bfe6939-d5d4-4253-950e-b9dd35848798/download">PDF</a></li>
+      <li id="r10">R. Cont, A. Kukanov and S. Stoikov, "The Price Impact of Order Book Events," <i>Journal of Financial Econometrics</i> 12(1), 2014. <a href="https://arxiv.org/abs/1011.6402">arXiv</a></li>
+    </ol>
+
+    <h2 id="appendix">Appendix: principal settings</h2>
+    <div class="table-wrap">
+      <table>
+        <caption>Table 2. Defaults on the reference machine. Items marked live can be changed from the dashboard without a restart.</caption>
+        <thead><tr><th>Setting</th><th>Default</th><th>Role</th></tr></thead>
+        <tbody>
+          <tr><td><code>bar_seconds</code> / <code>horizon</code> / <code>window</code></td><td>300 / 12 / 128</td><td>five-minute bars, one hour ahead, 128 bars of context</td></tr>
+          <tr><td><code>quantiles</code> / <code>direction_threshold_bps</code></td><td>10, 25, 50, 75, 90 / 10</td><td>the distributional head and its direction deadband</td></tr>
+          <tr><td><code>lr</code> / <code>weight_decay</code> / <code>dropout</code> / <code>input_noise</code></td><td>5e-4 / 1e-2 / 0.15 / 0.1</td><td>optimizer and regularization</td></tr>
+          <tr><td><code>batch_size</code> / <code>recent_frac</code> / <code>recent_n</code></td><td>16 / 0.3 / 256</td><td>recency-biased sampling</td></tr>
+          <tr><td><code>steps_per_label</code> / <code>warmup_steps</code> / <code>max_warmup_seconds</code></td><td>2 / 60 / 300</td><td>online budget; the size ladder's time budget</td></tr>
+          <tr><td><code>idle_train_epochs</code> / <code>overfit_patience</code> (live)</td><td>2 / 3</td><td>closed-session passes and the held-out stop</td></tr>
+          <tr><td><code>deep_backfill_days</code> (live) / <code>replay_gb</code> / <code>replay_save_minutes</code></td><td>200 / 30 / 30</td><td>history paged, buffer budget, replay write cadence</td></tr>
+          <tr><td><code>max_universe</code> / <code>interesting_count</code> (live) / <code>interesting_grace_days</code> / <code>interesting_min_tenure_days</code></td><td>400 / 150 / 14 / 5</td><td>the universe and its promotion and demotion rule</td></tr>
+          <tr><td><code>min_labels</code> / <code>min_hit_rate</code> (live) / <code>skill_min_n</code> (live)</td><td>48 / 0.5 / 8</td><td>trust, and the per-name record</td></tr>
+          <tr><td><code>score_threshold</code> / <code>prob_margin</code> / <code>move_floor_bps</code> (live)</td><td>0.35 / 0.06 / 8</td><td>the entry gates</td></tr>
+          <tr><td><code>max_spread_bps</code> / <code>min_price</code> / <code>confirm_bars</code> / <code>stock_min_hold_bars</code> (live)</td><td>25 / 5 / 2 / 6</td><td>liquidity and persistence gates</td></tr>
+          <tr><td><code>kelly_fraction</code> / <code>max_size</code> / <code>option_max_frac</code> (live)</td><td>0.15 / 1.0 / 0.02</td><td>sizing</td></tr>
+          <tr><td><code>band_gamma</code> / <code>temper_lr</code></td><td>0.05 / 0.01</td><td>the two calibration rates</td></tr>
+          <tr><td><code>backtest_hours</code> / <code>backtest_night_epochs</code> / <code>backtest_cost_bps</code> / <code>backtest_warm_days</code> (live)</td><td>30 / 2 / 5 / 10</td><td>the walk-forward run</td></tr>
+          <tr><td><code>memory_floor_gb</code> (live)</td><td>10</td><td>the floor every GPU tenant keeps free</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="byline">Revision history: v0.5.13, October 10, 2026, first publication.</p>
+  </article>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span class="brand"><span class="fire">🔥</span> Flint</span>
+    <span>a self-hosted market model</span>
+    <a href="https://github.com/thingg-co/flint">github.com/thingg-co/flint ↗</a>
+    <span class="copy">© 2026 <a href="https://thingg.co">thingg.co</a> · PolyForm Noncommercial</span>
+  </div>
+</footer>
+</body>
+</html>

@@ -12,19 +12,38 @@
   gtag('config', 'G-0W099NHD80');
 </script>
 <title>Flint — a market model that keeps learning</title>
-<meta name="description" content="Flint is a self-hosted neural network that reads live market data, forecasts the next hour for a basket of stocks, and shows its reasoning as it goes. Runs on your machine; your keys stay with you.">
+<meta name="description" content="Flint is a self-hosted neural network that forecasts the next hour for a few hundred stocks as a distribution, learns as those forecasts resolve, keeps its own universe current, and backtests itself on weekends. Runs on your machine; your keys stay with you.">
 <meta property="og:title" content="Flint">
-<meta property="og:description" content="A self-hosted, continuously learning market model with a live dashboard, an on-device LLM brief, and an investor council overlay.">
+<meta property="og:description" content="A self-hosted, continuously learning market model with calibrated forecasts, a self-updating universe, a weekend walk-forward backtest, a live dashboard and an on-device brief.">
 <meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>">
+<script src="theme.js"></script>
 <style>
   :root{
     --bg:#0b0b0a; --surface:#151513; --surface2:#1c1c19; --border:#2b2b27;
     --ink:#f6f5f0; --ink2:#c6c5ba; --muted:#8c8a81;
     --blue:#3987e5; --green:#26a269; --red:#e0574b; --fire:#ff7a1a; --gold:#ffd479;
+    --code-bg:#0d0d0c; --shadow:0 24px 70px rgba(0,0,0,.55);
     --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
     --max:1080px;
+    color-scheme:dark;
+  }
+  @media (prefers-color-scheme: light){
+    :root:not([data-theme="dark"]){
+      --bg:#faf9f5; --surface:#ffffff; --surface2:#f1efe8; --border:#e2dfd5;
+      --ink:#1b1a17; --ink2:#3f3d37; --muted:#7a776d;
+      --blue:#2563c4; --green:#1e8449; --red:#c23b30; --fire:#d95d0e; --gold:#9a6b12;
+      --code-bg:#f3f1ea; --shadow:0 18px 50px rgba(27,26,23,.14);
+      color-scheme:light;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#faf9f5; --surface:#ffffff; --surface2:#f1efe8; --border:#e2dfd5;
+    --ink:#1b1a17; --ink2:#3f3d37; --muted:#7a776d;
+    --blue:#2563c4; --green:#1e8449; --red:#c23b30; --fire:#d95d0e; --gold:#9a6b12;
+    --code-bg:#f3f1ea; --shadow:0 18px 50px rgba(27,26,23,.14);
+    color-scheme:light;
   }
   *{box-sizing:border-box}
   html{scroll-behavior:smooth}
@@ -37,7 +56,7 @@
   .mono{font-family:var(--mono)}
 
   /* nav */
-  header.nav{position:sticky;top:0;z-index:10;background:rgba(11,11,10,.82);backdrop-filter:blur(10px);
+  header.nav{position:sticky;top:0;z-index:10;background:color-mix(in srgb,var(--bg) 84%,transparent);backdrop-filter:blur(10px);
     border-bottom:1px solid var(--border)}
   .nav .wrap{display:flex;align-items:center;gap:18px;height:60px}
   .brand{font-weight:700;font-size:19px;color:var(--ink);display:flex;align-items:center;gap:8px}
@@ -46,6 +65,8 @@
   .nav nav a{color:var(--ink2)}
   .nav .gh{border:1px solid var(--border);border-radius:8px;padding:7px 13px;color:var(--ink)}
   .nav .gh:hover{border-color:var(--ink2);text-decoration:none}
+  .nav .tgl{border:1px solid var(--border);border-radius:8px;padding:5px 10px;background:transparent;color:var(--ink);font:inherit;font-size:15px;line-height:1;cursor:pointer}
+  .nav .tgl:hover{border-color:var(--ink2)}
   @media(max-width:640px){.nav nav a.hide-sm{display:none}}
 
   /* hero */
@@ -64,7 +85,7 @@
   .btn.ghost:hover{border-color:var(--ink2);text-decoration:none}
   .hero-note{font-size:13px;color:var(--muted);margin-top:6px}
   .shot{margin-top:44px;border:1px solid var(--border);border-radius:14px;overflow:hidden;
-    box-shadow:0 24px 70px rgba(0,0,0,.55);background:var(--surface)}
+    box-shadow:var(--shadow);background:var(--surface)}
   .shot img{display:block;width:100%;height:auto}
   .shot .cap{font-size:12.5px;color:var(--muted);padding:9px 14px;border-top:1px solid var(--border);font-family:var(--mono)}
 
@@ -101,7 +122,7 @@
 
   /* quickstart */
   .qs{background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:26px;max-width:720px;margin:34px auto 0}
-  pre{background:#0d0d0c;border:1px solid var(--border);border-radius:10px;padding:16px 18px;overflow-x:auto;margin:0}
+  pre{background:var(--code-bg);border:1px solid var(--border);border-radius:10px;padding:16px 18px;overflow-x:auto;margin:0}
   code{font-family:var(--mono);font-size:13.5px;color:var(--ink)}
   pre .c{color:var(--muted)}
   pre .p{color:var(--fire)}
@@ -125,7 +146,9 @@
       <a class="hide-sm" href="#features">Features</a>
       <a class="hide-sm" href="#how">How it works</a>
       <a class="hide-sm" href="#quickstart">Quickstart</a>
+      <a class="hide-sm" href="whitepaper.html">Whitepaper</a>
       <a class="gh" href="https://github.com/thingg-co/flint">GitHub ↗</a>
+      <button id="theme-toggle" class="tgl" type="button" aria-label="Switch theme">☀</button>
     </nav>
   </div>
 </header>
@@ -134,11 +157,13 @@
   <div class="wrap">
     <div class="eyebrow">self-hosted · continuously learning</div>
     <h1>A market model that keeps learning.</h1>
-    <p class="lede">Flint is a self-hosted neural network that reads live market data, forecasts the next
-      hour for a basket of stocks, and shows its reasoning as it goes. A local model even writes the daily
-      brief. It runs on your machine and your keys stay with you.</p>
+    <p class="lede">Flint is a self-hosted neural network that forecasts the next hour for a few hundred
+      stocks as a distribution, learns as those forecasts resolve, keeps its own universe current, and
+      backtests itself on weekends. It shows its reasoning as it goes, a local model writes the daily
+      brief, and your keys stay with you.</p>
     <div class="cta">
       <a class="btn primary" href="#quickstart">Get started</a>
+      <a class="btn ghost" href="whitepaper.html">Read the whitepaper</a>
       <a class="btn ghost" href="https://github.com/thingg-co/flint">View on GitHub</a>
     </div>
     <div class="hero-note">Python · PyTorch · FastAPI · a no-build dashboard · optional local LLM via llama.cpp or Ollama</div>
@@ -154,16 +179,18 @@
     <h2>What it does</h2>
     <p class="sub">A forecasting model, a trading dashboard, and a window into the model's head, in one thing you run yourself.</p>
     <div class="grid">
-      <div class="feat"><div class="ic">🧠</div><h3>Always learning</h3><p>It trains online as its forecasts mature, and its calibration keeps it honest. When it has no real edge it holds, instead of trading noise.</p></div>
+      <div class="feat"><div class="ic">🧠</div><h3>Always learning</h3><p>It trains online as its forecasts mature, pages months of history into itself overnight, and keeps five percent of what it has seen out of training to catch itself overfitting. When it has no real edge it holds, instead of trading noise.</p></div>
+      <div class="feat"><div class="ic">🧪</div><h3>Weekend backtest</h3><p>Every weekend a fresh net walks the whole history day by day, forecasting each day before it trains on it, with the live policy deciding and the realised returns keeping score. Out of sample by construction, with the report on its own tab.</p></div>
+      <div class="feat"><div class="ic">🔁</div><h3>A universe that keeps itself current</h3><p>Your holdings are always modeled. Each day after the close the most interesting names in the market, by moves, by what the press is naming and by what the big funds hold, are promoted into the remaining slots and retired when they go quiet. The model keeps what it learned about every name that stays.</p></div>
       <div class="feat"><div class="ic">📈</div><h3>Live charts</h3><p>Every stock gets a candlestick chart with MACD and a forecast fan. Cards rank by urgency and reorder in real time, the top fifty render first, and any chart flips between 5 and 1 minute bars.</p></div>
       <div class="feat"><div class="ic">🔍</div><h3>Everything about a name</h3><p>Click any ticker anywhere, a card, the heatmap, a holding, a 13F line, and a detail view opens: a big chart, the calibrated forecast, its track record, signals, fundamentals, news and positions. The URL follows, so back and refresh work.</p></div>
       <div class="feat"><div class="ic">🗺️</div><h3>Market heatmap</h3><p>The movers radar draws as a treemap, area by market cap and colour by change, grouped by sector, trimmed on the fly so every block carries its ticker.</p></div>
-      <div class="feat"><div class="ic">🔦</div><h3>See it think</h3><p>A control panel streams the model's consciousness across eight consoles, and a Console tab tails everything at once: the feed, the features, the forecasts, the policy, the training. Arrange the panel's sections however you like.</p></div>
+      <div class="feat"><div class="ic">🔦</div><h3>See it think</h3><p>A control panel streams the model's consciousness across seven consoles, and a Console tab tails everything at once: the feed, the features, the forecasts, the policy, the training. Every gate and budget is a live control.</p></div>
       <div class="feat"><div class="ic">📝</div><h3>On-device brief</h3><p>Small models summarize the tape, the macro backdrop, positioning and the smart money. A larger local model turns those notes into a plain newspaper column. It talks to a local model server, llama.cpp or Ollama, so nothing leaves the machine.</p></div>
       <div class="feat"><div class="ic">🏛️</div><h3>Investor council</h3><p>A panel of well-known investors, built from their real 13F filings and documented style, nudges the model. Burry, Buffett, Ackman, Icahn and others.</p></div>
       <div class="feat"><div class="ic">🛰️</div><h3>Whole-market radar</h3><p>Breadth, sector rotation, volatility and a large movers watchlist give you and the model the full picture. Penny and small-cap movers included.</p></div>
       <div class="feat"><div class="ic">🔒</div><h3>Local and private</h3><p>Everything runs on your machine. API keys sit in gitignored files and only ever talk to their own provider.</p></div>
-      <div class="feat"><div class="ic">⚙️</div><h3>Fits your machine</h3><p>A first-run benchmark sizes the network to your hardware and uses the GPU when there is one, Apple silicon or NVIDIA, so it runs on a laptop, a workstation, or a DGX Spark. While the market is closed it keeps training on deeper history instead of idling.</p></div>
+      <div class="feat"><div class="ic">⚙️</div><h3>Fits your machine</h3><p>A first-run benchmark sizes the network to your hardware and uses the GPU when there is one, Apple silicon or NVIDIA, so it runs on a laptop, a workstation, or a DGX Spark. Memory is budgeted, not hoped for: the replay has a byte budget, one training job owns the GPU at a time, and a floor stays free.</p></div>
     </div>
   </div>
 </section>
@@ -176,6 +203,8 @@
       <div class="step"><h3>Warm up</h3><p>Flint pulls intraday history, benchmarks your machine, and trains on the recent session before it goes live.</p></div>
       <div class="step"><h3>Stream and forecast</h3><p>Real trades drive the charts. Each bar the model forecasts the next hour and turns it into a buy, sell or hold with a reason in plain English. Paper trades are stock or long options only, never a position with unlimited risk, and can run through the extended sessions.</p></div>
       <div class="step"><h3>Learn as it goes</h3><p>An hour later every forecast is scored and the model recalibrates. You judge it on live accuracy over hours, not on how well it fit the past.</p></div>
+      <div class="step"><h3>Deepen overnight</h3><p>While the market is closed it pages up to 200 days of five-minute history into its replay and trains on all of it, stopping each night when the held-out slice says it has learned what there is to learn.</p></div>
+      <div class="step"><h3>Prove it on the weekend</h3><p>A walk-forward backtest replays the history with a fresh net and the live policy, so a change to the model or a gate shows its effect before a live session does.</p></div>
     </div>
     <div class="showcase">
       <figure><img src="img/card.png" alt="A single stock card with candlesticks, MACD, forecast fan and a plain-English rationale"><figcaption>Each card shows the forecast, the band, and why the call is a buy, sell or hold.</figcaption></figure>
@@ -197,6 +226,9 @@ uv sync
 
 <span class="c"># run it, then open http://localhost:8000</span>
 uv run flint
+
+<span class="c"># walk the saved history with a fresh net, without starting the server</span>
+uv run flint backtest
 
 <span class="c"># optional: a local model for the daily brief (either works)</span>
 ollama pull qwen3.5          <span class="c"># Ollama, the default backend</span>
