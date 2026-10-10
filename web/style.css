@@ -235,7 +235,13 @@ ul.log li.win { color: var(--good-text); } ul.log li.loss { color: var(--bad-tex
 
 .news .news-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .news-body { display: grid; grid-template-columns: 260px 1fr; gap: 16px; }
-.tone .a { display: grid; grid-template-columns: 44px 1fr 48px; gap: 8px; align-items: center; font-family: var(--mono); font-size: 12px; margin-bottom: 8px; }
+.tone { max-height: 360px; overflow: auto; padding-right: 6px; }
+.tone .a { display: grid; grid-template-columns: 44px 1fr 36px; gap: 3px 8px; align-items: center; font-family: var(--mono); font-size: 12px; margin-bottom: 9px; }
+.tone .a .sym { font-weight: 700; color: var(--ink); }
+.tone .a small { text-align: right; color: var(--muted); }
+.tone .a .story { grid-column: 1 / -1; font-family: var(--sans); font-size: 11.5px; line-height: 1.3; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tone .a .story a { color: var(--ink-2); text-decoration: none; } .tone .a .story a:hover { text-decoration: underline; }
+.tone .tone-foot { margin-top: 4px; line-height: 1.45; }
 .tone .bar { position: relative; height: 10px; background: var(--grid); border-radius: 3px; }
 .tone .bar i { position: absolute; top: 0; bottom: 0; }
 .tone .bar:after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--ink-2); }

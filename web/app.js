@@ -1890,13 +1890,17 @@ function renderNews() {
   const gen = (n.headlines || []).filter(h => !h.assets || !h.assets.length);
   const tone = gen.length ? gen.reduce((s, h) => s + h.sentiment, 0) / gen.length : 0;
   $("#news-meta").textContent = `${fmtTime(n.t)} via ${n.method}, ${n.headlines.length} headlines (${n.new} new), ${covered.length} of ${pa.length} names covered`;
-  $("#tone").innerHTML = covered.slice(0, 30).map(([s, a]) => {
+  // one row per covered name: tone bar and count, with its leading headline underneath (linked when it is in the list)
+  const byTitle = new Map((n.headlines || []).map(h => [h.title, h.url]));
+  $("#tone").innerHTML = covered.slice(0, 16).map(([s, a]) => {
     const v = a.sentiment, w = Math.abs(v) * 50, left = v >= 0 ? 50 : 50 - w;
-    return `<div class="a"><span>${esc(base(s))}</span><div class="bar" title="tone ${v.toFixed(2)}, attention ${a.attention.toFixed(2)}"><i style="left:${left}%;width:${w}%;background:${v >= 0 ? "var(--good)" : "var(--serious)"}"></i></div><small>${a.mentions}</small></div>`;
+    const top = (a.top || [])[0], url = top && byTitle.get(top);
+    return `<div class="a" title="tone ${v.toFixed(2)} (${v > 0.15 ? "bullish" : v < -0.15 ? "bearish" : "mixed"}), attention ${a.attention.toFixed(2)}, ${a.mentions} headline${a.mentions === 1 ? "" : "s"}">` +
+      `<span class="sym">${esc(base(s))}</span><div class="bar"><i style="left:${left}%;width:${w}%;background:${v >= 0 ? "var(--good)" : "var(--serious)"}"></i></div><small>${a.mentions}</small>` +
+      (top ? `<div class="story">${url ? `<a href="${esc(safeUrl(url))}" target="_blank" rel="noopener noreferrer">${esc(top)}</a>` : esc(top)}</div>` : "") + `</div>`;
   }).join("") +
-    `<div class="why">${covered.length ? "bar: tone from -1 to +1; count: headlines naming the asset" : "no name had direct coverage this pass"}` +
-    `${quiet ? ` · ${quiet} names without coverage` : ""} · market tone ${tone >= 0 ? "+" : ""}${tone.toFixed(2)} over ${gen.length} general headlines</div>` +
-    (n.ideas || []).map(i => `<div class="why">${esc(i)}</div>`).join("");
+    `<div class="why tone-foot">${covered.length ? "tone −1 to +1 · count: headlines naming it" : "no name had direct coverage this pass"}` +
+    `${quiet ? ` · ${quiet} names without coverage` : ""} · market tone ${tone >= 0 ? "+" : ""}${tone.toFixed(2)} over ${gen.length} general headlines</div>`;
   $("#headlines").innerHTML = n.headlines.slice(0, 60).map(h =>
     `<li class="${h.new ? "new" : ""}"><span class="s ${h.sentiment > 0 ? "pos" : h.sentiment < 0 ? "neg" : ""}">${h.sentiment >= 0 ? "+" : ""}${h.sentiment.toFixed(2)}</span>` +
     (h.assets.length ? h.assets : ["mkt"]).map(a => `<span class="tag">${esc(a)}</span>`).join("") +
