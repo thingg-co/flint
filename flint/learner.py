@@ -150,6 +150,12 @@ class OnlineLearner:
             log.warning("torch.compile unavailable (%s: %s); training eager", type(e).__name__, str(e)[:120])
             return model
 
+    def wait_idle(self) -> None:
+        """Return once no training step is in flight: the lock is held for the length of a
+        train_steps call, so taking and dropping it waits that call out. Called from a thread."""
+        with self.lock:
+            pass
+
     def release_cache(self) -> None:
         """Hand the CUDA caching allocator's idle blocks back so another net (the weekend
         backtest) can use them. The weights and optimizer state stay."""

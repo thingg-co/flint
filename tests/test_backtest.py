@@ -169,3 +169,21 @@ def test_memory_low_needs_two_low_readings():
     assert memory_low("cuda", 10.0, reader=lambda d: next(reads), settle=0.0) == 2.0      # still low: stop
     assert memory_low("cuda", 10.0, reader=lambda d: 40.0, settle=0.0) is None
     assert memory_low("cuda", 10.0, reader=lambda d: None, settle=0.0) is None            # no figure: never stop on it
+
+
+def test_wait_idle_waits_out_a_training_step_in_flight():
+    import threading
+    import time
+    from flint.learner import OnlineLearner
+    cfg = toy_cfg()
+    L = OnlineLearner(cfg, n_features=3)
+    held = threading.Event()
+    def step():
+        with L.lock:                                                       # what train_steps holds while it runs
+            held.set()
+            time.sleep(0.3)
+    t = threading.Thread(target=step); t.start(); held.wait()
+    t0 = time.time(); L.wait_idle(); dt = time.time() - t0
+    t.join()
+    assert dt >= 0.25                                                      # it waited for the step, not past it
+    assert time.time() - t0 < 2.0

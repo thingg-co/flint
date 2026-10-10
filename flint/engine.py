@@ -1155,6 +1155,12 @@ class Engine:
             self._backtest_requested = False
             self._backtest_stop = False
             self._backtest_stop_reason = ""
+            # Own the GPU before measuring it: from here the idle trainer and the deep loop start
+            # nothing new, and the chunk one of them may have in flight finishes first, or the free
+            # figure is read with its working set still up and the run is sized into a squeeze
+            # (two such starts stopped at 1 GB free on 2026-10-10).
+            self._backtesting = True
+            await asyncio.to_thread(L.wait_idle)
             L.release_cache()
             dev = str(L.device)
             free = free_memory_gb(dev)
@@ -1164,6 +1170,7 @@ class Engine:
                 self.trace.emit("learn", f"backtest skipped: {free:.0f} GB free leaves no room for any net next to the live model "
                                          f"(floor {cfg.memory_floor_gb:g} GB)", "warn")
                 self.backtest_progress = {"running": False}
+                self._backtesting = False
                 continue
             name, d_model, dil, n_exp, n_heads, _win = choice
             cfg_bt = copy.copy(cfg)
@@ -1177,7 +1184,6 @@ class Engine:
                                          f"absolute only", "warn")
                 variants = ["absolute"]
             hours_each = float(cfg.backtest_hours) / len(variants) if float(cfg.backtest_hours) > 0 else 0.0
-            self._backtesting = True
             started = time.time()
             self.backtest_progress = {"running": True, "day": 0, "days": 0, "started": started,
                                       "variant": variants[0], "variants": variants}
