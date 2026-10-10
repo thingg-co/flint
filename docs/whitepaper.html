@@ -101,12 +101,13 @@
   td b{color:var(--ink);font-weight:600}
   .callout{border:1px solid var(--border);border-left:3px solid var(--gold);border-radius:8px;padding:14px 18px;background:var(--surface);margin:18px 0 22px;font-size:16px}
   .callout b{color:var(--ink)}
-  .fig{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px 18px 14px;margin:20px 0 26px}
-  .fig .cap{font-family:var(--sans);font-size:13px;color:var(--muted);margin-top:10px;line-height:1.5}
-  .fig svg{display:block;width:100%;height:auto;max-width:100%}
-  .lbl{font-family:var(--sans);font-size:13px;fill:var(--ink2)}
+  .fig{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 12px 12px;margin:20px 0 26px}
+  .fig .cap{font-family:var(--sans);font-size:14.5px;color:var(--muted);margin-top:12px;line-height:1.5;padding:0 4px}
+  .fig svg{display:block;width:100%;height:auto}
+  @media(max-width:800px){.fig{overflow-x:auto} .fig svg{min-width:640px} .fig .cap{min-width:0}}
+  .lbl{font-family:var(--sans);font-size:16px;fill:var(--ink2)}
   .lbl.b{fill:var(--ink);font-weight:600}
-  .lbl.m{font-family:var(--mono);font-size:11.5px;fill:var(--muted)}
+  .lbl.m{font-family:var(--mono);font-size:15px;fill:var(--muted)}
   .bx{fill:var(--surface2);stroke:var(--border);stroke-width:1}
   .bx.hot{fill:var(--hot);stroke:var(--fire)}
   .bx.cool{fill:var(--cool);stroke:var(--blue)}
@@ -189,22 +190,28 @@
       <li><b>One machine, nothing leaves it.</b> Market data comes in; keys, positions and the narrative brief's language model stay local.</li>
     </ol>
     <div class="fig">
-      <svg viewBox="0 0 980 300" role="img" aria-label="The bar loop: feeds, bars, features, the network, calibration, policy and the paper book, with labels returning to the replay and the learner">
+      <svg viewBox="0 0 740 374" role="img" aria-label="The bar loop: feeds, bars, features, the network, calibration, policy and the paper book, with labels returning to the replay and the learner">
         <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--muted)"/></marker></defs>
-        <rect class="bx cool" x="10" y="30" width="150" height="66" rx="8"/><text class="lbl b" x="85" y="56" text-anchor="middle">Feeds</text><text class="lbl m" x="85" y="74" text-anchor="middle">priority failover</text><text class="lbl m" x="85" y="88" text-anchor="middle">per name</text>
-        <rect class="bx" x="175" y="30" width="120" height="66" rx="8"/><text class="lbl b" x="235" y="56" text-anchor="middle">Bars</text><text class="lbl m" x="235" y="74" text-anchor="middle">5 min, OHLCV</text><text class="lbl m" x="235" y="88" text-anchor="middle">real trades only</text>
-        <rect class="bx" x="310" y="30" width="120" height="66" rx="8"/><text class="lbl b" x="370" y="56" text-anchor="middle">Features</text><text class="lbl m" x="370" y="74" text-anchor="middle">25 per name</text><text class="lbl m" x="370" y="88" text-anchor="middle">running z-scores</text>
-        <rect class="bx hot" x="445" y="22" width="160" height="82" rx="8"/><text class="lbl b" x="525" y="48" text-anchor="middle">FlintNet</text><text class="lbl m" x="525" y="66" text-anchor="middle">q10..q90, P(up), P(down)</text><text class="lbl m" x="525" y="80" text-anchor="middle">gate and attention</text><text class="lbl m" x="525" y="94" text-anchor="middle">128-bar window</text>
-        <rect class="bx" x="620" y="30" width="130" height="66" rx="8"/><text class="lbl b" x="685" y="56" text-anchor="middle">Calibration</text><text class="lbl m" x="685" y="74" text-anchor="middle">band scale s</text><text class="lbl m" x="685" y="88" text-anchor="middle">temperature T</text>
-        <rect class="bx" x="765" y="30" width="205" height="66" rx="8"/><text class="lbl b" x="867" y="56" text-anchor="middle">Policy, then the book</text><text class="lbl m" x="867" y="74" text-anchor="middle">gates, fractional Kelly</text><text class="lbl m" x="867" y="88" text-anchor="middle">stock, puts, straddles</text>
-        <path class="ar" d="M160 63H173"/><path class="ar" d="M295 63H308"/><path class="ar" d="M430 63H443"/><path class="ar" d="M605 63H618"/><path class="ar" d="M750 63H763"/>
-        <rect class="bx" x="310" y="190" width="295" height="70" rx="8"/><text class="lbl b" x="457" y="216" text-anchor="middle">Replay buffer</text><text class="lbl m" x="457" y="234" text-anchor="middle">windows keyed by bar time, 5% held out</text><text class="lbl m" x="457" y="248" text-anchor="middle">byte budget, memory-mapped on disk</text>
-        <rect class="bx hot" x="640" y="190" width="220" height="70" rx="8"/><text class="lbl b" x="750" y="216" text-anchor="middle">Online learner</text><text class="lbl m" x="750" y="234" text-anchor="middle">2 steps per resolved label</text><text class="lbl m" x="750" y="248" text-anchor="middle">night passes, overfit guard</text>
-        <path class="ar" d="M867 96V150H457V188"/><text class="lbl m" x="640" y="166" text-anchor="middle">twelve bars later the forecast resolves: the label is the log return in bps</text>
-        <path class="ar" d="M605 225H638"/>
-        <path class="ar" d="M750 188V130H525V106"/><text class="lbl m" x="637" y="124" text-anchor="middle">weights</text>
-        <rect class="bx cool" x="10" y="190" width="270" height="70" rx="8"/><text class="lbl b" x="145" y="216" text-anchor="middle">Deep backfill, market closed</text><text class="lbl m" x="145" y="234" text-anchor="middle">5-min candles 200 days back</text><text class="lbl m" x="145" y="248" text-anchor="middle">10-day chunk every 150 s</text>
-        <path class="ar" d="M280 225H308"/>
+        <rect class="bx cool" x="10" y="20" width="192" height="80" rx="8"/><text class="lbl b" x="106" y="46" text-anchor="middle">Feeds</text><text class="lbl m" x="106" y="68" text-anchor="middle">priority failover</text><text class="lbl m" x="106" y="86" text-anchor="middle">per name</text>
+        <rect class="bx" x="220" y="20" width="140" height="80" rx="8"/><text class="lbl b" x="290" y="46" text-anchor="middle">Bars</text><text class="lbl m" x="290" y="68" text-anchor="middle">5 min, OHLCV</text><text class="lbl m" x="290" y="86" text-anchor="middle">real trades</text>
+        <rect class="bx" x="378" y="20" width="130" height="80" rx="8"/><text class="lbl b" x="443" y="46" text-anchor="middle">Features</text><text class="lbl m" x="443" y="68" text-anchor="middle">25 per name</text><text class="lbl m" x="443" y="86" text-anchor="middle">z-scored</text>
+        <rect class="bx hot" x="526" y="20" width="202" height="98" rx="8"/><text class="lbl b" x="627" y="46" text-anchor="middle">FlintNet</text><text class="lbl m" x="627" y="68" text-anchor="middle">quantiles, up/down</text><text class="lbl m" x="627" y="86" text-anchor="middle">gate, attention</text><text class="lbl m" x="627" y="104" text-anchor="middle">128-bar window</text>
+        <path class="ar" d="M202 60H218"/>
+        <path class="ar" d="M360 60H376"/>
+        <path class="ar" d="M508 60H524"/>
+        <rect class="bx" x="579" y="158" width="151" height="80" rx="8"/><text class="lbl b" x="654.5" y="184" text-anchor="middle">Calibration</text><text class="lbl m" x="654.5" y="206" text-anchor="middle">band scale s</text><text class="lbl m" x="654.5" y="224" text-anchor="middle">temperature T</text>
+        <rect class="bx" x="307" y="158" width="254" height="80" rx="8"/><text class="lbl b" x="434" y="184" text-anchor="middle">Policy, then the book</text><text class="lbl m" x="434" y="206" text-anchor="middle">gates, fractional Kelly</text><text class="lbl m" x="434" y="224" text-anchor="middle">stock, puts, straddles</text>
+        <rect class="bx hot" x="10" y="158" width="223" height="80" rx="8"/><text class="lbl b" x="121.5" y="184" text-anchor="middle">Online learner</text><text class="lbl m" x="121.5" y="206" text-anchor="middle">2 steps per label</text><text class="lbl m" x="121.5" y="224" text-anchor="middle">night passes + guard</text>
+        <path class="ar" d="M627 118V156"/>
+        <path class="ar" d="M579 198H563"/>
+        <path class="ar" d="M121.5 158V138H556V120"/>
+        <text class="lbl m" x="338.75" y="132" text-anchor="middle">weights</text>
+        <rect class="bx cool" x="10" y="280" width="244" height="80" rx="8"/><text class="lbl b" x="132" y="306" text-anchor="middle">Deep backfill, closed</text><text class="lbl m" x="132" y="328" text-anchor="middle">candles 200 days back</text><text class="lbl m" x="132" y="346" text-anchor="middle">10-day chunk per 150 s</text>
+        <rect class="bx" x="272" y="280" width="192" height="80" rx="8"/><text class="lbl b" x="368" y="306" text-anchor="middle">Replay buffer</text><text class="lbl m" x="368" y="328" text-anchor="middle">keyed by bar time</text><text class="lbl m" x="368" y="346" text-anchor="middle">5% held out, mmap</text>
+        <path class="ar" d="M254 320H270"/>
+        <path class="ar" d="M434 238V278"/>
+        <text class="lbl m" x="446" y="264">label at t + 12, bps</text>
+        <path class="ar" d="M368 280V260H121.5V240"/>
       </svg>
       <div class="cap">Figure 1. The bar loop. Hot boxes run on the GPU. A forecast made at bar <var>t</var> becomes a training label at bar <var>t</var> + 12, so every window is scored before it is learned from.</div>
     </div>
@@ -245,28 +252,53 @@
     <p><b>Budgeted in bytes.</b> The buffer's capacity is a memory budget, 30 GB on the reference machine, from which the window count follows the universe: about 14,000 windows at 232 names and 7,000 at 400. Growing the universe shrinks the history held rather than the memory left for everything else.</p>
     <p><b>Deep history paged in while the market is closed.</b> A loop pages five-minute candles back in ten-day chunks, one every 150 seconds to respect the provider's rate limit, through an isolated bar and feature pipeline, until 200 days or a full buffer. Paging stops within a chunk of full rather than wrapping the ring onto its newest windows. Five percent of windows, every twentieth by timestamp, are held out of training permanently; the choice is derived from the timestamp so a reload keeps the same slice.</p>
     <div class="fig">
-      <svg viewBox="0 0 980 250" role="img" aria-label="The replay buffer as a ring of windows keyed by bar time, with every twentieth window held out, and a universe change that keeps retained columns, drops a name and masks a new one until the re-page fills it">
-        <text class="lbl b" x="12" y="22">One window: names × 128 bars × 25 features, plus a label per name and a mask</text>
-        <g transform="translate(12,36)">
-          <rect class="bx" x="0" y="0" width="560" height="34" rx="6"/>
-          <text class="lbl m" x="8" y="22">slot</text>
-          <g id="slots"></g>
-          <rect x="52" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="78" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="104" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="130" y="4" width="22" height="26" rx="3" fill="var(--hot)" stroke="var(--fire)"/><rect x="156" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="182" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="208" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="234" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="260" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="286" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="312" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="338" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="364" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="390" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="416" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="442" y="4" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/><rect x="468" y="4" width="22" height="26" rx="3" fill="var(--surface)" stroke="var(--border)" stroke-dasharray="3 2"/><rect x="494" y="4" width="22" height="26" rx="3" fill="var(--surface)" stroke="var(--border)" stroke-dasharray="3 2"/><rect x="520" y="4" width="22" height="26" rx="3" fill="var(--surface)" stroke="var(--border)" stroke-dasharray="3 2"/>
-          <text class="lbl m" x="141" y="50" text-anchor="middle">held out</text><text class="lbl m" x="505" y="50" text-anchor="middle">free slots</text>
-          <text class="lbl m" x="0" y="70">keyed by bar timestamp: a re-walk of the same bars adds nothing</text>
+      <svg viewBox="0 0 740 354" role="img" aria-label="The replay buffer as a ring of windows keyed by bar time, with every twentieth window held out, and a universe change that keeps retained columns, drops a name and masks a new one until the re-page fills it">
+        <text class="lbl b" x="10" y="24">A window: names × 128 bars × 25 features, plus label and mask</text>
+        <g transform="translate(10,38)">
+        <rect class="bx" x="0" y="0" width="718" height="36" rx="6"/>
+        <text class="lbl m" x="8" y="24">slot</text>
+        <rect x="52" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="78" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="104" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="130" y="5" width="22" height="26" rx="3" fill="var(--hot)" stroke="var(--fire)"/>
+        <rect x="156" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="182" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="208" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="234" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="260" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="286" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="312" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="338" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="364" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="390" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="416" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="442" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="468" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="494" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="520" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="546" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="572" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="598" y="5" width="22" height="26" rx="3" fill="var(--cool)" stroke="var(--blue)"/>
+        <rect x="624" y="5" width="22" height="26" rx="3" fill="var(--surface)" stroke="var(--border)" stroke-dasharray="3 2"/>
+        <rect x="650" y="5" width="22" height="26" rx="3" fill="var(--surface)" stroke="var(--border)" stroke-dasharray="3 2"/>
+        <rect x="676" y="5" width="22" height="26" rx="3" fill="var(--surface)" stroke="var(--border)" stroke-dasharray="3 2"/>
+        <text class="lbl m" x="141" y="56" text-anchor="middle">held out</text>
+        <text class="lbl m" x="661" y="56" text-anchor="middle">free</text>
+        <text class="lbl m" x="0" y="82">keyed by bar timestamp: a re-walk of the same bars adds nothing</text>
         </g>
-        <g transform="translate(600,36)">
-          <text class="lbl b" x="0" y="-8">A universe change, by column</text>
-          <text class="lbl m" x="0" y="18">before</text><rect x="60" y="4" width="34" height="22" rx="3" fill="var(--cool)" stroke="var(--blue)"/><text class="lbl m" x="77" y="19" text-anchor="middle">A</text><rect x="98" y="4" width="34" height="22" rx="3" fill="var(--cool)" stroke="var(--blue)"/><text class="lbl m" x="115" y="19" text-anchor="middle">B</text><rect x="136" y="4" width="34" height="22" rx="3" fill="var(--cool)" stroke="var(--blue)"/><text class="lbl m" x="153" y="19" text-anchor="middle">C</text>
-          <text class="lbl m" x="0" y="56">after</text><rect x="60" y="42" width="34" height="22" rx="3" fill="var(--cool)" stroke="var(--blue)"/><text class="lbl m" x="77" y="57" text-anchor="middle">B</text><rect x="98" y="42" width="34" height="22" rx="3" fill="var(--cool)" stroke="var(--blue)"/><text class="lbl m" x="115" y="57" text-anchor="middle">C</text><rect x="136" y="42" width="34" height="22" rx="3" fill="var(--surface)" stroke="var(--fire)" stroke-dasharray="3 2"/><text class="lbl m" x="153" y="57" text-anchor="middle">D</text>
-          <text class="lbl m" x="0" y="90">A dropped; B and C keep their columns and rows;</text>
-          <text class="lbl m" x="0" y="106">D masked until the re-page fills it</text>
+        <g transform="translate(10,150)">
+        <text class="lbl b" x="0" y="0">A universe change, by column</text>
+        <text class="lbl m" x="0" y="32">before</text><rect x="70" y="15" width="34" height="24" rx="3" fill="var(--cool)" stroke="var(--blue)"/><text class="lbl m" x="87" y="32" text-anchor="middle">A</text><rect x="110" y="15" width="34" height="24" rx="3" fill="var(--cool)" stroke="var(--blue)"/><text class="lbl m" x="127" y="32" text-anchor="middle">B</text><rect x="150" y="15" width="34" height="24" rx="3" fill="var(--cool)" stroke="var(--blue)"/><text class="lbl m" x="167" y="32" text-anchor="middle">C</text>
+        <text class="lbl m" x="0" y="68">after</text><rect x="70" y="51" width="34" height="24" rx="3" fill="var(--cool)" stroke="var(--blue)"/><text class="lbl m" x="87" y="68" text-anchor="middle">B</text><rect x="110" y="51" width="34" height="24" rx="3" fill="var(--cool)" stroke="var(--blue)"/><text class="lbl m" x="127" y="68" text-anchor="middle">C</text><rect x="150" y="51" width="34" height="24" rx="3" fill="var(--surface)" stroke="var(--fire)" stroke-dasharray="3 2"/><text class="lbl m" x="167" y="68" text-anchor="middle">D</text>
+        <text class="lbl m" x="230" y="32">A dropped; B and C keep their rows and columns</text>
+        <text class="lbl m" x="230" y="68">D masked until the re-page fills it</text>
         </g>
-        <g transform="translate(12,150)">
-          <text class="lbl b" x="0" y="0">Memory budget, not window count</text>
-          <text class="lbl m" x="0" y="22">windows = budget / (names × 128 × 25 × 4 bytes)   →   30 GB ≈ 14,000 windows at 232 names, 7,000 at 400</text>
-          <text class="lbl m" x="0" y="44">the deep backfill stops within a chunk of full; a smaller buffer on load keeps the newest windows; written whole as memory-mapped arrays</text>
-          <text class="lbl m" x="0" y="66">every 20th bar by timestamp is validation-only: the honest overfitting signal, since in-sample loss rises on every unseen chunk</text>
+        <g transform="translate(10,250)">
+        <text class="lbl b" x="0" y="0">Memory budget, not window count</text>
+        <text class="lbl m" x="0" y="24">windows = budget / (names × 128 × 25 × 4 bytes)</text>
+        <text class="lbl m" x="0" y="46">30 GB ≈ 14,000 windows at 232 names, 7,000 at 400</text>
+        <text class="lbl m" x="0" y="68">paging stops near full; a smaller buffer on load keeps the newest</text>
+        <text class="lbl m" x="0" y="90">every 20th bar is held out for good: the honest overfitting signal</text>
         </g>
       </svg>
       <div class="cap">Figure 2. The replay buffer and what a universe change does to it.</div>
@@ -276,16 +308,22 @@
     <p>The modeled set is the configured core, every holding in the operator's accounts, and up to a fixed number of promoted names, under a cap of 400. Once a day after the close, candidates are drawn from three organic sources and scored on one 0–100 scale by rank within each source: the market radar's movers, weighted by dollar volume and filtered to liquid names above five dollars; tickers named in headlines, counted only when the symbol is known elsewhere; and the tracked funds' 13F positions by weight. The best rank across sources wins, with a small bonus for appearing in more than one.</p>
     <p>Promotion fills the room left under the cap from the top of the ranking. Demotion is deliberately slow: a promoted name stays while it keeps ranking inside the top one-and-a-half times the slot count, and leaves only after 14 days without such a hit and at least five days of tenure. The asymmetry exists because a demotion forfeits that name's learned representation and its history in the replay, and a day's excitement is not worth that.</p>
     <div class="fig">
-      <svg viewBox="0 0 980 230" role="img" aria-label="Universe state machine: candidates are scored from three sources, promoted into open slots, retained while they keep ranking, and demoted after a grace period and minimum tenure; core names and holdings are fixed">
-        <rect class="bx" x="10" y="20" width="230" height="86" rx="8"/><text class="lbl b" x="125" y="44" text-anchor="middle">Candidates, scored 0–100</text><text class="lbl m" x="125" y="62" text-anchor="middle">radar movers × dollar volume</text><text class="lbl m" x="125" y="76" text-anchor="middle">tickers named in headlines</text><text class="lbl m" x="125" y="90" text-anchor="middle">13F positions of tracked funds</text>
-        <rect class="bx hot" x="300" y="20" width="200" height="86" rx="8"/><text class="lbl b" x="400" y="48" text-anchor="middle">Promoted</text><text class="lbl m" x="400" y="68" text-anchor="middle">top of the ranking fills the room</text><text class="lbl m" x="400" y="84" text-anchor="middle">since = today, last_hit = today</text>
-        <rect class="bx" x="560" y="20" width="200" height="86" rx="8"/><text class="lbl b" x="660" y="48" text-anchor="middle">Retained</text><text class="lbl m" x="660" y="68" text-anchor="middle">a hit while in the top 1.5 × count</text><text class="lbl m" x="660" y="84" text-anchor="middle">refreshes last_hit</text>
-        <rect class="bx" x="820" y="20" width="150" height="86" rx="8"/><text class="lbl b" x="895" y="48" text-anchor="middle">Demoted</text><text class="lbl m" x="895" y="68" text-anchor="middle">14 days without a hit</text><text class="lbl m" x="895" y="84" text-anchor="middle">and 5 days of tenure</text>
-        <path class="ar" d="M240 63H298"/><path class="ar" d="M500 63H558"/><path class="ar" d="M760 63H818"/>
-        <path class="ar" d="M895 106V150H660V108"/><text class="lbl m" x="700" y="140" text-anchor="middle">row and history forfeited; may re-enter as a fresh name</text>
-        <rect class="bx cool" x="10" y="160" width="490" height="52" rx="8"/><text class="lbl b" x="255" y="182" text-anchor="middle">Fixed: the configured core and every holding</text><text class="lbl m" x="255" y="200" text-anchor="middle">never scored, never demoted; a new holding enters within a minute</text>
-        <text class="lbl m" x="740" y="186" text-anchor="middle">room = min(count, cap − fixed); if it shrinks, the weakest leave first</text>
-        <text class="lbl m" x="740" y="204" text-anchor="middle">once a day after the close, once all three sources have reported</text>
+      <svg viewBox="0 0 740 442" role="img" aria-label="Universe state machine: candidates are scored from three sources, promoted into open slots, retained while they keep ranking, and demoted after a grace period and minimum tenure; core names and holdings are fixed">
+        <rect class="bx" x="10" y="20" width="285" height="98" rx="8"/><text class="lbl b" x="152.5" y="46" text-anchor="middle">Candidates, scored 0–100</text><text class="lbl m" x="152.5" y="68" text-anchor="middle">radar movers × $ volume</text><text class="lbl m" x="152.5" y="86" text-anchor="middle">tickers named in headlines</text><text class="lbl m" x="152.5" y="104" text-anchor="middle">13F books of tracked funds</text>
+        <rect class="bx hot" x="476" y="20" width="254" height="98" rx="8"/><text class="lbl b" x="603" y="46" text-anchor="middle">Promoted</text><text class="lbl m" x="603" y="68" text-anchor="middle">ranking fills the room</text><text class="lbl m" x="603" y="86" text-anchor="middle">since, last_hit = today</text><text class="lbl m" x="603" y="104" text-anchor="middle">weakest leave first</text>
+        <rect class="bx" x="476" y="188" width="254" height="98" rx="8"/><text class="lbl b" x="603" y="214" text-anchor="middle">Retained</text><text class="lbl m" x="603" y="236" text-anchor="middle">a hit: top 1.5 × count</text><text class="lbl m" x="603" y="254" text-anchor="middle">refreshes last_hit</text><text class="lbl m" x="603" y="272" text-anchor="middle">rows and history kept</text>
+        <rect class="bx" x="10" y="188" width="285" height="98" rx="8"/><text class="lbl b" x="152.5" y="214" text-anchor="middle">Demoted</text><text class="lbl m" x="152.5" y="236" text-anchor="middle">14 days without a hit</text><text class="lbl m" x="152.5" y="254" text-anchor="middle">and 5 days of tenure</text><text class="lbl m" x="152.5" y="272" text-anchor="middle">row and history lost</text>
+        <path class="ar" d="M295 68H474"/>
+        <text class="lbl m" x="385.5" y="60" text-anchor="middle">top of the ranking</text>
+        <path class="ar" d="M603 118V186"/>
+        <text class="lbl m" x="593" y="158.0" text-anchor="end">keeps ranking</text>
+        <path class="ar" d="M476 236H297"/>
+        <text class="lbl m" x="385.5" y="228" text-anchor="middle">goes quiet</text>
+        <path class="ar" d="M152.5 188V120"/>
+        <text class="lbl m" x="162.5" y="158.0">may re-enter fresh</text>
+        <rect class="bx cool" x="10" y="316" width="718" height="62" rx="8"/><text class="lbl b" x="369" y="342" text-anchor="middle">Fixed: the configured core and every holding</text><text class="lbl m" x="369" y="364" text-anchor="middle">never scored or demoted; a new holding enters within a minute</text>
+        <text class="lbl m" x="10" y="406">room = min(count, cap − fixed); when it shrinks the weakest go first</text>
+        <text class="lbl m" x="10" y="428">once a day after the close, once all three sources have reported</text>
       </svg>
       <div class="cap">Figure 3. The universe's promotion and demotion rule. The asymmetry is deliberate: entry is cheap, exit forfeits learning.</div>
     </div>
@@ -297,22 +335,24 @@
     <p><b>Cross-asset attention.</b> After the temporal stack, a multi-head attention layer runs across names within the bar, so a forecast for one name can condition on the state of the others. A learned embedding per name lets the network tell the names apart; it is the only per-name parameter, which is what makes universe migration cheap.</p>
     <p><b>A regime gate over expert heads.</b> A pooled summary of the market state selects a soft mixture over twelve expert heads, so different regimes use different heads rather than one blended predictor. The gate's weights are published with each forecast. The quantile head is non-crossing by construction: it predicts the median and non-negative increments on either side.</p>
     <div class="fig">
-      <svg viewBox="0 0 980 300" role="img" aria-label="FlintNet: per-name dilated causal convolutions over the 128-bar window, a per-name embedding, cross-asset attention across names, a pooled market state feeding a regime gate over twelve expert heads, and quantile and direction outputs">
-        <rect class="bx" x="10" y="30" width="170" height="60" rx="8"/><text class="lbl b" x="95" y="54" text-anchor="middle">Input</text><text class="lbl m" x="95" y="74" text-anchor="middle">N names × 128 bars × 25</text>
-        <rect class="bx hot" x="210" y="20" width="200" height="80" rx="8"/><text class="lbl b" x="310" y="44" text-anchor="middle">Dilated causal convs</text><text class="lbl m" x="310" y="62" text-anchor="middle">dilations 1 to 64</text><text class="lbl m" x="310" y="76" text-anchor="middle">per name, shared weights</text><text class="lbl m" x="310" y="90" text-anchor="middle">sees the whole window</text>
-        <rect class="bx" x="440" y="30" width="150" height="60" rx="8"/><text class="lbl b" x="515" y="54" text-anchor="middle">+ name embedding</text><text class="lbl m" x="515" y="74" text-anchor="middle">the only per-name parameter</text>
-        <rect class="bx hot" x="620" y="20" width="180" height="80" rx="8"/><text class="lbl b" x="710" y="44" text-anchor="middle">Cross-asset attention</text><text class="lbl m" x="710" y="62" text-anchor="middle">across the N names</text><text class="lbl m" x="710" y="76" text-anchor="middle">multi-head</text><text class="lbl m" x="710" y="90" text-anchor="middle">map published</text>
-        <rect class="bx" x="830" y="30" width="140" height="60" rx="8"/><text class="lbl b" x="900" y="54" text-anchor="middle">Pooled state</text><text class="lbl m" x="900" y="74" text-anchor="middle">mean, spread</text>
-        <path class="ar" d="M180 60H208"/><path class="ar" d="M410 60H438"/><path class="ar" d="M590 60H618"/><path class="ar" d="M800 60H828"/>
-        <rect class="bx hot" x="620" y="150" width="180" height="60" rx="8"/><text class="lbl b" x="710" y="174" text-anchor="middle">Regime gate</text><text class="lbl m" x="710" y="194" text-anchor="middle">softmax over 12 experts</text>
-        <path class="ar" d="M900 90V180H802"/>
-        <rect class="bx" x="300" y="140" width="290" height="80" rx="8"/><text class="lbl b" x="445" y="164" text-anchor="middle">12 expert heads, mixed by the gate</text><text class="lbl m" x="445" y="184" text-anchor="middle">median + increments: q10 ≤ … ≤ q90</text><text class="lbl m" x="445" y="200" text-anchor="middle">logits for P(up), P(down)</text>
-        <path class="ar" d="M710 100V140"/><path class="ar" d="M620 180H592"/><path class="ar" d="M710 210V240"/>
-        <path class="ar" d="M710 100C710 125 600 110 590 150" style="display:none"/>
-        <rect class="bx" x="10" y="140" width="250" height="80" rx="8"/><text class="lbl b" x="135" y="164" text-anchor="middle">Loss</text><text class="lbl m" x="135" y="184" text-anchor="middle">pinball + 2 × smoothed BCE</text><text class="lbl m" x="135" y="200" text-anchor="middle">masked to names that traded</text>
-        <path class="ar" d="M300 180H262"/>
-        <text class="lbl m" x="710" y="262" text-anchor="middle">gate weights shown on the dashboard</text>
-        <text class="lbl m" x="330" y="262" text-anchor="middle">attention map N × N, shown per name</text>
+      <svg viewBox="0 0 740 418" role="img" aria-label="FlintNet: per-name dilated causal convolutions over the 128-bar window, a per-name embedding, cross-asset attention across names, a pooled market state feeding a regime gate over twelve expert heads, and quantile and direction outputs">
+        <rect class="bx" x="10" y="20" width="192" height="62" rx="8"/><text class="lbl b" x="106" y="46" text-anchor="middle">Input</text><text class="lbl m" x="106" y="68" text-anchor="middle">N × 128 bars × 25</text>
+        <rect class="bx hot" x="220" y="20" width="264" height="98" rx="8"/><text class="lbl b" x="352" y="46" text-anchor="middle">Dilated causal convs</text><text class="lbl m" x="352" y="68" text-anchor="middle">dilations 1 to 64</text><text class="lbl m" x="352" y="86" text-anchor="middle">per name, shared weights</text><text class="lbl m" x="352" y="104" text-anchor="middle">sees the whole window</text>
+        <rect class="bx" x="502" y="20" width="202" height="62" rx="8"/><text class="lbl b" x="603" y="46" text-anchor="middle">+ name embedding</text><text class="lbl m" x="603" y="68" text-anchor="middle">per-name parameter</text>
+        <path class="ar" d="M202 51H218"/>
+        <path class="ar" d="M484 51H500"/>
+        <rect class="bx hot" x="10" y="158" width="229" height="98" rx="8"/><text class="lbl b" x="124.5" y="184" text-anchor="middle">Cross-asset attention</text><text class="lbl m" x="124.5" y="206" text-anchor="middle">across the N names</text><text class="lbl m" x="124.5" y="224" text-anchor="middle">multi-head</text><text class="lbl m" x="124.5" y="242" text-anchor="middle">map published</text>
+        <rect class="bx" x="257" y="158" width="140" height="62" rx="8"/><text class="lbl b" x="327" y="184" text-anchor="middle">Pooled state</text><text class="lbl m" x="327" y="206" text-anchor="middle">mean, spread</text>
+        <rect class="bx hot" x="415" y="158" width="213" height="62" rx="8"/><text class="lbl b" x="521.5" y="184" text-anchor="middle">Regime gate</text><text class="lbl m" x="521.5" y="206" text-anchor="middle">softmax, 12 experts</text>
+        <path class="ar" d="M239 189H255"/>
+        <path class="ar" d="M397 189H413"/>
+        <path class="ar" d="M603 82V138H124.5V156"/>
+        <rect class="bx" x="10" y="296" width="368" height="80" rx="8"/><text class="lbl b" x="194" y="322" text-anchor="middle">12 expert heads, mixed by the gate</text><text class="lbl m" x="194" y="344" text-anchor="middle">median + increments: q10 ≤ … ≤ q90</text><text class="lbl m" x="194" y="362" text-anchor="middle">logits for P(up), P(down)</text>
+        <rect class="bx" x="396" y="296" width="295" height="80" rx="8"/><text class="lbl b" x="543.5" y="322" text-anchor="middle">Loss</text><text class="lbl m" x="543.5" y="344" text-anchor="middle">pinball + 2 × smoothed BCE</text><text class="lbl m" x="543.5" y="362" text-anchor="middle">masked to names that traded</text>
+        <path class="ar" d="M124.5 256V294"/>
+        <path class="ar" d="M521.5 220V276H254V294"/>
+        <path class="ar" d="M378 336H394"/>
+        <text class="lbl m" x="10" y="404">gate weights and the attention map are shown on the dashboard</text>
       </svg>
       <div class="cap">Figure 4. FlintNet. Width is the preset's d_model (512 or 768 on the reference machine); the temporal stack, the attention and the heads are shared across names.</div>
     </div>
@@ -346,21 +386,28 @@
       <li><b>Deep chunks.</b> Each paged chunk of history is followed by 30 steps so the new windows enter the weights promptly.</li>
     </ul>
     <div class="fig">
-      <svg viewBox="0 0 980 230" role="img" aria-label="Timeline of a trading week: pre-open warmup, the open session with online learning, the closed session with deep backfill and idle passes, and the weekend walk-forward backtest">
-        <text class="lbl b" x="12" y="20">A trading week, Eastern time</text>
-        <rect x="12" y="34" width="956" height="34" rx="5" fill="var(--surface2)" stroke="var(--border)"/>
-        <rect x="12" y="34" width="70" height="34" rx="5" class="bx"/><text class="lbl m" x="47" y="55" text-anchor="middle">warmup</text>
-        <rect x="82" y="34" width="230" height="34" class="bx cool"/><text class="lbl m" x="197" y="55" text-anchor="middle">open, 09:30 to 16:00</text>
-        <rect x="312" y="34" width="360" height="34" class="bx hot"/><text class="lbl m" x="492" y="55" text-anchor="middle">closed: overnight</text>
-        <rect x="672" y="34" width="296" height="34" rx="5" fill="var(--hot)" stroke="var(--gold)"/><text class="lbl m" x="820" y="55" text-anchor="middle">Saturday and Sunday</text>
-        <text class="lbl b" x="12" y="98">warmup</text><text class="lbl m" x="130" y="98">load, migrate if needed, backfill five days, 60 steps; a restart resets the live trust count</text>
-        <text class="lbl b" x="12" y="120">open</text><text class="lbl m" x="130" y="120">forecast every bar; two steps per resolved label; trusted after 48 live labels, about 14:30 on a fresh start</text>
-        <text class="lbl b" x="12" y="142">closed</text><text class="lbl m" x="130" y="142">deep backfill chunks with 30 steps each; idle passes until the held-out loss stalls; the universe refresh after the close</text>
-        <text class="lbl b" x="12" y="164">weekend</text><text class="lbl m" x="130" y="164">the walk-forward backtest owns the GPU: live training waits, paging pauses, the net is sized to free memory</text>
-        <text class="lbl b" x="12" y="186">always</text><text class="lbl m" x="130" y="186">calibration and per-name records update one horizon late; nothing heavy shares the GPU with anything else heavy</text>
-        <text class="lbl m" x="12" y="214">The timer starts the engine 45 minutes before each weekday open and never restarts a running one.</text>
+      <svg viewBox="0 0 740 360" role="img" aria-label="Timeline of a trading week: pre-open warmup, the open session with online learning, the closed session with deep backfill and idle passes, and the weekend walk-forward backtest">
+        <text class="lbl b" x="10" y="24">A trading week, Eastern time</text>
+        <rect x="10" y="40" width="72" height="38" rx="5" class="bx"/><text class="lbl m" x="46" y="64" text-anchor="middle">warmup</text>
+        <rect x="82" y="40" width="215" height="38" rx="5" class="bx cool"/><text class="lbl m" x="189.5" y="64" text-anchor="middle">open, 09:30 to 16:00</text>
+        <rect x="297" y="40" width="255" height="38" rx="5" class="bx hot"/><text class="lbl m" x="424.5" y="64" text-anchor="middle">closed: overnight</text>
+        <rect x="552" y="40" width="176" height="38" rx="5" fill="var(--hot)" stroke="var(--gold)"/><text class="lbl m" x="640" y="64" text-anchor="middle">weekend</text>
+        <text class="lbl b" x="10" y="112">warmup</text>
+        <text class="lbl m" x="100" y="112">load, migrate if needed, backfill five days, 60 steps</text>
+        <text class="lbl m" x="100" y="134">a restart resets the live trust count</text>
+        <text class="lbl b" x="10" y="168">open</text>
+        <text class="lbl m" x="100" y="168">forecast every bar; two steps per resolved label</text>
+        <text class="lbl m" x="100" y="190">trusted after 48 live labels, about 14:30 on a fresh start</text>
+        <text class="lbl b" x="10" y="224">closed</text>
+        <text class="lbl m" x="100" y="224">backfill chunks, 30 steps each; idle passes until the</text>
+        <text class="lbl m" x="100" y="246">held-out loss stalls; the universe refresh after the close</text>
+        <text class="lbl b" x="10" y="280">weekend</text>
+        <text class="lbl m" x="100" y="280">the walk-forward backtest owns the GPU: live training</text>
+        <text class="lbl m" x="100" y="302">waits, paging pauses, the net is sized to free memory</text>
+        <text class="lbl b" x="10" y="336">always</text>
+        <text class="lbl m" x="100" y="336">calibration and per-name records update one horizon late</text>
       </svg>
-      <div class="cap">Figure 5. When each learning regime runs. Nothing heavy ever shares the GPU with anything else heavy.</div>
+      <div class="cap">Figure 5. When each learning regime runs. Nothing heavy ever shares the GPU with anything else heavy. The timer starts the engine 45 minutes before each weekday open and never restarts a running one.</div>
     </div>
 
     <h2 id="calibration">5. Calibration</h2>
@@ -369,13 +416,17 @@
     <div class="eq"><span class="n">(2)</span>s ← clip( s · exp( γ · ((1 − c) − 0.2) ), 0.5, 25 )</div>
     <p>where <var>c</var> is the fraction of that bar's outcomes inside the 10–90 band and γ = 0.05, so the scale settles where one outcome in five falls outside. It starts at 2, wide, and earns its way down. The second is a temperature <var>T</var> on the direction logit, <var>p̃</var> = σ(<var>T</var> · logit(<var>p</var>)), moved by one gradient step of the calibration cross-entropy per bar with rate 0.01, started sceptical at 0.3. Both corrections, and every per-name record the policy consults, are applied one horizon late in the backtest exactly as they are live.</p>
     <div class="fig">
-      <svg viewBox="0 0 980 170" role="img" aria-label="The calibration loop: raw quantiles are widened by the band scale and the direction probability tempered; twelve bars later the realised outcomes update the scale toward 80 percent coverage and the temperature by one gradient step">
-        <rect class="bx" x="10" y="30" width="170" height="60" rx="8"/><text class="lbl b" x="95" y="54" text-anchor="middle">Raw forecast at t</text><text class="lbl m" x="95" y="74" text-anchor="middle">q10..q90, P(up), P(down)</text>
-        <rect class="bx hot" x="210" y="20" width="230" height="80" rx="8"/><text class="lbl b" x="325" y="44" text-anchor="middle">Calibrated forecast</text><text class="lbl m" x="325" y="62" text-anchor="middle">q̃τ = q50 + s·(qτ − q50)</text><text class="lbl m" x="325" y="76" text-anchor="middle">p̃ = σ(T · logit p)</text><text class="lbl m" x="325" y="90" text-anchor="middle">to the policy and the dashboard</text>
-        <rect class="bx" x="470" y="30" width="170" height="60" rx="8"/><text class="lbl b" x="555" y="54" text-anchor="middle">Outcome at t + 12</text><text class="lbl m" x="555" y="74" text-anchor="middle">y per name, masked</text>
-        <rect class="bx" x="670" y="20" width="300" height="80" rx="8"/><text class="lbl b" x="820" y="44" text-anchor="middle">One update per bar</text><text class="lbl m" x="820" y="62" text-anchor="middle">s ← s · exp(γ((1 − c) − 0.2)), clipped</text><text class="lbl m" x="820" y="76" text-anchor="middle">T ← T − η · mean((p̃ − 1[y&gt;0]) · logit p)</text><text class="lbl m" x="820" y="90" text-anchor="middle">hit, coverage, pinball recorded</text>
-        <path class="ar" d="M180 60H208"/><path class="ar" d="M440 60H468"/><path class="ar" d="M640 60H668"/>
-        <path class="ar" d="M820 100V140H325V102"/><text class="lbl m" x="572" y="132" text-anchor="middle">the next forecast uses the updated s and T: one horizon of lag, by design</text>
+      <svg viewBox="0 0 740 298" role="img" aria-label="The calibration loop: raw quantiles are widened by the band scale and the direction probability tempered; twelve bars later the realised outcomes update the scale toward 80 percent coverage and the temperature by one gradient step">
+        <rect class="bx" x="10" y="20" width="202" height="62" rx="8"/><text class="lbl b" x="111" y="46" text-anchor="middle">Raw forecast at t</text><text class="lbl m" x="111" y="68" text-anchor="middle">quantiles, up/down</text>
+        <rect class="bx hot" x="230" y="20" width="264" height="98" rx="8"/><text class="lbl b" x="362" y="46" text-anchor="middle">Calibrated forecast</text><text class="lbl m" x="362" y="68" text-anchor="middle">q̃τ = q50 + s·(qτ − q50)</text><text class="lbl m" x="362" y="86" text-anchor="middle">p̃ = σ(T · logit p)</text><text class="lbl m" x="362" y="104" text-anchor="middle">to the policy</text>
+        <rect class="bx" x="512" y="20" width="202" height="62" rx="8"/><text class="lbl b" x="613" y="46" text-anchor="middle">Outcome at t + 12</text><text class="lbl m" x="613" y="68" text-anchor="middle">y per name, masked</text>
+        <path class="ar" d="M212 51H228"/>
+        <path class="ar" d="M494 51H510"/>
+        <rect class="bx" x="10" y="158" width="337" height="98" rx="8"/><text class="lbl b" x="178.5" y="184" text-anchor="middle">One update per bar</text><text class="lbl m" x="178.5" y="206" text-anchor="middle">s ← s · exp(γ((1 − c) − 0.2))</text><text class="lbl m" x="178.5" y="224" text-anchor="middle">T ← T − η · mean(grad), eq. 2</text><text class="lbl m" x="178.5" y="242" text-anchor="middle">hit, coverage, pinball recorded</text>
+        <path class="ar" d="M613 82V207H349"/>
+        <path class="ar" d="M300 158V120"/>
+        <text class="lbl m" x="310" y="143.0">updated s and T</text>
+        <text class="lbl m" x="10" y="284">the next forecast uses the updated s and T: one horizon of lag</text>
       </svg>
       <div class="cap">Figure 6. The calibration loop. A bar's several hundred labels count as one observation, which keeps the scale from oscillating.</div>
     </div>
@@ -444,18 +495,24 @@
     <h3 id="backtest">Walk-forward backtest</h3>
     <p>Because live labels accrue only while the market is open, a live record takes weeks. The backtest compresses that into a weekend by replaying the history in the replay with a fresh network of the live preset, day by day in time order. On day <var>D</var> it forecasts every window of the day before it has trained on any label from the day; the live policy's gates and sizing decide; the realized hour-ahead returns score the calls; and only then does the network train on day <var>D</var>, with the online budget plus the idle trainer's passes over everything seen so far. The first ten days are training only; signals wait for the trust rule; calibration and per-name records lag by one horizon. The procedure is therefore out of sample by construction and reproduces the live regimen including its adaptation.</p>
     <div class="fig">
-      <svg viewBox="0 0 980 200" role="img" aria-label="Walk-forward procedure: for each day D, forecast every window before training on the day, decide with the live gates, score with realised returns, then train on day D with the online budget plus night passes over all history so far">
-        <text class="lbl b" x="12" y="22">For each trading day D in the replay, after `warm_days` of training only</text>
-        <rect class="bx hot" x="12" y="40" width="200" height="64" rx="8"/><text class="lbl b" x="112" y="64" text-anchor="middle">1. Forecast day D</text><text class="lbl m" x="112" y="82" text-anchor="middle">every window, no label of D seen</text><text class="lbl m" x="112" y="96" text-anchor="middle">fresh net of the live preset</text>
-        <rect class="bx" x="252" y="40" width="200" height="64" rx="8"/><text class="lbl b" x="352" y="64" text-anchor="middle">2. Decide</text><text class="lbl m" x="352" y="82" text-anchor="middle">the live gates and sizing</text><text class="lbl m" x="352" y="96" text-anchor="middle">trust rule, records lag by 12 bars</text>
-        <rect class="bx" x="492" y="40" width="200" height="64" rx="8"/><text class="lbl b" x="592" y="64" text-anchor="middle">3. Score</text><text class="lbl m" x="592" y="82" text-anchor="middle">realised y: pinball, hit, coverage</text><text class="lbl m" x="592" y="96" text-anchor="middle">book return per bar, gross ≤ 1</text>
-        <rect class="bx hot" x="732" y="40" width="236" height="64" rx="8"/><text class="lbl b" x="850" y="64" text-anchor="middle">4. Train on D</text><text class="lbl m" x="850" y="82" text-anchor="middle">2 steps per label + night passes</text><text class="lbl m" x="850" y="96" text-anchor="middle">over everything up to D</text>
-        <path class="ar" d="M212 72H250"/><path class="ar" d="M452 72H490"/><path class="ar" d="M692 72H730"/>
-        <path class="ar" d="M850 104V140H112V106"/><text class="lbl m" x="481" y="132" text-anchor="middle">next day; the time budget shrinks step 4 uniformly so the run ends within the weekend</text>
-        <text class="lbl m" x="12" y="170">Day return = mean over bars of (Σ w·y − c·Σ|w|); curve = running sum; compared with an always-long equal-weight book. Report: per day and per name.</text>
-        <text class="lbl m" x="12" y="190">Live training waits for the run; the net is sized to free memory; the run stops itself under the memory floor.</text>
+      <svg viewBox="0 0 740 344" role="img" aria-label="Walk-forward procedure: for each day D, forecast every window before training on the day, decide with the live gates, score with realised returns, then train on day D with the online budget plus night passes over all history so far">
+        <text class="lbl b" x="10" y="24">For each trading day D, after the warm-up days</text>
+        <rect class="bx hot" x="10" y="40" width="244" height="80" rx="8"/><text class="lbl b" x="132" y="66" text-anchor="middle">1. Forecast day D</text><text class="lbl m" x="132" y="88" text-anchor="middle">no label of D seen</text><text class="lbl m" x="132" y="106" text-anchor="middle">fresh net, live preset</text>
+        <rect class="bx" x="486" y="40" width="244" height="80" rx="8"/><text class="lbl b" x="608" y="66" text-anchor="middle">2. Decide</text><text class="lbl m" x="608" y="88" text-anchor="middle">live gates and sizing</text><text class="lbl m" x="608" y="106" text-anchor="middle">records lag 12 bars</text>
+        <rect class="bx" x="486" y="176" width="244" height="80" rx="8"/><text class="lbl b" x="608" y="202" text-anchor="middle">3. Score</text><text class="lbl m" x="608" y="224" text-anchor="middle">pinball, hit, coverage</text><text class="lbl m" x="608" y="242" text-anchor="middle">book return, gross ≤ 1</text>
+        <rect class="bx hot" x="10" y="176" width="244" height="80" rx="8"/><text class="lbl b" x="132" y="202" text-anchor="middle">4. Train on D</text><text class="lbl m" x="132" y="224" text-anchor="middle">online + night passes</text><text class="lbl m" x="132" y="242" text-anchor="middle">over all days up to D</text>
+        <path class="ar" d="M254 80H484"/>
+        <text class="lbl m" x="370" y="72.0" text-anchor="middle">before training on D</text>
+        <path class="ar" d="M608 120V174"/>
+        <path class="ar" d="M486 216H256"/>
+        <text class="lbl m" x="370" y="208.0" text-anchor="middle">then, and only then</text>
+        <path class="ar" d="M132 176V122"/>
+        <text class="lbl m" x="142" y="153.0">next day</text>
+        <text class="lbl m" x="10" y="286">the time budget shrinks step 4 so the run ends within the weekend</text>
+        <text class="lbl m" x="10" y="308">day return = mean over bars of (Σ w·y − c·Σ|w|)</text>
+        <text class="lbl m" x="10" y="330">the curve is its running sum against an always-long equal-weight book</text>
       </svg>
-      <div class="cap">Figure 7. The walk-forward procedure. Nothing in step 1 can see anything from step 4 of the same day.</div>
+      <div class="cap">Figure 7. The walk-forward procedure, reported per day and per name. Nothing in step 1 can see anything from step 4 of the same day. Live training waits for the run; the net is sized to free memory and the run stops itself under the memory floor.</div>
     </div>
     <p>Book accounting is honest about capital. Per bar the signals form a one-hour portfolio with gross weight capped at one; the bar's return is Σ<sub>i</sub> <var>w</var><sub>i</sub><var>y</var><sub>i</sub> − <var>c</var> Σ<sub>i</sub> |<var>w</var><sub>i</sub>|; a day's return is the mean over its bars, because capital can fund only one hour at a time; the curve is the running sum. The report gives per-day pinball, hit rate, coverage, signals, gross and net return, an equity curve against an always-long equal-weight book, and the best and worst names. A time budget shrinks the per-day training uniformly so a run always finishes within the weekend, and the report records what it used.</p>
     <div class="callout"><b>Results.</b> As of this version no complete run exists; two attempts on the reference machine were interrupted by a universe rebuild and by the memory failure described in Section 9, and the first full run is scheduled for the weekend of October 11, 2026. The authors are not willing to report numbers from partial runs. The paper book's live record to date has been negative, which is consistent with the literature's finding that documented intraday effects are small, and is the motivation for the work in Sections 7 and 11.</div>
@@ -464,22 +521,27 @@
     <p>Flint is one asyncio process: a bar clock, the forecasting path, the four training regimes, and periodic loops for market status, signals, the radar, news, checkpoints, the brief, the portfolio, deep backfill, idle training, the universe refresh and the backtest. A FastAPI server exposes the state as JSON and streams it over one websocket to a dashboard of plain HTML and JavaScript with no build step. The checkpoint is written atomically every five minutes; the replay, tens of gigabytes when full, is written uncompressed as one memory-mapped array per field at most every 30 minutes and at shutdown, swapped into place whole so a crash leaves the previous directory intact.</p>
     <p>The reference machine's unified memory is shared by the model, the replay and everything else, and its GPU allocations are invisible to process accounting and outside any control-group limit. Several invariants exist because this was learned the hard way.</p>
     <div class="fig">
-      <svg viewBox="0 0 980 230" role="img" aria-label="Memory map of the reference machine: training peak, replay budget, weights, system, backtest net, and the floor kept free">
-        <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--muted)"/></marker></defs>
-        <text class="lbl b" x="12" y="24">121 GB of unified memory at 362 names, 4XL, during a weekend backtest</text>
-        <rect x="12" y="44" width="956" height="44" rx="6" fill="var(--surface2)" stroke="var(--border)"/>
-        <rect x="12" y="44" width="236" height="44" rx="6" class="bx cool"/><text class="lbl b" x="130" y="62" text-anchor="middle">replay 30 GB</text><text class="lbl m" x="130" y="78" text-anchor="middle">host memory, mmap on disk</text>
-        <rect x="248" y="44" width="16" height="44" fill="var(--shade)"/><text class="lbl m" x="256" y="104" text-anchor="middle">weights 2</text>
-        <rect x="264" y="44" width="55" height="44" fill="var(--shade2)"/><text class="lbl m" x="291" y="66" text-anchor="middle">system</text><text class="lbl m" x="291" y="80" text-anchor="middle">7</text>
-        <rect x="319" y="44" width="416" height="44" rx="6" class="bx hot"/><text class="lbl b" x="527" y="62" text-anchor="middle">backtest net 53 GB at peak</text><text class="lbl m" x="527" y="78" text-anchor="middle">sized to free memory; the live net does not train</text>
-        <rect x="735" y="44" width="79" height="44" fill="var(--surface)" stroke="var(--gold)" stroke-dasharray="4 3"/><text class="lbl m" x="774" y="62" text-anchor="middle">floor 10</text><text class="lbl m" x="774" y="78" text-anchor="middle">kept free</text>
-        <text class="lbl m" x="890" y="70" text-anchor="middle">headroom 19</text>
-        <text class="lbl" x="12" y="140">What the same 121 GB held on October 10 before the rules below, with no backtest running:</text>
-        <rect x="12" y="152" width="956" height="36" rx="6" fill="var(--surface2)" stroke="var(--border)"/>
-        <rect x="12" y="152" width="94" height="36" rx="6" class="bx cool"/><text class="lbl m" x="59" y="174" text-anchor="middle">replay 12</text>
-        <rect x="106" y="152" width="710" height="36" rx="6" class="bx hot"/><text class="lbl b" x="461" y="169" text-anchor="middle">about 90 GB of cached allocator blocks outside any process</text><text class="lbl m" x="461" y="183" text-anchor="middle">one working set each for the training step, the validation pass and per-bar prediction</text>
-        <text class="lbl m" x="892" y="174" text-anchor="middle">14 free</text>
-        <text class="lbl m" x="12" y="215">Earlier that night two such training peaks ran at once and the driver refused allocations; the machine rebooted.</text>
+      <svg viewBox="0 0 740 386" role="img" aria-label="Memory map of the reference machine: training peak, replay budget, weights, system, backtest net, and the floor kept free">
+        <text class="lbl b" x="10" y="24">121 GB at 362 names and 4XL during a weekend backtest</text>
+        <rect x="10.0" y="44" width="178.0" height="96" rx="6" class="bx cool"/>
+        <rect x="188.0" y="44" width="11.9" height="96" fill="var(--shade)"/>
+        <rect x="199.9" y="44" width="41.5" height="96" fill="var(--shade2)"/>
+        <rect x="241.4" y="44" width="314.5" height="96" rx="6" class="bx hot"/>
+        <rect x="555.9" y="44" width="59.3" height="96" fill="var(--surface)" stroke="var(--gold)" stroke-dasharray="4 3"/>
+        <rect x="615.3" y="44" width="112.7" height="96" fill="var(--surface2)" stroke="var(--border)"/>
+        <text class="lbl b" x="99.0083" y="86" text-anchor="middle">replay 30 GB</text><text class="lbl m" x="99.0083" y="108" text-anchor="middle">mmap on disk</text>
+        <text class="lbl b" x="398.669" y="78" text-anchor="middle">backtest net 53 GB at peak</text><text class="lbl m" x="398.669" y="100" text-anchor="middle">sized to free memory</text><text class="lbl m" x="398.669" y="118" text-anchor="middle">the live net does not train</text>
+        <text class="lbl m" x="214.719" y="162" text-anchor="middle">weights 2, system 7</text>
+        <text class="lbl m" x="563.587" y="162" text-anchor="middle">floor 10</text>
+        <text class="lbl m" x="668.628" y="162" text-anchor="middle">headroom 19</text>
+        <text class="lbl" x="10" y="204">The same 121 GB on October 10, before these rules, with no backtest running:</text>
+        <rect x="10.0" y="220" width="71.2" height="96" rx="6" class="bx cool"/>
+        <rect x="81.2" y="220" width="534.0" height="96" rx="6" class="bx hot"/>
+        <rect x="615.3" y="220" width="112.7" height="96" fill="var(--surface2)" stroke="var(--border)"/>
+        <text class="lbl m" x="45.6033" y="338" text-anchor="middle">replay 12</text>
+        <text class="lbl b" x="348.231" y="254" text-anchor="middle">90 GB of allocator cache outside any process</text><text class="lbl m" x="348.231" y="276" text-anchor="middle">one working set each for the training step,</text><text class="lbl m" x="348.231" y="294" text-anchor="middle">the validation pass and per-bar prediction</text>
+        <text class="lbl m" x="671.628" y="274" text-anchor="middle">19 free</text>
+        <text class="lbl m" x="10" y="372">Earlier that night two such peaks ran at once and the box rebooted</text>
       </svg>
       <div class="cap">Figure 8. The memory map that the rules in this section enforce, and the two states that preceded them.</div>
     </div>
