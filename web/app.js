@@ -1494,7 +1494,12 @@ function renderBacktest() {
     ? `<div class="prow phead"><span>name</span>${cell("net bps")}${cell("signals")}${cell("hit")}</div>` +
       names.map(x => `<div class="prow"><span class="psym">${esc(x.sym)}</span>${cell(fmtBps(x.net_bps), x.net_bps >= 0 ? "up" : "down")}${cell(x.signals)}${cell(fmtPct(x.hit))}</div>`).join("")
     : "";
-  paintBacktest(b.days || [], (b.baseline && b.baseline.days) || []);
+  const legend = $("#bt-legend"), bl = b.baseline || {};
+  if (legend) legend.innerHTML = (b.days || []).length < 2 ? "" :
+    `<span style="--c: var(--good)">this run: ${esc((b.config || {}).target || "absolute")} target, net after cost</span>` +
+    (bl.days && bl.days.length ? `<span style="--c: var(--warning)">${esc(bl.target || "other")} target over the same days</span>` : "") +
+    `<span class="thin" style="--c: var(--muted)">always long, equal weight</span>`;
+  paintBacktest(b.days || [], bl.days || []);
   renderSweep(b.sweep);
 }
 
