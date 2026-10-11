@@ -25,7 +25,7 @@ from .backtest import combine_reports, run_backtest, variant_summary
 from .meta import MetaLabeler, features as meta_features
 from .newshist import NewsHistory, backfill_span
 from .bars import Bar, BarBuilder
-from .features import FEATURES, N_FEATURES, FeatureBuilder
+from .features import BARS_D, FEATURES, N_FEATURES, FeatureBuilder
 from .feed import Tick
 from .learner import OnlineLearner, Prediction
 from .news import TICKER_STOPLIST, NewsHub, is_crypto
@@ -1527,7 +1527,10 @@ class Engine:
         names = self._news_names()
         if not key or not names:
             return
-        days = float(getattr(cfg, "deep_backfill_days", 0) or 0) + float(cfg.backfill_seconds) / 86400.0
+        # the span the deep loop can actually hold: the ring's capacity in sessions (about 1.4 calendar
+        # days each) plus the warm prefix, under deep_backfill_days, plus the startup backfill
+        cap_days = float(self.learner.rx.shape[0]) / BARS_D * 1.45 + WARM_S / 86400.0
+        days = min(float(getattr(cfg, "deep_backfill_days", 0) or 0), cap_days) + float(cfg.backfill_seconds) / 86400.0
         lo, hi = backfill_span(time.time(), max(days, 3.0))
         missing = self.news_history.missing(names, lo, hi)
         if not missing:
