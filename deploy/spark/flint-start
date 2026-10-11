@@ -46,7 +46,13 @@ ENV=(
 case "$(systemctl --user is-system-running 2>/dev/null)" in running|degraded) HAVE_SYSTEMD=1 ;; *) HAVE_SYSTEMD= ;; esac
 if command -v systemd-run >/dev/null 2>&1 && [ -n "$HAVE_SYSTEMD" ]; then
     # A transient user unit of its own, so it outlives the oneshot timer service that calls us
-    # and logs to the journal.
+    # and logs to the journal. A unit stopped a moment ago may still be loaded (systemd collects
+    # it asynchronously); systemd-run refuses the name until it is gone, so wait for that.
+    for _i in $(seq 1 20); do
+        systemctl --user list-units --all --plain --no-legend 'flint-run.service' 2>/dev/null | grep -q 'flint-run' || break
+        systemctl --user reset-failed flint-run.service >/dev/null 2>&1
+        sleep 0.5
+    done
     systemd-run --user --unit=flint-run --collect --quiet \
         -p WorkingDirectory="$PWD" -p KillMode=mixed \
         env "${ENV[@]}" "$PWD/.venv/bin/python" -m flint
