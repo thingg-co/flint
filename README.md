@@ -43,11 +43,15 @@ than the most threads (over-threading spills onto the slow efficiency cores).
 
 ## The model
 
-Ticks are aggregated into 5-minute bars, aligned across assets. Each bar becomes a set of
-features per asset: price microstructure (return, range, volume, order-flow imbalance,
-spread, trade count, close position, momentum, realized volatility) plus slow-moving
-exogenous signals (news tone, WallStreetBets, Fear & Greed, perp funding/OI/long-short,
-the investor-council consensus and ethos bias, fundamentals, market breadth, and VIX).
+Ticks are aggregated into 5-minute bars, aligned across assets. Each bar becomes 28
+features per asset, every one computable from the bar stream plus dated news so that paged
+history and the live feed agree: the bar's return, range, volume and close position, the
+hour's momentum and volatility, range-based (Garman-Klass, Yang-Zhang) and HAR volatility,
+the day's return and the same-slot lags, Amihud and Roll liquidity, the overnight and
+intraday legs and the session clock; breadth, the market's return, momentum and volatility,
+the name's beta and the market's first half hour; and news tone and attention. The slower
+signals (WallStreetBets, Fear & Greed, positioning, the investor council, fundamentals, VIX,
+option implied vol and skew) feed the policy and the dashboard.
 
 FlintNet takes the last N bars of every asset and predicts the 10/25/50/75/90 quantiles
 of each asset's return over the next hour plus a probability the return is positive. It

@@ -208,3 +208,29 @@ class TestMetaGate:
         Engine._suggest(fake, 0, "AAPL", pred)
         r = Engine._suggest(fake, 0, "AAPL", pred)
         assert r["action"] == "BUY" and r["meta"] is None
+
+
+class TestTicketFloor:
+    """A position too small to be worth its ticket is lifted to the floor or not placed; a put's
+    commission has to be earned back over the hold."""
+
+    def test_a_tiny_signal_trades_at_the_floor(self):
+        pred = make_pred([-20, 10, 40, 70, 100], 0.7, 0.2)
+        fake = make_fake(cfg={"kelly_fraction": 0.001, "min_position_dollars": 1000.0})   # Kelly alone would size this at 0.1%
+        Engine._suggest(fake, 0, "AAPL", pred)
+        r = Engine._suggest(fake, 0, "AAPL", pred)
+        assert r["action"] == "BUY" and r["size"] == 0.01 and r["ticket_bps"] == 0.0     # $1,000 of a $100k book
+        fake = make_fake(cfg={"kelly_fraction": 0.001, "min_position_dollars": 0.0})
+        Engine._suggest(fake, 0, "AAPL", pred)
+        assert Engine._suggest(fake, 0, "AAPL", pred)["size"] < 0.001                    # off: Kelly's size stands
+
+    def test_a_put_ticket_has_to_pay_for_itself(self):
+        pred = make_pred([-100, -70, -40, -10, 20], 0.2, 0.7)
+        fake = make_fake(cfg={"option_commission": 80.0, "min_position_dollars": 1000.0, "kelly_fraction": 0.001})
+        Engine._suggest(fake, 0, "AAPL", pred)
+        r = Engine._suggest(fake, 0, "AAPL", pred)
+        assert r["action"] == "HOLD" and "contract ticket costs" in r["why"] and r["ticket_bps"] > 100
+        fake = make_fake(cfg={"option_commission": 0.65, "min_position_dollars": 1000.0, "kelly_fraction": 0.001})
+        Engine._suggest(fake, 0, "AAPL", pred)
+        r = Engine._suggest(fake, 0, "AAPL", pred)
+        assert r["action"] == "SELL" and 0 < r["ticket_bps"] < 20                        # one contract on $1,000: 13 bps round trip

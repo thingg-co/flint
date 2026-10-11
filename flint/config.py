@@ -280,6 +280,7 @@ class Config:
     option_max_frac: float = _env("OPTION_MAX_FRAC", 0.02)   # premium per option position, as a fraction of equity     # min |expected move| (bps) to take a side; kills false confidence from flat/degenerate-IQR series
     min_hit_rate: float = _env("MIN_HIT_RATE", 0.5)         # only trade once directional skill (hit_ema) beats a coin flip
     paper_min_trade_frac: float = _env("PAPER_MIN_TRADE_FRAC", 0.015)  # skip paper rebalances smaller than this share of equity (anti-churn)
+    min_position_dollars: float = _env("MIN_POSITION_DOLLARS", 1000.0)  # a position below this is not worth a ticket: a signal sized under it trades at this size when its edge still covers the costs there, else holds; the paper book skips smaller rebalances too (0 = off; a live control)
     put_min_hold_bars: int = _env("PUT_MIN_HOLD_BARS", 3)   # hold a paper put at least this many bars before closing (anti-churn)
     kelly_fraction: float = _env("KELLY_FRACTION", 0.15)   # fractional-Kelly sizing: weight = this * |q50|/IQR (risk-adjusted edge).
     #                                                      Calibrated to the per-name weight cap so tradeable scores (~0.35-1.0) map

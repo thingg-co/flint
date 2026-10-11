@@ -14,13 +14,14 @@ from .options import bs_call, bs_put, years_to
 
 class PaperBook:
     def __init__(self, start: float = 100_000.0, cost_bps: float = 1.0, max_weight: float = 0.15,
-                 min_trade_frac: float = 0.004, option_commission: float = 0.65, put_min_hold_s: float = 0.0,
+                 min_trade_frac: float = 0.004, min_notional: float = 200.0, option_commission: float = 0.65, put_min_hold_s: float = 0.0,
                  straddle_min_hold_s: float = 3600.0, option_max_frac: float = 0.02):
         self.start = float(start)
         self.cash = float(start)
         self.cost_bps = float(cost_bps)
         self.max_weight = float(max_weight)          # cap on a single name's gross weight
         self.min_trade_frac = float(min_trade_frac)  # skip rebalances smaller than this share of equity
+        self.min_notional = max(200.0, float(min_notional))   # and smaller than this many dollars: not worth a ticket
         self.option_commission = float(option_commission)
         self.put_min_hold_s = float(put_min_hold_s)   # hold a put at least this long before closing (anti-churn)
         self.straddle_min_hold_s = float(straddle_min_hold_s)
@@ -100,7 +101,7 @@ class PaperBook:
         tw = {s: (float(w) if s in uncapped else max(-self.max_weight, min(self.max_weight, float(w)))) for s, w in targets.items()}
         gross = sum(abs(w) for s, w in tw.items() if s not in uncapped)
         scale = (1.0 / gross) if gross > 1 else 1.0        # no leverage
-        min_notional = max(200.0, eq * self.min_trade_frac)
+        min_notional = max(self.min_notional, eq * self.min_trade_frac)
         for s, w in tw.items():
             ref = self._px(s, prices)
             if not ref or ref <= 0:
@@ -171,7 +172,8 @@ class PaperBook:
         contracts = notional / (100.0 * spot * dl)
         if eq:                                              # premium at risk capped as a share of equity
             contracts = min(contracts, eq * self.option_max_frac / (prem * 100.0))
-        if contracts < 0.01:
+        contracts = float(int(contracts + 0.5)) if eq else contracts   # whole contracts, as a broker fills them; a hedge keeps its exact size
+        if contracts < (1.0 if eq else 0.01):
             return
         cost = contracts * prem * 100.0
         fee = contracts * self.option_commission
@@ -206,8 +208,8 @@ class PaperBook:
         pair_prem = (sq.get("put_premium") or 0.0) + (sq.get("call_premium") or 0.0)
         if pair_prem <= 0 or budget <= 0:
             return
-        contracts = budget / (pair_prem * 100.0)
-        if contracts < 0.01:
+        contracts = float(int(budget / (pair_prem * 100.0)))   # whole pairs
+        if contracts < 1.0:
             return
         cost = contracts * pair_prem * 100.0
         fee = contracts * self.option_commission * 2.0    # two legs

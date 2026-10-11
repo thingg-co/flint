@@ -48,7 +48,7 @@ TUNABLE = {"score_threshold": float, "prob_margin": float, "cost_bps": float, "m
            "extended_hours": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
            "train_in_session": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
            "skill_min_n": int, "confirm_bars": int, "stock_min_hold_bars": int, "max_spread_bps": float,
-           "min_price": float, "option_max_frac": float,
+           "min_price": float, "option_max_frac": float, "min_position_dollars": float,
            "impact_eta": float, "max_impact_bps": float, "theta_in_edge": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
            "straddle_edge": float, "stop_loss_bps": float, "take_profit_bps": float, "max_hold_bars": int,
            "exit_cooldown_bars": int, "daily_loss_limit": float,
@@ -447,6 +447,7 @@ class Engine:
         self._held_since: dict[str, int] = {}             # symbol -> bar index a nonzero paper target began
         self._last_target: dict[str, float] = {}
         self.paper = PaperBook(cfg.paper_start, cfg.cost_bps, min_trade_frac=cfg.paper_min_trade_frac,
+                               min_notional=float(getattr(cfg, "min_position_dollars", 0.0) or 0.0),
                                option_commission=cfg.option_commission, option_max_frac=cfg.option_max_frac,
                                put_min_hold_s=cfg.put_min_hold_bars * cfg.bar_seconds,
                                straddle_min_hold_s=cfg.straddle_hold_bars * cfg.bar_seconds)   # $100k paper book (shorts via puts)
@@ -1932,12 +1933,24 @@ class Engine:
         bars_s = self.bars.get(s) or ()
         eq = float(getattr(self, "_book_equity", 0.0) or 0.0) or 100_000.0
         size0 = cfg.max_size * min(1.0, cfg.kelly_fraction * abs(score))        # the size this signal would take
+        floor_usd = float(getattr(cfg, "min_position_dollars", 0.0) or 0.0)
+        if floor_usd > 0 and eq * size0 < floor_usd:
+            size0 = min(cfg.max_size, floor_usd / eq)                            # a smaller ticket is not worth placing: the floor or nothing
+        px0 = float(pr.get("price") or (bars_s[-1].close if bars_s else 0.0) or 0.0)
         adv = policy.dollar_volume(bars_s)
         impact = policy.impact_bps(eq * size0, adv, policy.sigma_daily(bars_s), float(getattr(cfg, "impact_eta", 0.1)))
         iv = (getattr(self, "option_iv", None) or {}).get(s)
         theta = (policy.theta_bps_per_hour(iv, cfg.option_dte)
                  if score < 0 and iv and getattr(cfg, "theta_in_edge", True) else 0.0)
         edge = abs(q50) - max(cfg.cost_bps, spread_bps or 0.0) - impact - theta
+        # The fixed part of the ticket. Stock trades free; a bearish view is whole put contracts that
+        # pay a commission each way, so a small position pays a large share of its notional before
+        # the put has moved. The hourly edge has the hold to earn it back.
+        hold_h = max(int(cfg.put_min_hold_bars if score < 0 else cfg.stock_min_hold_bars), int(cfg.horizon), 1) * float(cfg.bar_seconds) / 3600.0
+        contracts, fixed_bps = 0, 0.0
+        if score < 0 and px0 > 0:
+            contracts = max(1, int(round(eq * size0 / (100.0 * px0 * 0.5))))     # delta-equivalent exposure in ATM contracts
+            fixed_bps = 2.0 * float(cfg.option_commission) * contracts / max(eq * size0, 1.0) * 1e4
         kyle = policy.kyle_impact_bps(policy.amihud(bars_s), eq * size0)
         conviction = abs(2 * p - 1)
         reasons = []
@@ -1952,6 +1965,9 @@ class Engine:
             if theta >= 0.5:
                 parts.append(f"{theta:.1f} bps/h of put decay")
             reasons.append("the expected move does not cover trading cost" + (f" ({', '.join(parts)})" if parts else ""))
+        elif fixed_bps > 0 and edge * hold_h <= fixed_bps:
+            reasons.append(f"a {contracts}-contract ticket costs {fixed_bps:.0f} bps round trip against "
+                           f"{edge * hold_h:.0f} bps expected over a {hold_h:.1f} h hold")
         if kyle > float(getattr(cfg, "max_impact_bps", 10.0)):
             reasons.append(f"too illiquid: a {size0 * 100:.0f}% position would move the price about {kyle:.0f} bps")
         if spread_bps is not None and spread_bps > cfg.max_spread_bps:
@@ -2000,6 +2016,8 @@ class Engine:
         size = cfg.max_size * min(1.0, cfg.kelly_fraction * abs(score)) if side else 0.0
         if side and cfg.size_by_coverage and m.coverage_ema is not None:
             size *= max(0.25, min(1.0, m.coverage_ema / 0.8))   # overconfident bands -> smaller positions
+        if side and floor_usd > 0 and eq * size < floor_usd:
+            size = min(cfg.max_size, floor_usd / eq)             # never a position too small to be worth its ticket
         why = "holding: " + "; ".join(reasons) if reasons else f"leaning in: {q50:+.0f} bps expected, {p * 100:.0f}% up / {p_down * 100:.0f}% down"
         fat_tails = p > 0.5 and p_down > 0.5
         width = q90 - q10
@@ -2032,7 +2050,7 @@ class Engine:
                 "straddle": straddle and not muted, "width": round(width, 1),
                 "size": round(size, 3), "score": score, "p_up": p, "p_raw": p_raw, "p_down": p_down, "p_down_raw": p_down_raw, "q": qc,
                 "q_raw": [float(v) for v in pred.q[i]], "iqr": iqr, "band_scale": m.band_scale, "p_scale": m.p_scale,
-                "trusted": m.trusted, "why": why, "reasons": reasons, "meta": meta_p,
+                "trusted": m.trusted, "why": why, "reasons": reasons, "meta": meta_p, "ticket_bps": round(fixed_bps, 1),
                 "crowding": round(self.crowding.get(s, 0.0), 3), "guru_tilt": round(self.guru_tilt.get(s, 0.0), 3),
                 "base_action": "BUY" if base_side > 0 else "SELL" if base_side < 0 else "HOLD",
                 "overlay": overlay["notes"] if overlay else [], "muted": muted}
