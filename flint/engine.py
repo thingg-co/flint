@@ -815,12 +815,29 @@ class Engine:
         await self.sources.stop()
         await asyncio.to_thread(self._save)
 
+    def _load_norm(self, st) -> None:
+        """Restore the feature normalizer from a checkpoint, rows matched by name so a universe
+        that changed since the save keeps every retained name's statistics; a state saved before
+        it carried names (0.5.15) is named by the checkpoint's own symbol list. Whatever the state,
+        the start goes on: before this a positional load died on a broadcast error after the
+        universe loop's first promotion (found in Steel 2026-10-11)."""
+        try:
+            st = dict(st) if isinstance(st, dict) else {}
+            if not st.get("symbols") and self.learner.loaded_symbols:
+                st["symbols"] = list(self.learner.loaded_symbols)
+            ok = self.features.norm.load(st, list(self.symbols)) if st else False
+        except Exception as e:  # noqa: BLE001 -- normalization statistics must never kill the start
+            log.warning("could not restore the normalization state (%s: %s); starting fresh", type(e).__name__, e)
+            ok = False
+        if not ok:
+            self.trace.emit("system", "normalization state could not be restored; features re-standardize from fresh", "warn")
+
     async def _start(self) -> None:
         cfg = self.cfg
         extra = self.learner.load(cfg.state_dir)
         if extra is not None:
             if "norm" in extra:
-                self.features.norm.load(extra["norm"])
+                self._load_norm(extra["norm"])
             self.metrics.labels = self.learner.labels
             self.metrics.steps = self.learner.steps
             md = extra.get("metrics") or {}
@@ -1549,7 +1566,7 @@ class Engine:
             metrics = {k: getattr(m, k) for k in self._PERSIST_METRICS}
             metrics["pnl_by_symbol"] = dict(m.pnl_by_symbol)
             metrics["calib_v"] = self.CALIB_V
-            self.learner.save(self.cfg.state_dir, extra={"norm": self.features.norm.state(), "metrics": metrics,
+            self.learner.save(self.cfg.state_dir, extra={"norm": self.features.norm.state(list(self.symbols)), "metrics": metrics,
                                                           "paper": self.paper.to_state(), "target": self.learner.target_mode,
                                                           "outcomes": {s: list(d) for s, d in self.outcomes.items() if d}},
                               force_replay=final)

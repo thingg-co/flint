@@ -123,7 +123,12 @@ unless Flint is already up.
   with no name in common, still backs up and starts fresh. The replay lives in `state/replay/` as
   one .npy per array plus meta.json, swapped in atomically and memory-mapped on load (`read_replay`
   also reads the pre-0.5.12 replay.npz); a rebuild frees the old buffer before the new learner
-  allocates its own.
+  allocates its own. The feature normalizer's rows travel by name too (`RunningNorm.state(symbols)` /
+  `load(st, symbols)`, `engine._load_norm`): retained names keep their statistics and count, new names
+  start fresh with their own count, a state saved without names is named by the checkpoint's own
+  symbol list, and a state that cannot be mapped leaves the normalizer fresh with a trace warning
+  rather than failing the start (found in Steel 2026-10-11: the positional copy died on a broadcast
+  error after the first promotion, phase `error` until a restart with a matching universe).
 - While the market is closed, `_deep_backfill_loop` pages history back in ~10-day chunks
   (one every 150 s while there is history left, to `deep_backfill_days`, a live control; 0 disables), adds labeled windows to the replay
   through an isolated bar/feature pipeline, and trains on them. It must never run while the

@@ -80,6 +80,7 @@ class OnlineLearner:
         self._seen: set[int] = set()                     # timestamps in the buffer, so a restart's re-walk of the same history adds nothing
         self._slot: dict[int, int] = {}                  # timestamp -> ring slot, so a re-walk can fill new names' columns
         self.migrated_new: list[str] = []                # names the last load() added fresh (no history in the replay yet)
+        self.loaded_symbols: list[str] = []              # the symbol list the last checkpoint read was saved with (names its norm rows)
         self._replay_at = 0.0                            # when the replay was last written, and with how many labels
         self._replay_labels = -1
         self.size = 0
@@ -404,6 +405,7 @@ class OnlineLearner:
             self._alloc()
         saved_shape = tuple(ck.get("shape", ()))
         saved_syms = list(ck.get("symbols") or [])
+        self.loaded_symbols = list(saved_syms)
         cur_shape = tuple(self.rx.shape[1:])
         cur_syms = list(self.cfg.symbols)
         # Only the symbol list changed (same window and features, some names in common): keep every

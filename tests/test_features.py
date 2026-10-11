@@ -27,7 +27,7 @@ class TestRunningNorm:
         # After first update, mean should equal x, var should remain ones, count should be 1
         assert np.array_equal(norm.mean, x)
         assert np.array_equal(norm.var, np.ones((2, N_FEATURES), dtype=np.float64))
-        assert norm.count == 1
+        assert np.all(norm.count == 1)
 
     def test_norm_apply_clips_and_passes_exogenous_through(self):
         """After one update with zeros, apply to an array whose normalized columns hold 100.0 and exogenous columns hold 0.7."""
@@ -67,7 +67,7 @@ class TestRunningNorm:
 
         # Get state
         st = norm.state()
-        assert st["count"] == 3
+        assert np.all(st["count"] == 3)
 
         # Create fresh norm and load state
         fresh = RunningNorm(2, N_FEATURES)
@@ -75,11 +75,39 @@ class TestRunningNorm:
 
         assert np.array_equal(fresh.mean, norm.mean)
         assert np.array_equal(fresh.var, norm.var)
-        assert fresh.count == norm.count
+        assert np.array_equal(fresh.count, norm.count)
 
         # Mutate fresh norm's mean and verify st is unchanged
         fresh.mean[0, 0] = 999.0
         assert st["mean"][0, 0] != 999.0  # st should be a copy
+
+    def test_running_norm_maps_rows_by_symbol_across_a_universe_change(self):
+        """Found in Steel 2026-10-11: the state loaded by position, so after the universe loop
+        promoted names the start loaded an (old N, F) array into a (new N, F) normalizer and the
+        engine died on a broadcast error. Rows now travel by name, a new name starts fresh with its
+        own count, and a state that cannot be mapped leaves the normalizer fresh instead of raising."""
+        rng = np.random.default_rng(1)
+        old = RunningNorm(3, N_FEATURES)
+        for _ in range(5):
+            old.update(rng.normal(size=(3, N_FEATURES)) + np.arange(3)[:, None] * 10)
+        st = old.state(["AAA", "BBB", "CCC"])
+        assert st["symbols"] == ["AAA", "BBB", "CCC"] and np.all(st["count"] == 5)
+        new = RunningNorm(4, N_FEATURES)
+        assert new.load(st, ["CCC", "DDD", "AAA", "EEE"]) is True
+        assert np.array_equal(new.mean[0], old.mean[2]) and np.array_equal(new.var[2], old.var[0])     # rows moved by name
+        assert np.all(new.mean[1] == 0) and np.all(new.var[1] == 1) and list(new.count) == [5, 0, 5, 0]  # new names fresh
+        x = rng.normal(size=(4, N_FEATURES))
+        new.update(x)
+        assert np.array_equal(new.mean[1], x[1]) and not np.array_equal(new.mean[0], x[0])   # a fresh row takes its first sample, a kept row blends
+        assert list(new.count) == [6, 1, 6, 1]
+        legacy = {"mean": old.mean.copy(), "var": old.var.copy(), "count": 5}                  # pre-0.5.15: no names, one count
+        same = RunningNorm(3, N_FEATURES)
+        assert same.load(legacy) is True and np.array_equal(same.mean, old.mean) and list(same.count) == [5, 5, 5]
+        other = RunningNorm(4, N_FEATURES)
+        assert other.load(legacy) is False and np.all(other.mean == 0) and np.all(other.count == 0)   # a mismatch: fresh, not an exception
+        assert other.load({**legacy, "symbols": ["AAA", "BBB", "CCC"]}, ["BBB", "ZZZ", "AAA", "CCC"]) is True   # the checkpoint's list names a legacy state
+        assert np.array_equal(other.mean[0], old.mean[1]) and list(other.count) == [5, 0, 5, 5]
+        assert other.load({"mean": np.zeros((2, 2)), "var": np.ones((2, 2)), "count": 1}) is False   # wrong feature count: fresh, not an exception
 
     def test_push_returns_none_until_window_full(self):
         """FeatureBuilder(["A", "B"], window=4); pushing 3 rows returns None; 4th returns array of shape (2, 4, N_FEATURES)."""

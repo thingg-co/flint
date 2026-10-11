@@ -153,3 +153,24 @@ def test_replay_columns_alone_flag_new_names(tmp_path):
     C = make(["AAA", "BBB", "CCC"])
     C.load(tmp_path)
     assert C.size == 6 and C.migrated_new == ["CCC"] and not C.rmask[:6, 2].any()
+
+
+def test_load_records_the_checkpoints_symbols_so_a_legacy_norm_state_maps_by_name(tmp_path):
+    """The feature normalizer's rows are matched by name on load; a checkpoint saved before the
+    state carried names (0.5.15) is named by the symbol list the checkpoint itself recorded, which
+    is what `engine._load_norm` passes along."""
+    from flint.features import RunningNorm
+    A = make(["AAA", "BBB", "CCC"])
+    fill_windows(A, 20)
+    norm = RunningNorm(3, 3)
+    norm.update(np.arange(9, dtype=np.float64).reshape(3, 3))
+    legacy = {"mean": norm.mean.copy(), "var": norm.var.copy(), "count": 1}
+    A.save(tmp_path, force_replay=True, extra={"norm": legacy})
+    B = make(["CCC", "AAA", "DDD"])
+    extra = B.load(tmp_path)
+    assert extra is not None and B.loaded_symbols == ["AAA", "BBB", "CCC"] and B.migrated_new == ["DDD"]
+    st = dict(extra["norm"])
+    st.setdefault("symbols", B.loaded_symbols)
+    nb = RunningNorm(3, 3)
+    assert nb.load(st, B.cfg.symbols) is True
+    assert np.array_equal(nb.mean[0], norm.mean[2]) and np.array_equal(nb.mean[1], norm.mean[0]) and list(nb.count) == [1, 1, 0]
