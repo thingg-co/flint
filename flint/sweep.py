@@ -30,6 +30,7 @@ GRID: dict[str, list] = {
     "confirm_bars": [1, 2, 3, 4],
     "min_hit_rate": [0.45, 0.5, 0.52, 0.55, 0.58],
     "skill_min_n": [0, 4, 8, 16],
+    "meta_min": [0.0, 0.47, 0.5, 0.53, 0.56],
 }
 MIN_SIGNALS_PER_DAY = 0.5           # a setting that barely trades has no net worth comparing
 THIN_SIGNALS_PER_DAY = 2.0          # a proposal confirmed on fewer trades than this is a hint, not a result
@@ -49,6 +50,7 @@ def load_forecasts(path: str | Path) -> dict:
     out["index"] = [str(s) for s in out["index"]] if "index" in out else []
     out["target"] = str(out["target"]) if "target" in out else "absolute"
     out["hedge_cost_bps"] = float(out["hedge_cost_bps"]) if "hedge_cost_bps" in out else None   # runs before 0.5.16 charged the hedge the names' cost
+    out["meta"] = out["meta"] if "meta" in out else None                                        # the meta-labeler's odds per forecast (0.5.17), NaN before it had learned
     out["path"] = str(path)
     return out
 
@@ -72,6 +74,9 @@ def replay_policy(fc: dict, cfg, cost_bps: float, overrides: dict | None = None,
     q, up, dn, y, mask = fc["q"], fc["up"], fc["dn"], fc["y"], fc["mask"]
     day_of = fc["day_of"].astype(np.int64)
     betas = fc["beta"]
+    meta = fc.get("meta")
+    meta = None if meta is None or np.shape(meta) != np.shape(y) else np.asarray(meta, dtype=np.float64)
+    meta_min = float(getattr(cfg, "meta_min", 0.0))
     symbols = fc["symbols"]
     icols = [symbols.index(s) for s in fc["index"] if s in symbols]
     n_bars, n_assets = y.shape
@@ -119,8 +124,10 @@ def replay_policy(fc: dict, cfg, cost_bps: float, overrides: dict | None = None,
         p, z = _temper(up[b].astype(np.float64), p_scale)
         iqr = np.maximum(qc[:, 3] - qc[:, 1], 1e-3)
         score = q50 / iqr
+        mp = meta[b] if meta is not None else np.full(n_assets, np.nan)
         ok = ((np.abs(score) >= cfg.score_threshold) & (np.abs(2 * p - 1) >= 2 * cfg.prob_margin)
-              & (np.abs(q50) - cost > 0) & (np.abs(q50) >= cfg.move_floor_bps) & ((score > 0) == (p > 0.5)))
+              & (np.abs(q50) - cost > 0) & (np.abs(q50) >= cfg.move_floor_bps) & ((score > 0) == (p > 0.5))
+              & (np.isnan(mp) | (mp >= meta_min)))                           # the meta-labeler's odds, where it had an opinion
         rate = np.where(hist_n > 0, hist.sum(axis=1) / np.maximum(hist_n, 1), 1.0)
         ok &= ~((hist_n < cfg.skill_min_n) | ((hist_n > 0) & (rate < cfg.min_hit_rate)))
         raw_side = np.where(ok, np.sign(score).astype(np.int64), 0)

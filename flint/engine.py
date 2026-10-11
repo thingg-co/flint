@@ -22,6 +22,7 @@ import numpy as np
 
 from .autotune import PRESETS, free_memory_gb
 from .backtest import combine_reports, run_backtest, variant_summary
+from .meta import MetaLabeler, features as meta_features
 from .bars import Bar, BarBuilder
 from .features import FEATURES, N_FEATURES, FeatureBuilder
 from .feed import Tick
@@ -41,7 +42,7 @@ log = logging.getLogger(__name__)
 TUNABLE = {"score_threshold": float, "prob_margin": float, "cost_bps": float, "max_size": float,
            "lr": float, "steps_per_label": int, "min_labels": int, "news_minutes": float,
            "burry_aggr": float, "burry_fade_at": float, "burry_safety": float, "signals_minutes": float,
-           "kelly_fraction": float, "move_floor_bps": float, "min_hit_rate": float,
+           "kelly_fraction": float, "move_floor_bps": float, "min_hit_rate": float, "meta_min": float,
            "deep_backfill_days": float, "idle_train_epochs": float,
            "extended_hours": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
            "train_in_session": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
@@ -382,6 +383,7 @@ class Engine:
                 self.backtest = json.load(f)
         except (OSError, ValueError):
             pass
+        self.meta = MetaLabeler()                   # the meta-labeler: per forecast, not per name, so it outlives a universe rebuild
         self.sweep: dict = {}                     # the last policy sweep over a backtest's stored forecasts (state/sweep.json)
         try:
             with open(os.path.join(self.cfg.state_dir, "sweep.json")) as f:
@@ -838,6 +840,13 @@ class Engine:
         if extra is not None:
             if "norm" in extra:
                 self._load_norm(extra["norm"])
+            if extra.get("meta") is not None:
+                try:
+                    ok = self.meta.load(extra["meta"])
+                except Exception:  # noqa: BLE001
+                    ok = False
+                if not ok:
+                    self.trace.emit("system", "meta-labeler state could not be restored; it relearns from live outcomes", "warn")
             self.metrics.labels = self.learner.labels
             self.metrics.steps = self.learner.steps
             md = extra.get("metrics") or {}
@@ -1568,7 +1577,7 @@ class Engine:
             metrics = {k: getattr(m, k) for k in self._PERSIST_METRICS}
             metrics["pnl_by_symbol"] = dict(m.pnl_by_symbol)
             metrics["calib_v"] = self.CALIB_V
-            self.learner.save(self.cfg.state_dir, extra={"norm": self.features.norm.state(list(self.symbols)), "metrics": metrics,
+            self.learner.save(self.cfg.state_dir, extra={"norm": self.features.norm.state(list(self.symbols)), "meta": self.meta.state(), "metrics": metrics,
                                                           "paper": self.paper.to_state(), "target": self.learner.target_mode,
                                                           "outcomes": {s: list(d) for s, d in self.outcomes.items() if d}},
                               force_replay=final)
@@ -1873,6 +1882,13 @@ class Engine:
             hr = sum(1 for o in judged if o["hit"]) / len(judged)
             if hr < cfg.min_hit_rate:
                 reasons.append(f"its record on this name is {hr * 100:.0f}% over {len(judged)} calls")
+        # the meta-labeler's second opinion: the odds this forecast pays after cost, learned from matured ones
+        meta = getattr(self, "meta", None)
+        meta_p = None
+        if meta is not None and meta.fitted:
+            meta_p = float(meta.predict(meta_features(pred.q[i], p_raw, p_down_raw)[None])[0])
+            if meta_p < float(getattr(cfg, "meta_min", 0.0)):
+                reasons.append(f"the meta-labeler gives it {meta_p * 100:.0f}% odds of paying after cost")
         if abs(q50) < cfg.move_floor_bps:
             reasons.append(f"expected move {abs(q50):.0f} bps is below the {cfg.move_floor_bps:.0f} bps floor")
         bar = self.bars[s][-1] if self.bars.get(s) else None
@@ -1934,7 +1950,7 @@ class Engine:
                 "straddle": straddle and not muted, "width": round(width, 1),
                 "size": round(size, 3), "score": score, "p_up": p, "p_raw": p_raw, "p_down": p_down, "p_down_raw": p_down_raw, "q": qc,
                 "q_raw": [float(v) for v in pred.q[i]], "iqr": iqr, "band_scale": m.band_scale, "p_scale": m.p_scale,
-                "trusted": m.trusted, "why": why, "reasons": reasons,
+                "trusted": m.trusted, "why": why, "reasons": reasons, "meta": meta_p,
                 "crowding": round(self.crowding.get(s, 0.0), 3), "guru_tilt": round(self.guru_tilt.get(s, 0.0), 3),
                 "base_action": "BUY" if base_side > 0 else "SELL" if base_side < 0 else "HOLD",
                 "overlay": overlay["notes"] if overlay else [], "muted": muted}
@@ -2028,6 +2044,7 @@ class Engine:
         # Per-symbol updates here compound into one enormous step (and with the horizon's delay,
         # band_scale bang-bangs between its clips). Accumulate the bar, apply each update once.
         pins, hits_b, widths, insides, p_grads = [], [], [], [], []
+        mx, mt = [], []                                                     # the meta-labeler's lesson from this bar
         for i, s in enumerate(self.symbols):
             q = pp.pred.q[i]
             yi = float(y[i])
@@ -2043,6 +2060,8 @@ class Engine:
                 m.decisions += 1
                 m.hits += int(hit)
                 hits_b.append(float(hit))
+                mx.append(meta_features(q, float(pp.pred.p_up[i]), float(pp.pred.p_down[i])))
+                mt.append(float(yi * (1.0 if q50 > 0 else -1.0) > float(getattr(cfg, "meta_cost_bps", 5.0))))
             raw_inside = float(q[0]) <= yi <= float(q[-1])
             m.coverage_raw_n += 1
             m.covered_raw += int(raw_inside)
@@ -2070,6 +2089,8 @@ class Engine:
                                      "side": sug["side"], "pnl": pnl, "pin": pin})
             mark = "hit" if hit else "miss" if hit is False else "flat"
             parts.append(f"{self.base[s]} {yi:+.1f} vs q50 {q50:+.1f} {mark}" + ("" if inside else " (outside band)"))
+        if mx:
+            self.meta.update(np.asarray(mx), np.asarray(mt))
         m.live_pinball = _ema(m.live_pinball, float(np.mean(pins)), 0.05)
         if hits_b:
             m.hit_ema = _ema(m.hit_ema, float(np.mean(hits_b)), 0.02)

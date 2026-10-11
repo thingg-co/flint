@@ -216,6 +216,16 @@ unless Flint is already up.
   (1 bps; SPY and the other index ETFs quote a cent or two wide) in the backtest, `replay_policy` and the
   sweep, recorded in the stored forecasts; at the names' 5 bps the hedge cost 1.5x the basket's cost and was
   28 of the 2026-10-11 relative run's 33 bps loss.
+- The meta-labeler (`flint/meta.py`, item 5) is a second opinion on each forecast: an online logistic model over
+  six numbers the forecast itself gives, taught by matured forecasts whether the move in the called direction
+  beat `meta_cost_bps`, one horizon late as everything else in the calibration. It gates in four places that
+  must change together: `Engine._suggest` (live, `meta_min`, a live control, silent until the model has
+  learned from 2,000 forecasts), `backtest.decide` and the scoring loop (which store each forecast's odds in
+  the forecasts file) and `sweep.replay_policy` (which reads them, so the sweep tunes `meta_min`). Features
+  are per forecast, not per name, so the model outlives a universe rebuild (it lives in `Engine.__init__`,
+  not `_build`) and its state rides in the checkpoint's `extra["meta"]`, kept through a migration like the
+  book and the normalizer. The band-implied P(move clears the cost) is not a probability (item 6) and sizing
+  by any such number is only exposure: the meta-labeler is a gate.
 - The Portfolio tab and account access are strictly read-only; Flint never places, changes, or cancels an order on any provider.
 - The target is a run-time switch (`FLINT_TARGET=absolute|relative`, `flint/target.py`). The replay
   always stores absolute labels (the hour-ahead log return in bps); with `relative` every consumer

@@ -257,6 +257,8 @@ class Config:
     move_floor_bps: float = _env("MOVE_FLOOR_BPS", 8.0)
     # Risk gates (policy only; the model is untouched). All live controls.
     skill_min_n: int = _env("SKILL_MIN_N", 8)                # matured direction calls a name needs before it may trade
+    meta_min: float = _env("META_MIN", 0.5)                  # the meta-labeler's odds that a forecast pays after cost, below which it does not trade (0 disables); silent until 2,000 forecasts have matured
+    meta_cost_bps: float = _env("META_COST_BPS", 5.0)        # the round trip a move has to beat to count as paying, live and in the backtest alike
     confirm_bars: int = _env("CONFIRM_BARS", 2)              # the same side must persist this many bars before entry
     stock_min_hold_bars: int = _env("STOCK_MIN_HOLD_BARS", 6)  # a stock position is kept at least this long unless the signal reverses
     # The cost edge beyond the quoted spread (flint/policy.py): square-root price impact of the order

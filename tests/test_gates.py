@@ -190,3 +190,21 @@ class TestSuggestGates:
         assert result["action"] == "HOLD"
         assert result["muted"] is True
 
+
+
+class TestMetaGate:
+    """The meta-labeler's odds gate the live call once it has learned; before that it is silent."""
+
+    def test_low_odds_hold_and_an_unfitted_model_gates_nothing(self):
+        pred = make_pred([-20, 10, 40, 70, 100], 0.7, 0.2)
+        for _ in range(2):
+            fake = make_fake(meta=types.SimpleNamespace(fitted=True, predict=lambda x: np.array([0.31])), cfg={"meta_min": 0.5})
+            result = Engine._suggest(fake, 0, "AAPL", pred)
+        assert result["action"] == "HOLD" and "meta-labeler gives it 31% odds" in result["why"] and result["meta"] == 0.31
+        fake = make_fake(meta=types.SimpleNamespace(fitted=True, predict=lambda x: np.array([0.62])), cfg={"meta_min": 0.5})
+        assert Engine._suggest(fake, 0, "AAPL", pred)["action"] == "HOLD"        # confirmation first
+        assert Engine._suggest(fake, 0, "AAPL", pred)["action"] == "BUY"
+        fake = make_fake(meta=types.SimpleNamespace(fitted=False, predict=lambda x: None), cfg={"meta_min": 0.9})
+        Engine._suggest(fake, 0, "AAPL", pred)
+        r = Engine._suggest(fake, 0, "AAPL", pred)
+        assert r["action"] == "BUY" and r["meta"] is None

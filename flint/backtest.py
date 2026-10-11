@@ -29,6 +29,7 @@ import torch
 
 from .autotune import autocast
 from .model import FlintNet, flint_loss
+from .meta import MetaLabeler, features as meta_features
 from .target import estimate_beta, index_columns, prior_beta, relative
 
 log = logging.getLogger(__name__)
@@ -46,10 +47,10 @@ def temper(p_raw: float, p_scale: float) -> float:
     return 1.0 / (1.0 + math.exp(-p_scale * z))
 
 
-def decide(cfg, q, p_raw, p_down_raw, band_scale, p_scale, coverage_ema, judged, streak, cost_bps):
+def decide(cfg, q, p_raw, p_down_raw, band_scale, p_scale, coverage_ema, judged, streak, cost_bps, meta_p=None):
     """The gates and sizing of Engine._suggest that history can answer: score, conviction, cost
-    edge, per-name record, move floor, trend/direction agreement, confirmation, and the
-    fractional-Kelly size scaled by band coverage. Live-only gates (quote spread, session,
+    edge, per-name record, the meta-labeler's odds, move floor, trend/direction agreement,
+    confirmation, and the fractional-Kelly size scaled by band coverage. Live-only gates (quote spread, session,
     muted names, the council overlay) are not here. Returns (side, size, q_calibrated, p, streak)."""
     q50 = float(q[2])
     qc = [q50 + band_scale * (float(v) - q50) for v in q]
@@ -62,6 +63,8 @@ def decide(cfg, q, p_raw, p_down_raw, band_scale, p_scale, coverage_ema, judged,
         n = len(judged)
         if n < cfg.skill_min_n or (n and sum(judged) / n < cfg.min_hit_rate):
             ok = False
+    if ok and meta_p is not None and meta_p < float(getattr(cfg, "meta_min", 0.0)):
+        ok = False
     raw_side = (1 if score > 0 else -1) if ok else 0
     run = streak[1] + 1 if streak and streak[0] == raw_side else 1
     streak = (raw_side, run)
@@ -101,6 +104,8 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
     beta = prior_beta(n_assets, icols)
     per_unit = np.full(n_assets, cost)
     per_unit[icols] = hcost
+    meta = MetaLabeler()                                                    # learns as live: from forecasts matured one horizon ago
+    meta_cost = float(getattr(cfg, "meta_cost_bps", cost))
     keyed = np.flatnonzero(rt > 0)
     keyed = keyed[np.argsort(rt[keyed], kind="stable")]
     groups: list[tuple[str, np.ndarray]] = []
@@ -188,7 +193,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
 
     def resolve(item) -> None:
         nonlocal band_scale, p_scale, coverage_ema, hit_ema
-        _bar, hits_b, insides, p_grads, per_name = item
+        _bar, hits_b, insides, p_grads, per_name, meta_rows = item
         if hits_b:
             hit_ema = _ema(hit_ema, float(np.mean(hits_b)), 0.02)
         if insides:
@@ -199,6 +204,8 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
             p_scale = float(np.clip(p_scale - cfg.temper_lr * float(np.mean(p_grads)), 0.02, 1.5))
         for i, hit in per_name:
             judged[i].append(hit)
+        if meta_rows is not None:
+            meta.update(*meta_rows)
 
     day_rows: list[dict] = []
     cum = peak = max_dd = 0.0
@@ -214,7 +221,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
     steps_lo = steps_hi = 0
     stopped = False
     n_scored = len(groups) - warm_days
-    kept: dict[str, list] = {k: [] for k in ("rows", "q", "up", "dn", "y", "mask", "beta", "gate")}   # the forecasts, when `store` is set
+    kept: dict[str, list] = {k: [] for k in ("rows", "q", "up", "dn", "y", "mask", "beta", "gate", "meta")}   # the forecasts, when `store` is set
 
     for di, (date, idx) in enumerate(groups):
         if should_stop and should_stop():
@@ -234,6 +241,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                 kept["mask"].append(rmask[idx].astype(np.uint8)); kept["beta"].append(beta.copy()); kept["gate"].append(g_all.astype(np.float32))
         d = {"signals": 0, "gross": 0.0, "net": 0.0, "hits": 0, "decisions": 0, "pin": 0.0, "pin_n": 0, "inside": 0, "inside_n": 0, "long": 0.0,
              "unhedged": 0.0}
+        day_meta: list = []                                                 # the meta-labeler's answer per forecast, stored with the run
         for k in range(len(idx)):
             bar_no += 1
             while pending and pending[0][0] + cfg.horizon <= bar_no:
@@ -248,11 +256,16 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
             tradeable = hit_ema is not None and hit_ema > cfg.min_hit_rate       # the live trust rule
             w = np.zeros(n_assets)
             hits_b, insides, p_grads, per_name = [], [], [], []
+            mx_bar = meta_features(q_all[k], up_all[k], dn_all[k])
+            mp_bar = meta.predict(mx_bar)
+            day_meta.append(np.full(n_assets, np.nan, dtype=np.float32) if mp_bar is None else mp_bar.astype(np.float32))
+            m_idx, m_lab = [], []
             for i in np.flatnonzero(traded):
                 q = q_all[k, i]
                 p_raw = float(up_all[k, i])
                 side, size, qc, p, streaks[i] = decide(cfg, q, p_raw, float(dn_all[k, i]), band_scale, p_scale,
-                                                       coverage_ema, judged[i], streaks.get(i), cost)
+                                                       coverage_ema, judged[i], streaks.get(i), cost,
+                                                       meta_p=(float(mp_bar[i]) if mp_bar is not None else None))
                 if tradeable and side:
                     w[i] = side * size
                 yi = float(y[i])
@@ -264,6 +277,8 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                     hit = (q50 > 0) == (yi > 0)
                     hits_b.append(float(hit))
                     per_name.append((i, hit))
+                    m_idx.append(i)
+                    m_lab.append(float(yi * (1.0 if q50 > 0 else -1.0) > meta_cost))
                     d["decisions"] += 1
                     d["hits"] += int(hit)
                     sym_dec[i] += 1
@@ -277,7 +292,8 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                     z = max(-6.0, min(6.0, math.log(pr / (1 - pr))))
                     pc = 1.0 / (1.0 + math.exp(-p_scale * z))
                     p_grads.append((pc - (1.0 if yi > 0 else 0.0)) * z)
-            pending.append((bar_no, hits_b, insides, p_grads, per_name))
+            pending.append((bar_no, hits_b, insides, p_grads, per_name,
+                            (mx_bar[m_idx], np.asarray(m_lab, dtype=np.float32)) if m_idx else None))
             if icols:
                 w[icols] = 0.0
             gross_w = float(np.abs(w).sum())
@@ -298,6 +314,8 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
             sym_sig += (w != 0)
             if traded.any():
                 d["long"] += float(y_abs[traded].mean())                        # a 1/N always-long book, for scale
+        if store and scoring and day_meta:
+            kept["meta"].append(np.stack(day_meta))
         if stopped:
             break
         # today's labels are known now: train on everything up to and including today
@@ -358,6 +376,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
             np.savez(stored, rows=rows, t=rt[rows], q=np.concatenate(kept["q"]), up=np.concatenate(kept["up"]),
                      dn=np.concatenate(kept["dn"]), y=np.concatenate(kept["y"]), mask=np.concatenate(kept["mask"]),
                      beta=np.stack(kept["beta"]), gate=np.concatenate(kept["gate"]),
+                     meta=(np.concatenate(kept["meta"]) if kept["meta"] else np.full((len(rows), n_assets), np.nan, dtype=np.float32)),
                      day_of=np.concatenate([np.full(len(r), i) for i, r in enumerate(kept["rows"])]),
                      symbols=np.array(symbols), index=np.array([symbols[c] for c in icols]), target=np.array(target),
                      quantiles=np.asarray(cfg.quantiles), cost_bps=np.array(cost), hedge_cost_bps=np.array(hcost))
@@ -369,7 +388,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                for i in range(n_assets)}
     return {"ran_at": t0, "elapsed_s": time.time() - t0, "stopped": stopped,
             "config": {"preset": preset, "d_model": cfg.d_model, "params": sum(p.numel() for p in model.parameters()),
-                       "cost_bps": cost, "hedge_cost_bps": hcost, "warm_days": warm_days, "hours": hours, "night_epochs": night_epochs,
+                       "cost_bps": cost, "hedge_cost_bps": hcost, "meta_cost_bps": meta_cost, "meta_fits": meta.fits, "warm_days": warm_days, "hours": hours, "night_epochs": night_epochs,
                        "target": target, "index": [symbols[c] for c in icols] if icols else None, "forecasts": stored,
                        "beta": ({symbols[i]: {symbols[c]: round(float(beta[i, j]), 2) for j, c in enumerate(icols)}
                                  for i in range(n_assets) if i not in icols} if icols else None),

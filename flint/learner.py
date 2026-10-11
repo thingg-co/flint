@@ -484,7 +484,7 @@ class OnlineLearner:
                 self.ptr = 0
         extra = ck.get("extra", {}) or {}
         if model_fresh:                                              # the book and the feature normalization outlive the net; its metrics do not
-            extra = {k: v for k, v in extra.items() if k in ("norm", "paper")}
+            extra = {k: v for k, v in extra.items() if k in ("norm", "paper", "meta")}
         self.refresh_beta()
         saved_target = str(extra.get("target") or "absolute")
         if not model_fresh and saved_target != self.target_mode:
