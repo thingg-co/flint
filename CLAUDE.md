@@ -188,7 +188,23 @@ unless Flint is already up.
 - User-facing text capitalizes "Flint" as a proper noun.
 - FlintNet returns five tensors (quantiles, up-logit, down-logit, gate, attention). If you change the head, update `flint_loss` AND `autotune._bench` together -- an arity mismatch only surfaces on a re-benchmark (a feature/symbol-count change), not on a cached start.
 - Changing the feature set reshapes the model, so it resets once (guarded; the old checkpoint is backed
-  up to model.pt.bak); changing the symbol list migrates it.
+  up to model.pt.bak); changing the symbol list migrates it. Since 0.5.18 (the reset of 2026-10-12)
+  every model input is computable from the bar stream plus dated news, so paged history and the live
+  feed produce the same numbers: per name from its own bars (return, range, volume, close position,
+  the hour's momentum and vol, Garman-Klass and Yang-Zhang vol, day and week realised vol, the day's
+  return, the same-slot return a day back and its five-day mean, Amihud, Roll, the overnight and
+  intraday legs, the session clock), across names (breadth this bar and over the hour, the market's
+  return, momentum and vol with the first index name as the market, each name's rolling beta, the
+  market's first half hour) and the two news slots. The live-only signals (WSB, Fear & Greed,
+  funding, 13F, ethos, fundamentals, IV, skew) and the three bar features history candles lack
+  (bid/ask imbalance, quoted spread, trade count) are not inputs; `set_exo` keeps them for the policy
+  and the dashboard. There is no day-of-week or date feature on purpose. The news slots for history
+  come from `NewsHistory` (`flint/newshist.py`, `state/news_history.json`): Finnhub company news by
+  date over the backfill span, six headlines per name per day, scored like the live skim, read at
+  each bar as the skim would have reported it. `_news_history_job` fills it at every start, paced
+  under Finnhub's limit; the deep loop waits for a chunk's news before paging it, walks a nine-day
+  warm prefix (`WARM_S`) it does not emit so the week-long features are exact from a chunk's first
+  window, and rewrites the startup backfill's days once their news is in (`learner.replace`).
 - No position may carry unlimited risk, ever. Defined risk is the rule, not premium-capped: long
   options, debit and credit spreads, covered calls on held stock and cash-secured puts are all fine,
   because the worst case is a known finite number at entry. Naked short stock and naked written

@@ -144,52 +144,30 @@ class TestRunningNorm:
         assert result is not None
         assert np.isfinite(result).all()
 
-    def test_news_and_exo_are_clipped_and_pass_through(self):
-        """FeatureBuilder(["A"], window=1); set_news then set_exo; check feature values."""
+    def test_news_slots_are_clipped_and_pass_through_and_live_only_signals_stay_out_of_the_net(self):
+        """set_news is clipped and lands unstandardized in the two news slots; set_exo is kept for
+        the policy but is not a model input since 2a."""
         fb = FeatureBuilder(["A"], window=1)
-
-        # Set news
-        fb.set_news("A", 2.0, -1.0)  # clipped to (1.0, 0.0)
-
-        # Set exogenous
+        fb.set_news("A", 2.0, -1.0)                                            # clipped to (1.0, 0.0)
         fb.set_exo("A", {"fng": 3.0, "vix": None, "bogus": 1.0})
-
-        # Push one row
-        r = rows(1, price=100.0)
-        row = {"A": r[0]}
+        row = {"A": rows(1, price=100.0)[0]}
         result = fb.push(row)
-
-        assert result is not None
-        assert result.shape == (1, 1, N_FEATURES)
-
-        # Check feature values
-        news_sent_idx = FEATURES.index("news_sent")
-        news_attn_idx = FEATURES.index("news_attn")
-        fng_idx = FEATURES.index("fng")
-        vix_idx = FEATURES.index("vix")
-
-        assert result[0, 0, news_sent_idx] == 1.0  # clipped from 2.0
-        assert result[0, 0, news_attn_idx] == 0.0  # clipped from -1.0
-        assert result[0, 0, fng_idx] == 1.0  # clipped from 3.0
-        assert result[0, 0, vix_idx] == 0.0  # None becomes 0.0
-
-        # "bogus" should not be in FEATURES
-        assert "bogus" not in FEATURES
+        assert result is not None and result.shape == (1, 1, N_FEATURES)
+        assert result[0, 0, FEATURES.index("news_sent")] == 1.0 and result[0, 0, FEATURES.index("news_attn")] == 0.0
+        assert fb.exo["A"] == {"fng": 1.0, "bogus": 1.0} and "fng" not in FEATURES and "vix" not in FEATURES
+        for gone in ("imbalance", "spread", "logtrades", "wsb_sent", "opt_iv"):
+            assert gone not in FEATURES                                        # paged history cannot carry them
+        assert fb.news["A"] == (1.0, 0.0)
 
     def test_momentum_window_length(self):
-        """FeatureBuilder(["A"], window=2, mom_bars=5); push 8 rows with prices 100..107; len(rets["A"]) == 5 and last ret > 0."""
+        """FeatureBuilder(["A"], window=2, mom_bars=5); push 8 rising rows: mom is the sum of the last 5 returns."""
         fb = FeatureBuilder(["A"], window=2, mom_bars=5)
-
         for i in range(8):
-            price = 100 + i
-            r = rows(1, price=price)
-            row = {"A": r[0]}
-            result = fb.push(row)
-
+            result = fb.push({"A": rows(1, price=100 + i)[0]})
         assert result is not None
-        assert len(fb.rets["A"]) == 5
-        # Last raw return should be positive (price increased from 106 to 107)
-        assert fb.rets["A"][-1] > 0
+        last = fb._last(fb.R, 5)[0]
+        assert last.shape == (5,) and np.all(last > 0)                          # five positive returns
+        assert fb._lag(fb.R, 0)[0] > 0 and fb._lag(fb.R, 100)[0] == 0.0          # a lag past the history reads 0
 
     def test_peek_window_pads_left(self):
         """FeatureBuilder(["A"], window=4); peek_window() is None before any push; after 2 pushes shape is (1, 4, N_FEATURES) with left padding; after 4 pushes equals last push result."""
@@ -219,3 +197,76 @@ class TestRunningNorm:
         peeked_after_full = fb.peek_window()
         assert peeked_after_full is not None
         assert np.array_equal(peeked_after_full, result)
+
+
+def _bar(ts, o, h, l, c, v=100.0):
+    from flint.bars import Bar
+    return Bar(ts=ts, open=o, high=h, low=l, close=c, volume=v)
+
+
+class TestBarDerivedFeatures:
+    """The features 2a added: the day's legs and clock, the cross-section and the lags, all from bars."""
+
+    def _ts(self, day, bar):
+        from datetime import datetime
+        from flint.features import NY
+        base = datetime(2026, 10, 5 + day, 9, 35, tzinfo=NY)                   # the first bar closes 09:35 ET
+        return base.timestamp() + bar * 300
+
+    def test_day_legs_clock_and_market_features(self):
+        fb = FeatureBuilder(["A", "SPY"], window=1, index="SPY")
+        F = FEATURES.index
+        # day 0: three bars, A up, SPY flat
+        r0 = fb.push({"A": _bar(self._ts(0, 0), 100, 101, 99, 100), "SPY": _bar(self._ts(0, 0), 50, 50, 50, 50)})
+        x = fb.window[-1]
+        assert abs(x[0, F("tod_sin")] - np.sin(2 * np.pi * 5 / 390)) < 1e-9 and x[0, F("overnight")] == 0.0
+        fb.push({"A": _bar(self._ts(0, 1), 100, 102, 100, 102), "SPY": _bar(self._ts(0, 1), 50, 50, 50, 50)})
+        raw_intraday = np.log(102 / 100) * 1e4
+        assert abs(fb.norm.mean[0, F("intraday")] * 0 + raw_intraday - np.log(102 / 100) * 1e4) < 1e-9
+        assert fb.day is not None and fb.bars_today == 2
+        # breadth this bar: A up, SPY flat -> half the names up -> 0
+        assert fb.window[-1][0, F("breadth")] == 0.0
+        # day 1: a gap up on A sets the overnight leg; the market's open30 fills at the sixth bar
+        d1 = [fb.push({"A": _bar(self._ts(1, k), 110 + k, 111 + k, 109 + k, 110.5 + k), "SPY": _bar(self._ts(1, k), 51 + 0.1 * k, 51.2 + 0.1 * k, 50.9 + 0.1 * k, 51.1 + 0.1 * k)}) for k in range(7)]
+        assert fb.bars_today == 7 and fb.open30 != 0.0
+        assert abs(fb.open30 - np.log(51.6 / 51.0) * 1e4) < 1e-6                 # SPY from its day open to its sixth close
+        assert np.isfinite(fb.window[-1]).all()
+        assert fb.index == 1 and abs(fb.M[(fb.p - 1) % fb.M.shape[0]] - np.log(51.7 / 51.6) * 1e4) < 1e-6   # the market's return is SPY's
+
+    def test_lags_breadth_and_beta_come_from_the_ring(self):
+        from flint.features import BARS_D
+        rng = np.random.default_rng(1)
+        fb = FeatureBuilder(["A", "B", "SPY"], window=1, index="SPY")
+        px = np.array([100.0, 100.0, 50.0]); rets = []
+        for k in range(BARS_D * 2 + 5):
+            m = rng.standard_normal() * 0.002
+            r = np.array([2 * m + rng.standard_normal() * 0.001, -0.5 * m + rng.standard_normal() * 0.001, m])
+            new = px * np.exp(r); rets.append(np.log(new / px) * 1e4)
+            fb.push({s: _bar(self._ts(k // BARS_D, k % BARS_D), px[i], max(px[i], new[i]), min(px[i], new[i]), new[i]) for i, s in enumerate(["A", "B", "SPY"])})
+            px = new
+        rets = np.array(rets)
+        assert abs(fb._lag(fb.R, BARS_D)[0] - rets[-1 - BARS_D, 0]) < 1e-6         # the same slot one day back
+        F = FEATURES.index; raw_beta = None
+        x = fb.window[-1]
+        assert x[0, F("beta")] > x[1, F("beta")]                                  # A loads on the market, B against it
+        assert -1 <= x[0, F("breadth")] <= 1 and x[0, F("breadth")] == x[2, F("breadth")]   # one market number for every name
+        assert np.isfinite(x).all()
+
+    def test_a_warm_prefix_makes_the_week_features_exact(self):
+        """The same bars give the same features whether or not the builder walked a prefix first,
+        once the ring holds the prefix: what the deep loop relies on."""
+        from flint.features import BARS_W
+        rng = np.random.default_rng(2)
+        bars = []
+        px = 100.0
+        for k in range(BARS_W + 40):
+            new = px * np.exp(rng.standard_normal() * 0.002); bars.append(_bar(self._ts(k // 78, k % 78), px, max(px, new), min(px, new), new)); px = new
+        cold = FeatureBuilder(["A"], window=1); warm = FeatureBuilder(["A"], window=1)
+        for b in bars:
+            warm.push({"A": b})
+        for b in bars[-20:]:
+            cold.push({"A": b})
+        F = FEATURES.index
+        assert warm.n_bars == len(bars) and cold.n_bars == 20
+        assert warm._last(warm.R, BARS_W).shape[1] == BARS_W and cold._last(cold.R, BARS_W).shape[1] == 20
+        assert warm._lag(warm.R, 78)[0] != 0.0 and cold._lag(cold.R, 78)[0] == 0.0   # the cold builder has no yesterday

@@ -1,9 +1,28 @@
-"""Turn aligned bar rows into standardized model inputs."""
+"""Turn aligned bar rows into standardized model inputs.
+
+Everything the net sees is computable from the bar stream itself plus dated news, so paged
+history and the live feed produce the same numbers (2a, 2026-10-12): before, the net trained on
+sixteen exogenous slots that paged history could not carry and met nonzero values only live,
+and three bar features (bid/ask imbalance, the quoted spread, the trade count) that history
+candles do not have. Those live-only signals now stay in the policy and the dashboard.
+
+Per name, from its own bars: the bar's return, range, log volume and close position; the hour's
+momentum and realised vol; Garman-Klass (this bar) and Yang-Zhang (the hour) volatility; the
+day's and the week's realised vol (HAR terms) and the day's return; the same-slot return one day
+back and its five-day mean; Amihud illiquidity and the Roll spread over the day; the overnight
+and the intraday legs; the time of day. Across names: breadth this bar and over the hour, the
+market's return, momentum and vol (the first index name when modeled, else the equal-weight
+universe), each name's rolling beta to it, and the market's first half hour. Then the two news
+slots, from the live skim or, for history, a dated store (`NewsHistory`). There is no day-of-week
+or calendar-date feature on purpose.
+"""
 from __future__ import annotations
 
 import logging
 import math
 from collections import deque
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import numpy as np
 
@@ -11,12 +30,20 @@ from .bars import Bar
 
 log = logging.getLogger(__name__)
 
-# Base market microstructure features, then exogenous signals appended (news, retail, derivatives, gurus).
-# The exogenous slots are already bounded to [-1, 1] / [0, 1] by their providers, so they pass through
-# standardization untouched. There is deliberately no clock feature.
-EXOGENOUS = ["news_sent", "news_attn", "wsb_sent", "wsb_attn", "fng", "funding", "oi_chg", "longshort", "guru_net", "ethos_bias", "f_value", "f_quality", "breadth", "vix", "opt_iv", "opt_skew"]
-FEATURES = ["ret", "range", "logvol", "imbalance", "spread", "logtrades", "closepos", "mom", "rvol"] + EXOGENOUS
-NORMALIZE = np.array([1, 1, 1, 0, 1, 1, 0, 1, 1] + [0] * len(EXOGENOUS), dtype=bool)
+NY = ZoneInfo("America/New_York")
+BARS_H, BARS_D, BARS_W = 12, 78, 390                 # an hour, a session, a week of 5-minute bars
+RING = BARS_W + 1
+OPEN_BARS = 6                                        # the first half hour
+BETA_SHRINK = 20.0                                   # pseudo-bars behind a beta of 1
+
+OWN = ["ret", "range", "logvol", "closepos", "mom", "rvol", "gk", "yz", "rv_d", "rv_w", "mom_d", "lag_d", "slot5",
+       "amihud", "roll", "overnight", "intraday", "tod_sin", "tod_cos"]
+MARKET = ["breadth", "breadth_h", "mkt_ret", "mkt_mom", "mkt_rvol", "beta", "open30"]
+NEWS = ["news_sent", "news_attn"]
+FEATURES = OWN + MARKET + NEWS
+EXOGENOUS = NEWS                                     # the only exogenous slots left in the net
+_BOUNDED = {"closepos", "tod_sin", "tod_cos", "breadth", "breadth_h", "news_sent", "news_attn"}   # already on a fixed scale
+NORMALIZE = np.array([f not in _BOUNDED for f in FEATURES], dtype=bool)
 N_FEATURES = len(FEATURES)
 
 
@@ -95,57 +122,209 @@ class RunningNorm:
         return False
 
 
-class FeatureBuilder:
-    def __init__(self, symbols: list[str], window: int, mom_bars: int = 12):
-        self.symbols = symbols
-        self.window_len = window
-        self.norm = RunningNorm(len(symbols), N_FEATURES)
-        self.prev_close: dict[str, float] = {}
-        self.rets: dict[str, deque[float]] = {s: deque(maxlen=mom_bars) for s in symbols}
-        self.window: deque[np.ndarray] = deque(maxlen=window)
-        self.news: dict[str, tuple[float, float]] = {s: (0.0, 0.0) for s in symbols}
-        # exogenous signal slots (everything after news), held constant between refreshes
-        self.exo_keys = EXOGENOUS[2:]
-        self.exo: dict[str, dict[str, float]] = {s: {k: 0.0 for k in self.exo_keys} for s in symbols}
+def _safe_log_ratio(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """ln(a / b) where both are positive, else 0."""
+    ok = (a > 0) & (b > 0)
+    out = np.zeros(len(a))
+    out[ok] = np.log(a[ok] / b[ok])
+    return out
 
+
+def session_minutes(ts: float) -> tuple[int, float]:
+    """(the ET date's ordinal, minutes since 09:30 ET) for a bar's close time."""
+    d = datetime.fromtimestamp(ts, NY)
+    return d.date().toordinal(), (d.hour * 60 + d.minute - 570) + d.second / 60.0
+
+
+class FeatureBuilder:
+    """One bar row in, one standardized (assets, features) row out, and the (assets, window,
+    features) input once `window` rows have accumulated. Holds a week of returns per name in a
+    ring so the longer features are exact once a week of bars has passed; before that they are
+    computed on what there is (an offline chunk warms up on a prefix it does not emit)."""
+
+    def __init__(self, symbols: list[str], window: int, mom_bars: int = BARS_H, index: str | None = None):
+        self.symbols = list(symbols)
+        n = len(self.symbols)
+        self.window_len = window
+        self.mom_bars = int(mom_bars)
+        self.norm = RunningNorm(n, N_FEATURES)
+        self.index = self.symbols.index(index) if index in self.symbols else None
+        self.prev_close = np.full(n, np.nan)
+        self.R = np.zeros((n, RING))                 # returns, bps
+        self.A = np.zeros((n, RING))                 # |return| per $M traded (Amihud terms)
+        self.M = np.zeros(RING)                      # the market's return, bps
+        self.O = np.zeros((n, BARS_H)); self.H = np.zeros((n, BARS_H)); self.L = np.zeros((n, BARS_H)); self.C = np.zeros((n, BARS_H))
+        self.PC = np.zeros((n, BARS_H))              # the previous close behind each of the hour's bars (Yang-Zhang's overnight leg)
+        self.p = 0                                   # next ring slot
+        self.n_bars = 0
+        self.day: int | None = None
+        self.day_open = np.full(n, np.nan)
+        self.prev_day_close = np.full(n, np.nan)
+        self.bars_today = 0
+        self.open30 = 0.0
+        self.mkt_day_open = math.nan
+        self.window: deque[np.ndarray] = deque(maxlen=window)
+        self.news_sent = np.zeros(n)
+        self.news_attn = np.zeros(n)
+        self.news_history = None                     # a `NewsHistory`: when set, the news slots come from it at the bar's time
+        self.exo: dict[str, dict[str, float]] = {s: {} for s in self.symbols}   # live-only signals, kept for the policy and the dashboard, not the net
+
+    # -- exogenous inputs ----------------------------------------------------------------
     def set_news(self, symbol: str, sentiment: float, attention: float) -> None:
-        """Exogenous news state, held constant until the next skim."""
-        self.news[symbol] = (float(np.clip(sentiment, -1, 1)), float(np.clip(attention, 0, 1)))
+        """News state from the live skim, held constant until the next one."""
+        if symbol in self.symbols:
+            i = self.symbols.index(symbol)
+            self.news_sent[i] = float(np.clip(sentiment, -1, 1))
+            self.news_attn[i] = float(np.clip(attention, 0, 1))
+
+    @property
+    def news(self) -> dict[str, tuple[float, float]]:
+        return {s: (float(self.news_sent[i]), float(self.news_attn[i])) for i, s in enumerate(self.symbols)}
 
     def set_exo(self, symbol: str, values: dict) -> None:
-        """Exogenous signal vector (WSB, Fear&Greed, derivatives, guru 13Fs), held between refreshes."""
-        cur = self.exo[symbol]
-        for k in self.exo_keys:
-            if k in values and values[k] is not None:
-                cur[k] = float(np.clip(values[k], -1, 1))
+        """Live-only signals (WSB, Fear & Greed, derivatives, guru 13Fs, options): kept for the
+        policy and the dashboard; since 2a they are not model inputs."""
+        if symbol in self.exo:
+            for k, v in values.items():
+                if v is not None:
+                    self.exo[symbol][k] = float(np.clip(v, -1, 1))
+
+    # -- the ring --------------------------------------------------------------------------
+    def _last(self, ring: np.ndarray, m: int) -> np.ndarray:
+        """The newest min(m, n_bars) entries of a (..., RING) ring, oldest first."""
+        k = min(m, self.n_bars)
+        idx = (self.p - k + np.arange(k)) % RING
+        return ring[..., idx]
+
+    def _lag(self, ring: np.ndarray, lag: int) -> np.ndarray:
+        """The entry `lag` bars before the newest (lag 1 = the bar before this one), or zeros."""
+        if self.n_bars <= lag:
+            return np.zeros(ring.shape[:-1])
+        return ring[..., (self.p - 1 - lag) % RING]
 
     def push(self, row: dict[str, Bar]) -> np.ndarray | None:
         """Add one bar row. Returns the (assets, window, features) input once the window is full."""
-        raw = np.zeros((len(self.symbols), N_FEATURES), dtype=np.float64)
-        for i, s in enumerate(self.symbols):
-            b = row[s]
-            prev = self.prev_close.get(s, b.open)
-            ret = math.log(b.close / prev) * 1e4 if prev > 0 else 0.0
-            rng = math.log(b.high / b.low) * 1e4 if b.low > 0 else 0.0
-            tot = b.buy_volume + b.sell_volume
-            imb = (b.buy_volume - b.sell_volume) / tot if tot > 0 else 0.0
-            spread = b.spread_bps if math.isfinite(b.spread_bps) else self.norm.mean[i, 4]
-            span = b.high - b.low
-            closepos = (b.close - b.low) / span - 0.5 if span > 0 else 0.0
-            r = self.rets[s]
-            r.append(ret)
-            mom = float(sum(r))
-            rvol = float(np.std(r)) if len(r) >= 2 else 0.0
-            sent, attn = self.news[s]
-            ex = self.exo[s]
-            raw[i] = [ret, rng, math.log1p(b.volume), imb, spread, math.log1p(b.trades), closepos, mom, rvol,
-                      sent, attn] + [ex[k] for k in self.exo_keys]
-            self.prev_close[s] = b.close
+        n = len(self.symbols)
+        o = np.array([row[s].open for s in self.symbols], dtype=np.float64)
+        h = np.array([row[s].high for s in self.symbols], dtype=np.float64)
+        lo = np.array([row[s].low for s in self.symbols], dtype=np.float64)
+        c = np.array([row[s].close for s in self.symbols], dtype=np.float64)
+        v = np.array([row[s].volume for s in self.symbols], dtype=np.float64)
+        ts = float(row[self.symbols[0]].ts)
+        prev = np.where(np.isnan(self.prev_close), o, self.prev_close)
+        ret = _safe_log_ratio(c, prev) * 1e4
+        rng = np.where((h > 0) & (lo > 0) & (h >= lo), np.log(np.maximum(h, 1e-12) / np.maximum(lo, 1e-12)), 0.0) * 1e4
+        span = h - lo
+        closepos = np.where(span > 0, (c - lo) / np.where(span > 0, span, 1.0) - 0.5, 0.0)
+        active = v > 0
+        # the session clock and the day's legs
+        day, minutes = session_minutes(ts)
+        if day != self.day:
+            self.prev_day_close = self.prev_close.copy()
+            self.day_open = np.where(o > 0, o, np.nan)
+            self.day = day
+            self.bars_today = 0
+            self.open30 = 0.0
+            self.mkt_day_open = math.nan
+        self.bars_today += 1
+        pdc = np.where(np.isnan(self.prev_day_close), 0.0, self.prev_day_close)
+        dop = np.where(np.isnan(self.day_open), 0.0, self.day_open)
+        overnight = _safe_log_ratio(dop, pdc) * 1e4
+        intraday = _safe_log_ratio(c, dop) * 1e4
+        frac = min(max(minutes, -30.0), 420.0) / 390.0
+        tod_sin, tod_cos = math.sin(2 * math.pi * frac), math.cos(2 * math.pi * frac)
+        # the market: the index name when modeled, else the equal-weight universe of real bars
+        if self.index is not None:
+            mkt_ret = float(ret[self.index])
+        else:
+            mkt_ret = float(ret[active].mean()) if active.any() else 0.0
+        # rings
+        p = self.p
+        self.R[:, p] = ret
+        dv = c * v
+        self.A[:, p] = np.where(dv > 0, np.abs(ret) / np.maximum(dv * 1e-6, 1e-9), 0.0)
+        self.M[p] = mkt_ret
+        q = self.n_bars % BARS_H
+        self.O[:, q], self.H[:, q], self.L[:, q], self.C[:, q], self.PC[:, q] = o, h, lo, c, prev
+        self.n_bars += 1
+        self.p = (p + 1) % RING
+        # own-bar rolling features
+        rh = self._last(self.R, self.mom_bars)
+        mom = rh.sum(axis=1)
+        rvol = rh.std(axis=1) if rh.shape[1] >= 2 else np.zeros(n)
+        rd = self._last(self.R, BARS_D)
+        rw = self._last(self.R, BARS_W)
+        rv_d = rd.std(axis=1) if rd.shape[1] >= 2 else np.zeros(n)
+        rv_w = rw.std(axis=1) if rw.shape[1] >= 2 else np.zeros(n)
+        mom_d = rd.sum(axis=1)
+        lag_d = self._lag(self.R, BARS_D)
+        lags = [self._lag(self.R, k * BARS_D) for k in range(1, 6) if self.n_bars > k * BARS_D]
+        slot5 = np.mean(lags, axis=0) if lags else np.zeros(n)
+        amihud = np.log1p(self._last(self.A, BARS_D).mean(axis=1))
+        if rd.shape[1] >= 3:
+            x1, x0 = rd[:, 1:], rd[:, :-1]
+            cov = (x1 * x0).mean(axis=1) - x1.mean(axis=1) * x0.mean(axis=1)
+            roll = 2.0 * np.sqrt(np.maximum(-cov, 0.0))
+        else:
+            roll = np.zeros(n)
+        gk = np.sqrt(np.maximum(0.5 * _safe_log_ratio(h, lo) ** 2 - (2 * math.log(2) - 1) * _safe_log_ratio(c, o) ** 2, 0.0)) * 1e4
+        yz = self._yang_zhang()
+        # across names
+        breadth = (float(np.mean(ret[active] > 0)) - 0.5) * 2 if active.any() else 0.0
+        breadth_h = (float(np.mean(mom[active] > 0)) - 0.5) * 2 if active.any() else 0.0
+        mh = self._last(self.M, self.mom_bars)
+        mkt_mom = float(mh.sum())
+        mkt_rvol = float(rvol[active].mean()) if active.any() else 0.0
+        md = self._last(self.M, BARS_D)
+        k = md.shape[0]
+        if k >= 3:
+            mx = md - md.mean()
+            vx = float((mx * mx).mean())
+            cv = ((rd - rd.mean(axis=1, keepdims=True)) * mx[None, :]).mean(axis=1)
+            braw = cv / vx if vx > 0 else np.ones(n)
+            beta = (k * braw + BETA_SHRINK) / (k + BETA_SHRINK)
+        else:
+            beta = np.ones(n)
+        if self.bars_today == 1:
+            self.mkt_day_open = float(o[self.index]) if self.index is not None else (float(o[active].mean()) if active.any() else math.nan)
+        if self.bars_today == OPEN_BARS:
+            mkt_c = float(c[self.index]) if self.index is not None else (float(c[active].mean()) if active.any() else math.nan)
+            self.open30 = math.log(mkt_c / self.mkt_day_open) * 1e4 if mkt_c > 0 and self.mkt_day_open > 0 else 0.0
+        # news: the dated store for history, the live skim otherwise
+        if self.news_history is not None:
+            sent, attn = self.news_history.at(ts, self.symbols)
+        else:
+            sent, attn = self.news_sent, self.news_attn
+        raw = np.column_stack([ret, rng, np.log1p(v), closepos, mom, rvol, gk, yz, rv_d, rv_w, mom_d, lag_d, slot5,
+                               amihud, roll, overnight, intraday, np.full(n, tod_sin), np.full(n, tod_cos),
+                               np.full(n, breadth), np.full(n, breadth_h), np.full(n, mkt_ret), np.full(n, mkt_mom),
+                               np.full(n, mkt_rvol), beta, np.full(n, self.open30), sent, attn])
+        raw = np.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0)
+        self.prev_close = np.where(c > 0, c, self.prev_close)
         self.norm.update(raw)
         self.window.append(self.norm.apply(raw))
         if len(self.window) < self.window_len:
             return None
         return np.stack(self.window, axis=1)
+
+    def _yang_zhang(self) -> np.ndarray:
+        """Yang-Zhang volatility over the hour's bars, in bps: the overnight (close-to-open)
+        variance, the open-to-close variance and the Rogers-Satchell term, weighted so the
+        estimate is unbiased whatever the drift."""
+        m = min(self.n_bars, BARS_H)
+        n = self.O.shape[0]
+        if m < 2:
+            return np.zeros(n)
+        cols = (self.n_bars - m + np.arange(m)) % BARS_H
+        o, h, lo, c, pc = self.O[:, cols], self.H[:, cols], self.L[:, cols], self.C[:, cols], self.PC[:, cols]
+        ok = (o > 0) & (h > 0) & (lo > 0) & (c > 0) & (pc > 0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            u = np.where(ok, np.log(o / pc), 0.0)
+            r = np.where(ok, np.log(c / o), 0.0)
+            rs = np.where(ok, np.log(h / o) * np.log(h / c) + np.log(lo / o) * np.log(lo / c), 0.0)
+        kf = 0.34 / (1.34 + (m + 1) / (m - 1))
+        var = u.var(axis=1) + kf * r.var(axis=1) + (1 - kf) * rs.mean(axis=1)
+        return np.sqrt(np.maximum(np.nan_to_num(var), 0.0)) * 1e4
 
     def peek_window(self) -> np.ndarray | None:
         """A predict-only window from whatever history exists, left-edge padded to

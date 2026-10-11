@@ -183,8 +183,9 @@ class TestReplayCmd:
             assert exc_info.value.code == 0
 
         output = f.getvalue()
-        # The current shape should use window=8 from machine.json and N_FEATURES=25
-        assert "(2, 8, 25)" in output, f"Expected window=8, n_features=25 from machine.json, got output: {output}"
+        from flint.features import N_FEATURES
+        # The current shape should use window=8 from machine.json and the feature count
+        assert f"(2, 8, {N_FEATURES})" in output, f"Expected window=8, n_features={N_FEATURES} from machine.json, got output: {output}"
         assert "would load checkpoint" in output, f"Should report config match, got: {output}"
 
     def test_universe_json_merge_affects_current_symbols(self, tmp_path, monkeypatch):

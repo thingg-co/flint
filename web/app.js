@@ -1517,7 +1517,10 @@ function renderSweep(sw) {
   });
   rows.push(`<div class="prow half"><span>tuning half</span>${cell(half(cur.tune))}${cell(prop ? half(prop.tune) : "·")}</div>`);
   rows.push(`<div class="prow half"><span>confirming half</span>${cell(half(cur.confirm))}${cell(prop ? half(prop.confirm) : "·", prop && sw.accepted && !sw.thin ? "up" : prop && !sw.accepted ? "down" : "")}</div>`);
-  root.innerHTML = rows.join("") + (sw.why ? `<div class="snote">${esc(sw.why)}</div>` : "");
+  root.innerHTML = rows.join("") + (sw.why ? `<div class="snote">${esc(sw.why)}</div>` : "") +
+    (prop && prop.knobs && Object.keys(prop.knobs).length
+      ? `<div class="sw-actions"><button class="mini" id="sw-apply" data-knobs="${esc(JSON.stringify(prop.knobs))}">apply these gates</button><span class="snote" id="sw-applied">sets the proposed values on the Control panel; nothing else changes</span></div>`
+      : "");
 }
 
 function paintBacktest(days, baseline) {
@@ -2068,6 +2071,14 @@ function showTab(tab, updateHash) {
 $$(".tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab, true));
 { const b = $("#theme-toggle"); if (b) b.onclick = () => applyTheme(currentTheme() === "dark" ? "light" : "dark"); applyTheme(null);
   if (window.matchMedia) matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => applyTheme(null)); }
+{ const t = $("#sw-table"); if (t) t.addEventListener("click", async e => {
+  const b = e.target.closest("#sw-apply"); if (!b) return;
+  b.disabled = true;
+  const knobs = JSON.parse(b.dataset.knobs), r = await control({ set: knobs });
+  const ok = r && r.controls && Object.keys(knobs).every(k => !(k in r.controls) || Number(r.controls[k]) === Number(knobs[k]));
+  b.textContent = ok ? "applied" : "could not apply"; b.disabled = !ok ? false : true;
+  const a = $("#sw-applied"); if (a) a.textContent = ok ? "the Control panel now carries these values; the next weekend's run judges them" : "the server did not take every value; check the Control panel";
+}); }
 { const b = $("#bt-run"); if (b) b.onclick = async () => { b.disabled = true; const r = await control({ action: "backtest" }); b.textContent = r && r.backtest ? r.backtest : "Run now"; setTimeout(() => { b.disabled = false; b.textContent = "Run now"; }, 4000); }; }
 // routes: #<tab> or #<tab>/<SYMBOL> (symbol detail open). Back/forward and refresh replay them.
 function route() {

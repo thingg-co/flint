@@ -208,6 +208,24 @@ class OnlineLearner:
         self.labels += 1
         return True
 
+    def replace(self, ts: float | None, x: np.ndarray, y: np.ndarray, mask: np.ndarray | None = None) -> bool:
+        """Overwrite the window stored for this bar: the startup backfill walks its ten days before
+        the news history has caught up, and the deep loop rewrites them once it has. The held-out
+        flag, keyed by the timestamp, is untouched. Returns whether the bar was in the buffer."""
+        if not ts:
+            return False
+        slot = self._slot.get(int(round(ts)))
+        if slot is None:
+            return False
+        m = np.ones(self.cfg.n_assets, dtype=np.float32) if mask is None else np.asarray(mask, dtype=np.float32)
+        cap = self.cfg.label_cap_bps
+        if cap > 0:
+            m = m * (np.abs(y) <= cap).astype(np.float32)
+        self.rx[slot] = x
+        self.ry[slot] = y
+        self.rmask[slot] = m
+        return True
+
     def fill(self, ts: float | None, x: np.ndarray, y: np.ndarray, mask: np.ndarray | None = None) -> int:
         """Write the columns of a window already in the buffer (same bar timestamp) that are
         still masked out: the names added to the universe after that window was stored. The

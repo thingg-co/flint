@@ -23,11 +23,12 @@ import numpy as np
 from .autotune import PRESETS, free_memory_gb
 from .backtest import combine_reports, run_backtest, variant_summary
 from .meta import MetaLabeler, features as meta_features
+from .newshist import NewsHistory, backfill_span
 from .bars import Bar, BarBuilder
 from .features import FEATURES, N_FEATURES, FeatureBuilder
 from .feed import Tick
 from .learner import OnlineLearner, Prediction
-from .news import TICKER_STOPLIST, NewsHub
+from .news import TICKER_STOPLIST, NewsHub, is_crypto
 from .paper import PaperBook
 from .schwab import SchwabAuth
 from .etrade import ETradeAuth
@@ -58,6 +59,8 @@ TUNABLE = {"score_threshold": float, "prob_margin": float, "cost_bps": float, "m
            "overfit_patience": int, "memory_floor_gb": float,
            "universe_refresh": lambda v: str(v).lower() in ("1", "true", "yes", "on"), "interesting_count": int,
            "size_by_coverage": lambda v: str(v).lower() in ("1", "true", "yes", "on")}
+
+WARM_S = 9 * 86400.0          # a week of sessions plus the window: what an offline chunk walks before its first emitted bar
 
 
 def clean(o):
@@ -384,6 +387,10 @@ class Engine:
         except (OSError, ValueError):
             pass
         self.meta = MetaLabeler()                   # the meta-labeler: per forecast, not per name, so it outlives a universe rebuild
+        self.news_history = NewsHistory(os.path.join(cfg.state_dir, "news_history.json"))   # dated headlines, so paged history carries the news slots
+        self.news_history.load()
+        self._news_task: asyncio.Task | None = None
+        self._startup_span: tuple[float, float] | None = None   # the startup backfill's days, rewritten once their news is in
         self.sweep: dict = {}                     # the last policy sweep over a backtest's stored forecasts (state/sweep.json)
         try:
             with open(os.path.join(self.cfg.state_dir, "sweep.json")) as f:
@@ -421,7 +428,7 @@ class Engine:
             from .autotune import pick_device
             cfg.device = pick_device(cfg.device)
         self.builder = BarBuilder(self.symbols, cfg.bar_seconds)
-        self.features = FeatureBuilder(self.symbols, cfg.window)
+        self.features = FeatureBuilder(self.symbols, cfg.window, index=self._market_symbol())
         self.news_base = {s: (0.0, 0.0) for s in self.symbols}  # last pure news skim, before operator blend
         self.learner = OnlineLearner(cfg, N_FEATURES)
         self.sources = SourceManager(cfg, self.symbols, self.av, on_tick=self._on_live_tick,
@@ -887,6 +894,7 @@ class Engine:
                                 f"{cfg.backfill_seconds / 60:.0f} min per symbol from the best available")
         cutoff = time.time() - cfg.backfill_seconds
         self._deep_cutoff = cutoff                     # deep-backfill loop pages further back from here
+        self._news_task = asyncio.create_task(self._news_history_job())   # dated news for the history the deep loop pages
         held = self.learner.rt[:self.learner.size]
         held = held[held > 0]
         if self.learner.migrated_new:                  # new names: walk the whole history again; fill() takes their columns
@@ -906,7 +914,12 @@ class Engine:
             per_sym[t.symbol] = per_sym.get(t.symbol, 0) + 1
         self.trace.emit("feed", f"{len(ticks)} ticks backfilled (" +
                         ", ".join(f"{self.base[s]} {per_sym[s]}" for s in self.symbols) + ")")
-        self._ingest_history(ticks)
+        self.features.news_history = self.news_history   # the startup days read the dated store, as paged history does
+        try:
+            self._ingest_history(ticks)
+        finally:
+            self.features.news_history = None             # live bars read the skim
+        self._startup_span = (cutoff, time.time())
         await self._warmup()
         self._seed_forecast()
         self.status = "live"
@@ -1015,15 +1028,29 @@ class Engine:
             wait = 150.0                                  # more history to page: a 211-symbol burst every 150 s stays under Schwab's 120 req/min
             until = self._deep_cutoff
             cutoff = max(target, until - 10 * 86400.0)
+            fetching = self._news_task is not None and not self._news_task.done()
+            if fetching and not self.news_history.covers(self._news_names(), cutoff - WARM_S, until):
+                wait = 60.0                               # the chunk's news is still on its way: page it with the news, not without
+                continue
+            if self._startup_span and not fetching:
+                lo, hi = self._startup_span
+                self._startup_span = None
+                try:
+                    ticks = await self.sources.backfill_range(lo - WARM_S, hi)
+                    n = await asyncio.to_thread(self._ingest_offline, ticks, lo, True) if ticks else 0
+                    self.trace.emit("learn", f"re-paged the startup days with their news: {n} windows rewritten", "info")
+                except Exception as e:  # noqa: BLE001
+                    self.trace.emit("learn", f"re-paging the startup days failed: {type(e).__name__}: {str(e)[:80]}", "warn")
+                continue
             try:
-                ticks = await self.sources.backfill_range(cutoff, until)
+                ticks = await self.sources.backfill_range(cutoff - WARM_S, until)   # a warm prefix the builder walks but does not emit
                 self._deep_cutoff = cutoff
                 if not ticks:
                     self.trace.emit("feed", "deep backfill: no history returned for "
                                             f"{datetime.fromtimestamp(cutoff):%b %d} – {datetime.fromtimestamp(until):%b %d}", "warn")
                     continue
                 self._deep_filled = 0
-                added = await asyncio.to_thread(self._ingest_offline, ticks)
+                added = await asyncio.to_thread(self._ingest_offline, ticks, cutoff)
                 filled = self._deep_filled
                 res = await asyncio.to_thread(self.learner.train_steps, 30) if (added or filled) else None
                 if res:
@@ -1434,14 +1461,19 @@ class Engine:
                 self._publish({"type": "metrics", "metrics": self.metrics.as_dict(), "history": self._drain_history()})
                 self.learner.release_cache()              # every 40 steps: the caching allocator never accumulates
 
-    def _ingest_offline(self, ticks: list[Tick]) -> int:
+    def _ingest_offline(self, ticks: list[Tick], emit_from: float | None = None, replace: bool = False) -> int:
         """Turn a chunk of old history into labeled replay windows without touching the live
         pipeline: a throwaway bar builder and feature builder (seeded with the live
-        normalization state) walk the chunk chronologically and feed the learner directly."""
+        normalization state, reading the dated news store) walk the chunk chronologically and
+        feed the learner directly. Bars before `emit_from` only warm the builder's rolling
+        state (a week of returns, the window itself) so the chunk's first windows carry the
+        same features live bars would; `replace` rewrites windows already in the buffer."""
         cfg = self.cfg
         builder = BarBuilder(self.symbols, cfg.bar_seconds)
-        feats = FeatureBuilder(self.symbols, cfg.window)
+        feats = FeatureBuilder(self.symbols, cfg.window, index=self._market_symbol())
         feats.norm.load(self.features.norm.state())
+        feats.news_history = self.news_history
+        emit_from = float(emit_from or 0.0)
         first: dict[str, float] = {}
         for t in ticks:
             first.setdefault(t.symbol, t.price)
@@ -1466,14 +1498,61 @@ class Engine:
                 mk = (r0 & real_now).astype(np.float32)
                 if self.learner.add(x0, y, mk, ts=t0):
                     added += 1
+                elif replace and self.learner.replace(t0, x0, y, mk):
+                    added += 1
                 else:
                     filled += self.learner.fill(t0, x0, y, mk)
             x = feats.push(row)
-            if x is not None:
-                pend.append((idx, x, closes, real_now, float(next(iter(row.values())).ts)))
+            ts_row = float(next(iter(row.values())).ts)
+            if x is not None and ts_row >= emit_from:
+                pend.append((idx, x, closes, real_now, ts_row))
         self.metrics.labels = self.learner.labels
         self._deep_filled = filled
         return added
+
+    def _market_symbol(self) -> str | None:
+        """The first modeled index name: the market the features and the relative target use."""
+        cols = index_columns(self.symbols, self.cfg.index_symbols)
+        return self.symbols[cols[0]] if cols else None
+
+    def _news_names(self) -> list[str]:
+        return [s for s in self.symbols if not is_crypto(s)]
+
+    async def _news_history_job(self) -> None:
+        """Fill the dated news store for the span the deep backfill will page, in the
+        background and paced under Finnhub's limit; the deep loop waits for a chunk's news
+        before paging it, and the startup days are rewritten once theirs is in."""
+        cfg = self.cfg
+        key = cfg.finnhub_key
+        names = self._news_names()
+        if not key or not names:
+            return
+        days = float(getattr(cfg, "deep_backfill_days", 0) or 0) + float(cfg.backfill_seconds) / 86400.0
+        lo, hi = backfill_span(time.time(), max(days, 3.0))
+        missing = self.news_history.missing(names, lo, hi)
+        if not missing:
+            return
+        scorer = getattr(self.news_hub, "scorer", None)
+        self.trace.emit("news", f"news history: fetching {len(missing)} names over {days:.0f} days from Finnhub, "
+                                f"scored by {getattr(scorer, 'name', 'word lists')}", "info")
+        old_threads = getattr(scorer, "threads", None)
+        if old_threads is not None:
+            scorer.threads = max(int(old_threads), min(8, os.cpu_count() or 2))
+        try:
+            res = await self.news_history.fetch(names, lo, hi, key, scorer=scorer, rate_s=1.5,
+                                                say=lambda t: self.trace.emit("news", t, "info"))
+        except Exception as e:  # noqa: BLE001
+            self.trace.emit("news", f"news history fetch failed: {type(e).__name__}: {str(e)[:100]}", "warn")
+            return
+        finally:
+            if old_threads is not None:
+                scorer.threads = old_threads
+        if res.get("error"):
+            self.trace.emit("news", f"news history: {res['error']}", "warn")
+            return
+        self.trace.emit("news", f"news history: {res['done']}/{res['names']} names, {res['headlines']} headlines in "
+                                f"{res['elapsed_s'] / 60:.0f} min" + (f"; {len(res['failed'])} names failed" if res["failed"] else ""),
+                        "warn" if res["failed"] else "info")
 
     def _on_live_tick(self, tick: Tick) -> None:
         """Called by the source manager with the active provider's tick for a symbol.
