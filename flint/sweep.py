@@ -193,10 +193,17 @@ def replay_policy(fc: dict, cfg, cost_bps: float, overrides: dict | None = None,
             "win_days": int((nets > 0).sum()), "nets": [float(v) for v in nets]}
 
 
+DRAWDOWN_SCALE_BPS = 20.0           # a half's drawdown of this size halves a setting's score: the sweep pays for its wins in drawdown
+
+
 def _objective(r: dict) -> float:
+    """Net per day, discounted by the half's drawdown. Net alone rewarded exposure: with the
+    meta-labeler in the grid it once proposed a setting worth +274 bps on the tuning half that
+    lost 73 with a 237 bps drawdown on the confirming one (rejected, but a wasted sweep), while
+    this objective's proposal on the same forecasts confirmed at +112."""
     if r["days"] and r["signals"] / r["days"] < MIN_SIGNALS_PER_DAY:
         return -1e9
-    return r["net_bps_per_day"]
+    return r["net_bps_per_day"] / (1.0 + max(0.0, float(r.get("max_drawdown_bps") or 0.0)) / DRAWDOWN_SCALE_BPS)
 
 
 def run_sweep(fc: dict, cfg, cost_bps: float, grid: dict | None = None, max_passes: int = 3,
