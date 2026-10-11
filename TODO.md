@@ -8,13 +8,14 @@ feature set reset the model once, so they are batched into a single reset on a w
 | # | Item | Status | Notes |
 |---|------|--------|-------|
 | 0 | Feature-normalizer migration on a universe change (bug) | shipped 0.5.15 | found in Steel 2026-10-11: `RunningNorm.load` copied the saved `mean`/`var` by position, so after `_universe_loop` promoted names and the checkpoint migrated, the start loaded an (old N, features) array into a (new N, features) normalizer and died on a broadcast error (phase `error`). Now the state carries its symbol list, rows load by name, a new name starts fresh with its own count (the count is per name), a state without names is named by the checkpoint's own symbol list, and a state that cannot be mapped leaves the normalizer fresh with a trace warning instead of failing the start. `tests/test_features.py::test_running_norm_maps_rows_by_symbol_across_a_universe_change`, `tests/test_universe.py` |
-| 1 | Market-relative target | shipped 0.5.14, awaiting the backtest verdict | `FLINT_TARGET=relative`: label = the residual against the modeled index names (SPY, QQQ, IWM, SMH, XLF), loadings refit each session, one hedge per index in the book; `backtest_target=both` compares the targets in one weekend run. Flip the live default once the relative run wins |
+| 1 | Market-relative target | shipped 0.5.14; the 2026-10-11 backtest says it wins (below) | `FLINT_TARGET=relative`: label = the residual against the modeled index names (SPY, QQQ, IWM, SMH, XLF), loadings refit each session, one hedge per index in the book; `backtest_target=both` compares the targets in one weekend run. Flip the live default once the relative run wins |
 | 2a | Real exogenous features in training | queued, first in the batch | found 2026-10-10: every window in the replay has all 16 exogenous features (news, WSB, F&G, 13F, fundamentals, breadth, VIX, IV, skew) and the imbalance and spread features at exactly 0, because paged history never carries them and every live day so far was lost to crashes, resets and universe rebuilds. The net therefore trains on zeros and meets nonzero values only live, and the backtest sees no news at all. Fix in the reset: reconstruct what history can give (company news by date through Finnhub scored by FinBERT, breadth from the universe's own candles, VIX from its candles), keep the live-only signals (WSB, F&G, 13F, fundamentals, IV, skew) out of the net and in the policy, and let live windows overwrite paged ones |
 | 2 | Pricing-model feature batch (Table 4) | queued | implied-vol horizon band, term slope / event flag, VRP, dealer gamma; Yang-Zhang and Garman-Klass in place; HAR; beta, momentum, reversal; Amihud, quote OFI, Roll; ex-div flag; macro ETFs as names. One reset, with the calendar and valuation features below |
 | 2b | Calendar and daily-lag features | queued | same-half-hour lag over 40 days, first-half-hour index return, overnight vs intraday split. Joins the reset of item 2 |
 | 2c | Valuation features | queued | sector-relative EV/EBITDA, P/B, FCF yield, dividend yield; a DCF gap; quality composite. Joins the reset of item 2 |
 | 2d | Other forecasters as opinions | queued | GARCH/HAR size, implied distribution, OU residual z and half-life, Kalman trend, ridge and GBM baselines. Joins the reset of item 2 |
 | 3 | Policy pass (no reset) | shipped 0.5.14 | put decay and square-root impact in the cost edge, the Amihud illiquidity gate, the straddle's gamma breakeven against the implied move; stop (on), profit target and time limit (off) exits with a cooldown, and a daily loss limit on new entries. Deploys on the next restart after the weekend backtest |
+| 3b | Hedge cost in the relative target | queued, next | the five-index ridge loads 1.5 units of index hedge per unit of basket (the sum of a name's |beta| averages 2.7: SPY, QQQ and SMH are collinear, so the fit offsets them against each other), and the backtest charges the hedge the same 5 bps as a name. That cost was 28 of the relative run's 33 bps loss and 110 of the sweep proposal's 196. Price the index ETFs at their own cost (`hedge_cost_bps`, about 1 bps, in the backtest's scoring loop, `replay_policy` and the paper book together, so the sweep still reproduces the run) and shrink the loadings harder toward SPY (`beta_shrink`) or hedge with SPY alone |
 | 4 | Ensemble of two 4XL networks | queued | aggregate members' distributions; fits the box next to the replay |
 | 5 | Meta-labeling | queued | a small online classifier on whether acting on each forecast paid after costs; size by its probability |
 | 6 | Calibration to decision loss | queued | size by P(move clears the spread) from the full quantile set |
@@ -46,3 +47,21 @@ forecasts say (`flint sweep` and the notebook-style checks behind it):
 Candidates this points at: a bearish-bias check in the policy (net exposure capped by the index
 view), trading only the top confidence decile (meta-labeling, item 5, is the principled form),
 and the feature batch (item 2a) so the net sees something other than price.
+
+Relative-target run, 2026-10-11 (the same 74 days, the second half of the weekend): net −33 bps,
+−0.5 bps a day, Sharpe −1.4, max drawdown 44 bps, 120 signals a day, hit 51.2%. The relative
+target wins on every measure the stored forecasts give: rank IC 0.033 (t = 19.8), no bearish lean
+(49.7% of calls up against the absolute run's 47.0%; median bias −0.1 bps against −6.4), the top 1%
+of confidence calls a 22 bps mean move in the called direction at 55.3% hit (absolute: 11 bps at
+53.2%), raw 10–90 coverage 40% against 37%, and the second half of the days holds every one of
+those. What it lost went to the hedge: the basket scored against residual labels made +14 bps
+gross and paid 20 bps of its own cost, and the index hedge paid another 28 bps, because the
+five-index loadings sum to 1.5 units of hedge per unit of basket (item 3b). The current gates
+hardly trade in this mode (48 of 74 days without a signal: the per-name skill gate, not the
+global hit EMA, which sat below 0.5 on six of them). The sweep's proposal (score 0.8, margin 0.04,
+move floor 16 bps, Kelly 0.08, confirm 1, min hit 0.45, 16 calls) trades on the net's own
+confidence instead: +69 bps on the tuning half (Sharpe 3.7) and +16 bps on the confirming half
+(Sharpe 1.3, 7,237 trades, 19 of 37 days up), not thin this time; before the hedge's cost it
+makes +119 and +76, and priced at 1 bps on the index ETFs it nets +174 (confirm +64).
+Recommended, in this order: flip `FLINT_TARGET` to relative in `deploy/spark/flint-start`, price
+the hedge (3b), then set the gates from the sweep and let the next weekend's run judge them.

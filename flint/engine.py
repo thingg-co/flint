@@ -1301,6 +1301,7 @@ class Engine:
         except OSError as e:
             log.warning("could not save backtest.json: %s", e)
         t = res.get("totals") or {}
+        _sharpe = lambda tt: "·" if (tt or {}).get("sharpe") is None else f"{tt['sharpe']:.1f}"  # noqa: E731
         if res.get("error"):
             self.trace.emit("learn", f"backtest: {res['error']}", "warn")
         else:
@@ -1308,12 +1309,12 @@ class Engine:
                    else "stopped" if res.get("stopped") else "done")
             self.trace.emit("learn", f"backtest {how} in {res.get('elapsed_s', 0) / 60:.0f} min: "
                                      f"{t.get('days', 0)} days, net {t.get('net_bps', 0):+.0f} bps "
-                                     f"({t.get('net_bps_per_day', 0):+.1f}/day, Sharpe {t.get('sharpe') if t.get('sharpe') is not None else '·'}), "
+                                     f"({t.get('net_bps_per_day', 0):+.1f}/day, Sharpe {_sharpe(t)}), "
                                      f"hit {((t.get('hit_rate') or 0) * 100):.0f}%, coverage {((t.get('coverage') or 0) * 100):.0f}%, "
                                      f"{t.get('signals', 0)} signals; always-long {t.get('long_bps', 0):+.0f} bps"
                                      + (f" [{(res.get('config') or {}).get('target')} target]" if (res.get('config') or {}).get('target') else "")
                                      + ((lambda b: f"; the {b.get('target')} target made net {b.get('totals', {}).get('net_bps', 0):+.0f} bps "
-                                                   f"(Sharpe {b.get('totals', {}).get('sharpe') if b.get('totals', {}).get('sharpe') is not None else '·'})")
+                                                   f"(Sharpe {_sharpe(b.get('totals'))})")
                                         (res["baseline"]) if res.get("baseline") else ""), "act")
         path = (res.get("config") or {}).get("forecasts")
         if path and not res.get("error"):
