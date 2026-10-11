@@ -228,7 +228,13 @@ unless Flint is already up.
   `daily_loss_limit` of the day's opening equity no new entry opens that day. All of it is
   `flint/policy.py` (pure functions) and `tests/test_policy.py`; the backtest's `decide` cannot
   mirror the impact, decay and illiquidity terms because the replay holds standardized features,
-  not raw volume or IV, so the backtest's flat cost stays the conservative floor. An index hedge leg pays `hedge_cost_bps` per unit
+  not raw volume or IV, so the backtest's flat cost stays the conservative floor. Since 0.5.18 a position below `min_position_dollars` (1,000, a live
+  control) is lifted to that floor when its edge still covers the costs at that size and held otherwise, and
+  a put's whole-contract commission is amortised over the hold in the edge test (`ticket_bps` on the signal):
+  costs were all proportional before, so Kelly over hundreds of names sized most positions under the paper
+  book's own rebalance floor and they never filled; the paper book fills whole contracts, never past the
+  premium cap, with the same floor, and the backtest, which works in weights, cannot mirror any of it. An
+  index hedge leg pays `hedge_cost_bps` per unit
   (1 bps; SPY and the other index ETFs quote a cent or two wide) in the backtest, `replay_policy` and the
   sweep, recorded in the stored forecasts; at the names' 5 bps the hedge cost 1.5x the basket's cost and was
   28 of the 2026-10-11 relative run's 33 bps loss.
