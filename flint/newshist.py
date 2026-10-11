@@ -28,7 +28,8 @@ log = logging.getLogger(__name__)
 KEEP_S = 3 * 86400                      # the skim's horizon
 PER_PASS = 8                            # headlines per name the skim keeps per pass
 PER_DAY = 6                             # headlines per name per day the store keeps
-SLICE_DAYS = 45                         # one request covers this much; split when the answer looks capped
+SLICE_DAYS = 10                         # the span one pass fetches for every name: the deep loop's chunk, so paging can follow the news
+CAP_HINT = 200                          # Finnhub answers with about 244 of the newest items at most: an answer this long was probably cut
 
 
 class NewsHistory:
@@ -133,50 +134,53 @@ class NewsHistory:
 
     # -- the fetch ---------------------------------------------------------------------------
     async def fetch(self, symbols, lo: float, hi: float, key: str, scorer=None, say=None, rate_s: float = 1.25,
-                    client=None, persist_every: int = 20, deadline_s: float | None = None) -> dict:
-        """Fill the store for [lo, hi] for every name it does not cover yet. One request per
-        name per slice, paced under Finnhub's limit next to the live skim; a 429 waits a minute.
-        Titles are scored off the loop. Returns a summary; progress goes to `say`."""
+                    client=None, deadline_s: float | None = None) -> dict:
+        """Fill the store for [lo, hi], newest slice first and every name per slice, so the deep
+        loop can page a chunk as soon as its slice is in. One request per name per slice, paced
+        under Finnhub's limit next to the live skim; a capped answer is paged backwards by its
+        oldest item; a 429 waits a minute. Titles are scored off the loop. Returns a summary;
+        progress goes to `say`."""
         import httpx  # noqa: PLC0415
 
         if self._busy:
             return {"error": "already fetching"}
         self._busy = True
         t0 = time.time()
-        names = self.missing(symbols, lo, hi)
-        done = fetched = 0
-        failed: list[str] = []
+        names = list(symbols)
+        slices: list[tuple[float, float]] = []
+        end = hi
+        while end > lo:
+            start = max(lo, end - SLICE_DAYS * 86400)
+            slices.append((start, end))
+            end = start
+        asked = done = fetched = requests = 0
+        failed: set[str] = set()
         try:
             own = client is None
             c = client or httpx.AsyncClient(timeout=20)
             try:
-                for sym in names:
+                for si, (start, end) in enumerate(slices):
                     if deadline_s is not None and time.time() - t0 > deadline_s:
                         break
-                    rows: list[tuple[float, str]] = []
-                    ok = True
-                    end = hi
-                    while end > lo:
-                        start = max(lo, end - SLICE_DAYS * 86400)
-                        items = await self._slice(c, sym, start, end, key, rate_s)
-                        if items is None:
-                            ok = False
-                            break
-                        rows.extend(items)
-                        end = start
-                    if not ok:
-                        failed.append(sym)
-                        continue
-                    titles = [t for _, t in rows]
-                    tones = await asyncio.to_thread(self._score, scorer, titles) if titles else []
-                    self.add(sym, [(ts, x) for (ts, _), x in zip(rows, tones)], lo, hi)
-                    fetched += len(rows)
-                    done += 1
-                    if say and done % 25 == 0:
-                        say(f"news history: {done}/{len(names)} names, {fetched} headlines so far")
-                    if done % persist_every == 0:
+                    todo = self.missing(names, start, end)
+                    asked += len(todo)
+                    for sym in todo:
+                        rows = await self._slice(c, sym, start, end, key, rate_s)
+                        requests += 1
+                        if rows is None:
+                            failed.add(sym)
+                            continue
+                        titles = [t for _, t in rows]
+                        tones = await asyncio.to_thread(self._score, scorer, titles) if titles else []
+                        self.add(sym, [(ts, x) for (ts, _), x in zip(rows, tones)], start, end)
+                        fetched += len(rows)
+                        done += 1
+                    if todo:
                         self.fetched_at = time.time()
                         self.save()
+                        if say:
+                            say(f"news history: {datetime.fromtimestamp(start):%b %d} – {datetime.fromtimestamp(end):%b %d} in "
+                                f"({si + 1}/{len(slices)} slices, {fetched} headlines, {len(failed)} names failing)")
             finally:
                 if own:
                     await c.aclose()
@@ -189,14 +193,36 @@ class NewsHistory:
                 log.warning("could not save the news history: %s", e)
         self.status = (f"{sum(len(a) for a in self.ts.values())} headlines for {len(self.ts)} names"
                        + (f"; {len(failed)} names failed" if failed else ""))
-        return {"names": len(names), "done": done, "headlines": fetched, "failed": failed, "elapsed_s": time.time() - t0}
+        return {"names": asked, "done": done, "headlines": fetched, "requests": requests, "failed": sorted(failed),
+                "elapsed_s": time.time() - t0}
 
     async def _slice(self, c, sym: str, start: float, end: float, key: str, rate_s: float) -> list[tuple[float, str]] | None:
         """The (ts, title) pairs Finnhub files under `sym` in [start, end], or None on failure.
-        A slice that comes back suspiciously full is split in two so a cap does not hide days."""
+        Finnhub answers with its newest items only, about 244 of them, so an answer that long
+        which does not reach `start` is followed by another for the days before its oldest item."""
+        out: list[tuple[float, str]] = []
+        hi = end
+        for _page in range(60):
+            items = await self._request(c, sym, start, hi, key, rate_s)
+            if items is None:
+                return None
+            rows = []
+            for it in items:
+                title = html.unescape(str(it.get("headline") or "")).strip()
+                ts = float(it.get("datetime") or 0)
+                if len(title) >= 12 and start <= ts <= hi:
+                    rows.append((ts, title))
+            out.extend(rows)
+            oldest = min((ts for ts, _ in rows), default=start)
+            if len(items) < CAP_HINT or oldest <= start + 60 or not rows:
+                return out
+            hi = oldest - 1                                                   # the cut answer covered [oldest, hi]: ask for what is older
+        return out
+
+    async def _request(self, c, sym: str, start: float, end: float, key: str, rate_s: float) -> list | None:
         frm = datetime.fromtimestamp(start, timezone.utc).date().isoformat()
         to = datetime.fromtimestamp(end, timezone.utc).date().isoformat()
-        for attempt in range(3):
+        for _attempt in range(3):
             try:
                 r = await c.get("https://finnhub.io/api/v1/company-news", params={"symbol": sym, "from": frm, "to": to, "token": key})
             except Exception as e:  # noqa: BLE001
@@ -213,20 +239,7 @@ class NewsHistory:
                 items = r.json()
             except ValueError:
                 return None
-            if not isinstance(items, list):
-                return None
-            out = []
-            for it in items:
-                title = html.unescape(str(it.get("headline") or "")).strip()
-                ts = float(it.get("datetime") or 0)
-                if len(title) >= 12 and ts > 0:
-                    out.append((ts, title))
-            if len(items) >= 900 and end - start > 5 * 86400:          # a cap, probably: ask for the two halves
-                mid = start + (end - start) / 2
-                a = await self._slice(c, sym, start, mid, key, rate_s)
-                b = await self._slice(c, sym, mid, end, key, rate_s)
-                return None if a is None or b is None else a + b
-            return out
+            return items if isinstance(items, list) else None
         return None
 
     @staticmethod

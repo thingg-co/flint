@@ -52,9 +52,10 @@ class _Resp:
 
 
 class _Client:
-    """Answers company-news with three headlines per day in the asked range, one 429 first."""
-    def __init__(self):
-        self.calls = []; self.limited = True
+    """Answers company-news like Finnhub: `per_day` headlines a day in the asked range, the
+    newest `cap` of them only, one 429 first."""
+    def __init__(self, per_day=3, cap=10_000):
+        self.calls = []; self.limited = True; self.per_day = per_day; self.cap = cap
     async def get(self, url, params=None):
         self.calls.append(dict(params))
         if self.limited:
@@ -62,14 +63,15 @@ class _Client:
             return _Resp(429, None)
         from datetime import datetime, timezone
         a = datetime.fromisoformat(params["from"]).replace(tzinfo=timezone.utc).timestamp()
-        b = datetime.fromisoformat(params["to"]).replace(tzinfo=timezone.utc).timestamp()
+        b = datetime.fromisoformat(params["to"]).replace(tzinfo=timezone.utc).timestamp() + DAY   # Finnhub's `to` is inclusive
         items = []
         d = a
         while d < b:
-            for k in range(3):
+            for k in range(self.per_day):
                 items.append({"headline": f"{params['symbol']} beats estimates again, number {k}", "datetime": d + 3600 * (k + 1)})
             d += DAY
-        return _Resp(200, items)
+        items.sort(key=lambda it: -it["datetime"])
+        return _Resp(200, items[:self.cap])
 
 
 def test_fetch_pages_the_missing_names_scores_titles_and_persists(tmp_path, monkeypatch):
@@ -81,8 +83,9 @@ def test_fetch_pages_the_missing_names_scores_titles_and_persists(tmp_path, monk
     scorer = SimpleNamespace(score=lambda titles: [0.6] * len(titles), name="stub")
     c = _Client()
     res = asyncio.run(h.fetch(["AAPL", "MSFT"], t - 100 * DAY, t, "key", scorer=scorer, client=c, rate_s=0))
-    assert res["done"] == 2 and res["headlines"] > 0 and not res["failed"]
-    assert len(c.calls) >= 6 and all(p["token"] == "key" for p in c.calls)         # three 45-day slices per name, plus the 429 retry
+    assert res["done"] == res["names"] == 20 and res["headlines"] > 0 and not res["failed"]   # two names, ten slices
+    assert len(c.calls) >= 20 and all(p["token"] == "key" for p in c.calls)        # ten-day slices per name, plus the 429 retry
+    assert c.calls[1]["symbol"] == "AAPL" and c.calls[2]["symbol"] == "MSFT"         # every name per slice, newest slice first
     assert h.covers(["AAPL", "MSFT"], t - 100 * DAY, t)
     assert np.all(h.tone["AAPL"] == 0.6) and len(h.ts["AAPL"]) <= PER_DAY * 101
     sent, attn = h.at(t - 50 * DAY, ["AAPL", "MSFT"])
@@ -102,3 +105,18 @@ def test_replace_rewrites_a_stored_window_in_place():
     assert L.replace(1000.0, x * 2, y * 2, np.array([1, 0, 1], np.float32))
     assert np.all(L.rx[0] == 2) and np.all(L.ry[0] == y * 2) and list(L.rmask[0]) == [1, 0, 1] and L.size == 1
     assert not L.replace(999.0, x, y) and not L.replace(None, x, y)
+
+
+def test_a_capped_answer_is_paged_backwards_until_the_slice_is_covered(tmp_path, monkeypatch):
+    import flint.newshist as nh
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(nh.asyncio, "sleep", lambda *a, **k: real_sleep(0))
+    monkeypatch.setattr(nh, "CAP_HINT", 40)
+    h = NewsHistory()
+    t = 19700 * DAY
+    c = _Client(per_day=30, cap=40)                                                 # 300 headlines in a ten-day slice, 40 per answer
+    res = asyncio.run(h.fetch(["AAPL"], t - 10 * DAY, t, "key", scorer=None, client=c))
+    assert res["done"] == 1 and not res["failed"]
+    days = {int(x // DAY) for x in h.ts["AAPL"]}
+    assert len(days) >= 10 and len(h.ts["AAPL"]) >= PER_DAY * (len(days) - 1)     # every day of the slice, six kept per day (the edge day is partial)
+    assert len([p for p in c.calls if p["symbol"] == "AAPL"]) >= 8                 # paged back page by page

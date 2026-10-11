@@ -1550,7 +1550,7 @@ class Engine:
         if res.get("error"):
             self.trace.emit("news", f"news history: {res['error']}", "warn")
             return
-        self.trace.emit("news", f"news history: {res['done']}/{res['names']} names, {res['headlines']} headlines in "
+        self.trace.emit("news", f"news history: {res['headlines']} headlines in {res['requests']} requests over "
                                 f"{res['elapsed_s'] / 60:.0f} min" + (f"; {len(res['failed'])} names failed" if res["failed"] else ""),
                         "warn" if res["failed"] else "info")
 
