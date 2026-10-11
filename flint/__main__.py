@@ -275,11 +275,14 @@ def _sweep() -> None:
     state = Path(cfg.state_dir)
     argv = sys.argv[2:]
     cost = float(cfg.backtest_cost_bps)
+    hedge = None                                                            # the run's own unless overridden
     path = None
     i = 0
     while i < len(argv):
         if argv[i] == "--cost" and i + 1 < len(argv):
             cost = float(argv[i + 1]); i += 2; continue
+        if argv[i] == "--hedge-cost" and i + 1 < len(argv):
+            hedge = float(argv[i + 1]); i += 2; continue
         path = argv[i]; i += 1
     if not path:
         cands = sorted(state.glob("backtest_forecasts_*.npz"), key=lambda p: p.stat().st_mtime)
@@ -288,8 +291,10 @@ def _sweep() -> None:
             raise SystemExit(1)
         path = str(cands[-1])
     fc = load_forecasts(path)
-    print(f"sweeping the gates over {len(fc['day_of'])} forecasts, {int(fc['day_of'].max()) + 1} days ({fc['target']} target), cost {cost:g} bps")
-    res = run_sweep(fc, cfg, cost, progress=lambda n: print(f"\r  {n} settings tried   ", end="", flush=True))
+    hc = fc.get("hedge_cost_bps") if hedge is None else hedge
+    print(f"sweeping the gates over {len(fc['day_of'])} forecasts, {int(fc['day_of'].max()) + 1} days ({fc['target']} target), "
+          f"cost {cost:g} bps" + (f", hedge {hc:g} bps" if fc.get("index") and hc is not None else ""))
+    res = run_sweep(fc, cfg, cost, progress=lambda n: print(f"\r  {n} settings tried   ", end="", flush=True), hedge_cost_bps=hedge)
     print()
     if res.get("error"):
         print(res["error"]); raise SystemExit(1)
@@ -347,6 +352,7 @@ def _backtest() -> None:
         except Exception:  # noqa: BLE001
             pass
     opts = {"days": int(cfg.backtest_days), "hours": float(cfg.backtest_hours), "cost": float(cfg.backtest_cost_bps),
+            "hedge": float(cfg.hedge_cost_bps),
             "warm": int(cfg.backtest_warm_days), "night": float(cfg.backtest_night_epochs), "target": str(cfg.backtest_target)}
     argv = sys.argv[2:]
     for i, a in enumerate(argv):
@@ -374,7 +380,7 @@ def _backtest() -> None:
             print(f"-- {variant} target")
         reports.append(run_backtest(cfg, z["x"], np.asarray(z["y"]), mask, np.asarray(z["t"]), device=device, symbols=symbols,
                                     progress=prog, hours=opts["hours"] / len(variants), days=opts["days"], warm_days=opts["warm"],
-                                    cost_bps=opts["cost"], preset=preset, night_epochs=opts["night"], target=variant,
+                                    cost_bps=opts["cost"], hedge_cost_bps=opts["hedge"], preset=preset, night_epochs=opts["night"], target=variant,
                                     index_symbols=str(cfg.index_symbols), beta_windows=int(cfg.beta_windows),
                                     beta_shrink=float(cfg.beta_shrink), store=str(state / "backtest_forecasts")))
         print()

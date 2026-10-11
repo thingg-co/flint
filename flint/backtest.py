@@ -76,7 +76,8 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                  hours: float = 0.0, days: int = 0, warm_days: int = 10, cost_bps: float | None = None,
                  steps_per_day: int = 0, compile_: bool | None = None, hooks: dict | None = None,
                  preset: str = "", night_epochs: float = 0.0, target: str = "absolute", index_symbols: str = "SPY",
-                 beta_windows: int = 6000, beta_shrink: float = 400.0, store: str | None = None) -> dict:
+                 beta_windows: int = 6000, beta_shrink: float = 400.0, store: str | None = None,
+                 hedge_cost_bps: float | None = None) -> dict:
     """See the module docstring. Each day trains the live online budget (steps_per_label per
     bar) plus `night_epochs` passes over everything seen so far, the way the idle trainer does
     each closed session; `hours` > 0 caps the run by shrinking that budget to fit the remaining
@@ -88,6 +89,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
     t0 = time.time()
     hooks = hooks or {}
     cost = float(cfg.cost_bps if cost_bps is None else cost_bps)
+    hcost = cost if hedge_cost_bps is None else float(hedge_cost_bps)     # the index legs' own round trip; the names pay `cost`
     n_assets, n_feat = rx.shape[1], rx.shape[-1]
     symbols = list(symbols or [f"#{i}" for i in range(n_assets)])
     # The target: with "relative" every label the net trains on and is scored against is the
@@ -97,6 +99,8 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
     icols = index_columns(symbols, index_symbols) if str(target).lower() == "relative" else []
     target = "relative" if icols else ("absolute (no index modeled)" if str(target).lower() == "relative" else "absolute")
     beta = prior_beta(n_assets, icols)
+    per_unit = np.full(n_assets, cost)
+    per_unit[icols] = hcost
     keyed = np.flatnonzero(rt > 0)
     keyed = keyed[np.argsort(rt[keyed], kind="stable")]
     groups: list[tuple[str, np.ndarray]] = []
@@ -285,12 +289,12 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                 w[icols] = -(w @ beta)                                          # the index hedges: the basket's return becomes its relative return
                 hedge_gross = float(np.abs(w[icols]).sum())
             ret = float((w * y_abs).sum())
-            fee = cost * float(np.abs(w).sum())
+            fee = cost * (float(np.abs(w).sum()) - hedge_gross) + hcost * hedge_gross
             d["signals"] += int((w != 0).sum()) - (int((w[icols] != 0).sum()) if icols else 0)
             d["gross"] += ret
             d["net"] += ret - fee
             d["unhedged"] += unhedged - cost * (float(np.abs(w).sum()) - hedge_gross)
-            sym_net += w * y_abs - cost * np.abs(w)
+            sym_net += w * y_abs - per_unit * np.abs(w)
             sym_sig += (w != 0)
             if traded.any():
                 d["long"] += float(y_abs[traded].mean())                        # a 1/N always-long book, for scale
@@ -356,7 +360,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                      beta=np.stack(kept["beta"]), gate=np.concatenate(kept["gate"]),
                      day_of=np.concatenate([np.full(len(r), i) for i, r in enumerate(kept["rows"])]),
                      symbols=np.array(symbols), index=np.array([symbols[c] for c in icols]), target=np.array(target),
-                     quantiles=np.asarray(cfg.quantiles), cost_bps=np.array(cost))
+                     quantiles=np.asarray(cfg.quantiles), cost_bps=np.array(cost), hedge_cost_bps=np.array(hcost))
         except Exception as e:  # noqa: BLE001
             log.warning("backtest: could not store the forecasts at %s: %s", store, e)
             stored = None
@@ -365,7 +369,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                for i in range(n_assets)}
     return {"ran_at": t0, "elapsed_s": time.time() - t0, "stopped": stopped,
             "config": {"preset": preset, "d_model": cfg.d_model, "params": sum(p.numel() for p in model.parameters()),
-                       "cost_bps": cost, "warm_days": warm_days, "hours": hours, "night_epochs": night_epochs,
+                       "cost_bps": cost, "hedge_cost_bps": hcost, "warm_days": warm_days, "hours": hours, "night_epochs": night_epochs,
                        "target": target, "index": [symbols[c] for c in icols] if icols else None, "forecasts": stored,
                        "beta": ({symbols[i]: {symbols[c]: round(float(beta[i, j]), 2) for j, c in enumerate(icols)}
                                  for i in range(n_assets) if i not in icols} if icols else None),

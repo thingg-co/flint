@@ -1244,7 +1244,8 @@ class Engine:
                         cfg_bt, L.rx[:n], L.ry[:n], L.rmask[:n], L.rt[:n], device=dev,
                         symbols=list(self.symbols), progress=prog, should_stop=should_stop,
                         hours=hours_each, days=int(cfg.backtest_days), warm_days=int(cfg.backtest_warm_days),
-                        cost_bps=float(cfg.backtest_cost_bps), preset=preset, night_epochs=float(cfg.backtest_night_epochs),
+                        cost_bps=float(cfg.backtest_cost_bps), hedge_cost_bps=float(cfg.hedge_cost_bps),
+                        preset=preset, night_epochs=float(cfg.backtest_night_epochs),
                         target=variant, index_symbols=str(cfg.index_symbols),
                         beta_windows=int(cfg.beta_windows), beta_shrink=float(cfg.beta_shrink),
                         store=os.path.join(cfg.state_dir, "backtest_forecasts")))

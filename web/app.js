@@ -1478,7 +1478,7 @@ function renderBacktest() {
     : pr.phase === "scoring" ? `scoring day ${pr.day} of ${pr.days || "?"}${pr.step_s ? ` · ${pr.step_s.toFixed(1)} s/step` : ""}`
     : (!pr.day && !pr.days) ? `warming up on the first ${warmN} training-only days, then scoring` : `day ${pr.day} of ${pr.days || "?"}`;
   if (meta) meta.textContent = pr.running ? `running: ${phase}${variant}${elapsed}`
-    : (b.ran_at ? `ran ${fmtTime(b.ran_at)} · ${c.preset || "model"}${c.params ? " " + (c.params / 1e6).toFixed(1) + "M params" : ""} · ${c.target || "absolute"} target${c.index && c.index.length ? " vs " + c.index.join(", ") : ""} · cost ${c.cost_bps} bps · ${c.history_days} days of history, ${c.warm_days} warm · ${b.stopped ? "stopped early" : "complete"}` : "");
+    : (b.ran_at ? `ran ${fmtTime(b.ran_at)} · ${c.preset || "model"}${c.params ? " " + (c.params / 1e6).toFixed(1) + "M params" : ""} · ${c.target || "absolute"} target${c.index && c.index.length ? " vs " + c.index.join(", ") : ""} · cost ${c.cost_bps} bps${c.hedge_cost_bps != null && c.index && c.index.length ? `, hedge ${c.hedge_cost_bps} bps` : ""} · ${c.history_days} days of history, ${c.warm_days} warm · ${b.stopped ? "stopped early" : "complete"}` : "");
   const days = (b.days || []).slice(-40).reverse();
   const cell = (v, cls) => `<span class="num ${cls || ""}">${v}</span>`;
   // which experts the regime gate leaned on that day: the top three by mean weight, as E3 41 · E7 22 · E1 12
@@ -1504,7 +1504,7 @@ function renderSweep(sw) {
   if (!sw || sw.error) { root.innerHTML = ""; if (meta && sw && sw.error) meta.textContent = sw.error; return; }
   const cur = sw.current || {}, prop = sw.proposal, pd = v => v != null ? fmtBps(v) + "/day" : "·";
   const half = r => r ? `${pd(r.net_bps_per_day)}<br>${r.signals} trades · hit ${fmtPct(r.hit_rate)}` : "·";
-  if (meta) meta.textContent = `${sw.days} days, split at day ${sw.split_day}; ${sw.evaluations} settings tried · ${sw.accepted && sw.thin ? "proposal confirmed on the second half, on too few trades to act on" : sw.accepted ? "proposal confirmed on the second half" : (prop ? "proposal failed the second half: not recommended" : "no setting beat the current gates")} · ${esc(sw.target || "")} target, cost ${sw.cost_bps} bps`;
+  if (meta) meta.textContent = `${sw.days} days, split at day ${sw.split_day}; ${sw.evaluations} settings tried · ${sw.accepted && sw.thin ? "proposal confirmed on the second half, on too few trades to act on" : sw.accepted ? "proposal confirmed on the second half" : (prop ? "proposal failed the second half: not recommended" : "no setting beat the current gates")} · ${esc(sw.target || "")} target, cost ${sw.cost_bps} bps${sw.hedge_cost_bps != null ? `, hedge ${sw.hedge_cost_bps} bps` : ""}`;
   const rows = [`<div class="prow phead"><span>gate</span>${cell("now")}${cell("proposed")}</div>`];
   Object.keys(cur.knobs || {}).forEach(k => {
     const v = cur.knobs[k], pv = prop && prop.knobs && k in prop.knobs ? prop.knobs[k] : null;

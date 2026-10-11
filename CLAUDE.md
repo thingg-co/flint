@@ -212,7 +212,10 @@ unless Flint is already up.
   `daily_loss_limit` of the day's opening equity no new entry opens that day. All of it is
   `flint/policy.py` (pure functions) and `tests/test_policy.py`; the backtest's `decide` cannot
   mirror the impact, decay and illiquidity terms because the replay holds standardized features,
-  not raw volume or IV, so the backtest's flat cost stays the conservative floor.
+  not raw volume or IV, so the backtest's flat cost stays the conservative floor. An index hedge leg pays `hedge_cost_bps` per unit
+  (1 bps; SPY and the other index ETFs quote a cent or two wide) in the backtest, `replay_policy` and the
+  sweep, recorded in the stored forecasts; at the names' 5 bps the hedge cost 1.5x the basket's cost and was
+  28 of the 2026-10-11 relative run's 33 bps loss.
 - The Portfolio tab and account access are strictly read-only; Flint never places, changes, or cancels an order on any provider.
 - The target is a run-time switch (`FLINT_TARGET=absolute|relative`, `flint/target.py`). The replay
   always stores absolute labels (the hour-ahead log return in bps); with `relative` every consumer

@@ -335,6 +335,7 @@ class Config:
     backtest_night_epochs: float = _env("BACKTEST_NIGHT_EPOCHS", 2.0)  # passes over the history seen so far per simulated day, as the idle trainer does per closed session
     backtest_days: int = _env("BACKTEST_DAYS", 0)             # score only the last N days (0 = all timestamped history)
     backtest_cost_bps: float = _env("BACKTEST_COST_BPS", 5.0)  # round-trip cost per unit of position in the backtest (the live book charges the quoted spread)
+    hedge_cost_bps: float = _env("HEDGE_COST_BPS", 1.0)       # round-trip cost per unit of index hedge in the backtest and the replay: SPY, QQQ, IWM, SMH and XLF quote a cent or two wide (a fraction of a bp to 2 bps), and at the names' 5 bps the hedge cost 1.5x the basket's cost (2026-10-11)
     backtest_warm_days: int = _env("BACKTEST_WARM_DAYS", 10)   # training-only days before scoring starts, like warmup
     backtest_target: str = _env("BACKTEST_TARGET", "both")    # absolute | relative | both (two runs, each on half the budget, reported side by side)
     memory_floor_gb: float = _env("MEMORY_FLOOR_GB", 10.0)   # GB that must stay free: the backtest sizes its net to fit above it and stops below it; deep paging pauses near it (a live control)

@@ -57,10 +57,13 @@ def test_replay_reproduces_the_backtest_on_both_targets(tmp_path):
     cfg = _cfg()
     rx, ry, rmask, rt = _replay()
     for target in ("absolute", "relative"):
+        cost = 0.0                                                         # the names trade free, the hedge pays 0.5 bps
         res = run_backtest(cfg, rx, ry, rmask, rt, device="cpu", symbols=cfg.symbols, warm_days=3, steps_per_day=2,
-                           target=target, index_symbols="SPY", beta_shrink=0.0, cost_bps=0.0, store=str(tmp_path / "fc"))
+                           target=target, index_symbols="SPY", beta_shrink=0.0, cost_bps=cost, hedge_cost_bps=0.5,
+                           store=str(tmp_path / "fc"))
         fc = load_forecasts(res["config"]["forecasts"])
-        rep = replay_policy(fc, cfg, 0.0)
+        assert fc["hedge_cost_bps"] == 0.5 and res["config"]["hedge_cost_bps"] == 0.5
+        rep = replay_policy(fc, cfg, cost)                                 # the hedge cost comes from the stored run
         t = res["totals"]
         assert rep["days"] == t["days"] and rep["signals"] == t["signals"] > 0, (target, rep["signals"], t["signals"])
         assert abs(rep["net_bps"] - t["net_bps"]) < 1e-6 * max(1.0, abs(t["net_bps"])), (target, rep["net_bps"], t["net_bps"])
@@ -69,6 +72,36 @@ def test_replay_reproduces_the_backtest_on_both_targets(tmp_path):
         assert abs(rep["pinball"] - t["pinball"]) < 1e-9 and abs(rep["max_drawdown_bps"] - t["max_drawdown_bps"]) < 1e-9
         per_day = [d["net_bps"] for d in res["days"]]
         assert np.allclose(rep["nets"], per_day)
+
+
+def _always_long_fc(n_days=8, bars=10):
+    """Two names that always trade long at full size with a loading of 1 on one index, so the
+    hedge's gross equals the basket's: every bar sells one unit of SPY against one unit of names."""
+    n = n_days * bars
+    q50 = np.full((n, 3), 50.0, dtype=np.float32)
+    q = np.stack([q50 - 20, q50 - 10, q50, q50 + 10, q50 + 20], axis=-1)
+    beta = np.zeros((n_days, 3, 1), dtype=np.float32); beta[:, :2, 0] = 1.0
+    return {"q": q, "up": np.full((n, 3), 3.0, dtype=np.float32), "dn": np.full((n, 3), -3.0, dtype=np.float32),
+            "y": np.full((n, 3), 10.0, dtype=np.float32), "mask": np.ones((n, 3), dtype=np.uint8), "beta": beta,
+            "day_of": np.repeat(np.arange(n_days), bars), "symbols": ["A", "B", "SPY"], "index": ["SPY"],
+            "target": "relative", "hedge_cost_bps": None}
+
+
+def test_the_index_legs_pay_the_hedge_cost_and_the_names_their_own():
+    cfg = _cfg()
+    fc = _always_long_fc()
+    free = replay_policy(fc, cfg, 0.0, hedge_cost_bps=0.0)["net_bps"]
+    names_only = replay_policy(fc, cfg, 5.0, hedge_cost_bps=0.0)["net_bps"]
+    both = replay_policy(fc, cfg, 5.0, hedge_cost_bps=5.0)["net_bps"]
+    assert free > names_only > both
+    assert abs((names_only - both) - (free - names_only)) < 1e-9          # one unit of hedge per unit of basket: the same bill
+    assert abs(replay_policy(fc, cfg, 5.0)["net_bps"] - both) < 1e-9        # a run that recorded no hedge cost charges the names' cost
+    fc["hedge_cost_bps"] = 1.0
+    assert abs(replay_policy(fc, cfg, 5.0)["net_bps"] - (names_only - (free - names_only) / 5)) < 1e-9   # the stored run's own cost
+    unhedged = dict(fc, index=[])
+    assert abs(replay_policy(unhedged, cfg, 5.0, hedge_cost_bps=0.0)["net_bps"] - replay_policy(unhedged, cfg, 5.0, hedge_cost_bps=9.0)["net_bps"]) < 1e-9
+    sw = run_sweep(fc, cfg, 5.0, grid={"kelly_fraction": [1.0, 0.5]}, max_passes=1)
+    assert sw["hedge_cost_bps"] == 1.0 and run_sweep(unhedged, cfg, 5.0, grid={"kelly_fraction": [1.0, 0.5]}, max_passes=1)["hedge_cost_bps"] is None
 
 
 def test_sweep_tunes_on_the_first_half_and_confirms_on_the_second(tmp_path):

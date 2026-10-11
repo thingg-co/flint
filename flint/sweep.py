@@ -48,6 +48,7 @@ def load_forecasts(path: str | Path) -> dict:
     out["symbols"] = [str(s) for s in out["symbols"]]
     out["index"] = [str(s) for s in out["index"]] if "index" in out else []
     out["target"] = str(out["target"]) if "target" in out else "absolute"
+    out["hedge_cost_bps"] = float(out["hedge_cost_bps"]) if "hedge_cost_bps" in out else None   # runs before 0.5.16 charged the hedge the names' cost
     out["path"] = str(path)
     return out
 
@@ -59,10 +60,12 @@ def _temper(p_raw: np.ndarray, p_scale: float) -> tuple[np.ndarray, np.ndarray]:
 
 
 def replay_policy(fc: dict, cfg, cost_bps: float, overrides: dict | None = None,
-                  day_lo: int | None = None, day_hi: int | None = None) -> dict:
+                  day_lo: int | None = None, day_hi: int | None = None, hedge_cost_bps: float | None = None) -> dict:
     """The backtest's scoring loop over stored forecasts, vectorized over names, for the
     gates in `cfg` with `overrides` applied. Days outside [day_lo, day_hi) are replayed
-    (the calibration state has to evolve through them) but not counted."""
+    (the calibration state has to evolve through them) but not counted. The index legs pay
+    `hedge_cost_bps` per unit, the run's own unless given (the names' cost for runs that
+    predate it)."""
     cfg = copy.copy(cfg)
     for k, v in (overrides or {}).items():
         setattr(cfg, k, v)
@@ -75,6 +78,8 @@ def replay_policy(fc: dict, cfg, cost_bps: float, overrides: dict | None = None,
     taus = np.asarray(cfg.quantiles, dtype=np.float64)
     horizon = int(cfg.horizon)
     cost = float(cost_bps)
+    hcost = fc.get("hedge_cost_bps") if hedge_cost_bps is None else hedge_cost_bps
+    hcost = cost if hcost is None else float(hcost)
     lo = 0 if day_lo is None else int(day_lo)
     hi = int(day_of.max()) + 1 if day_hi is None else int(day_hi)
 
@@ -158,7 +163,8 @@ def replay_policy(fc: dict, cfg, cost_bps: float, overrides: dict | None = None,
             beta = betas[d]
             w[icols] = -(w @ beta)
         ret = float((w * yb).sum()) if not icols else float((np.delete(w, icols) * np.delete(yb, icols)).sum())
-        fee = cost * float(np.abs(w).sum())
+        hedge_gross = float(np.abs(w[icols]).sum()) if icols else 0.0
+        fee = cost * (float(np.abs(w).sum()) - hedge_gross) + hcost * hedge_gross
         day_net[d] = day_net.get(d, 0.0) + ret - fee
         day_bars[d] = day_bars.get(d, 0) + 1
         day_sig[d] = day_sig.get(d, 0) + n_sig
@@ -187,7 +193,7 @@ def _objective(r: dict) -> float:
 
 
 def run_sweep(fc: dict, cfg, cost_bps: float, grid: dict | None = None, max_passes: int = 3,
-              progress=None) -> dict:
+              progress=None, hedge_cost_bps: float | None = None) -> dict:
     """Coordinate descent over `grid` on the first half of the scored days, confirmed on the
     second half. Returns the report: the current gates and the proposal with both halves'
     results, whether the proposal is accepted, and every step taken."""
@@ -197,9 +203,11 @@ def run_sweep(fc: dict, cfg, cost_bps: float, grid: dict | None = None, max_pass
     split = n_days // 2
     if n_days < 6:
         return {"error": f"only {n_days} scored days; the sweep needs at least 6", "ran_at": t0}
+    hc = fc.get("hedge_cost_bps") if hedge_cost_bps is None else hedge_cost_bps
+    hc = float(cost_bps) if hc is None else float(hc)
     current = {k: getattr(cfg, k) for k in grid}
     knobs = dict(current)
-    best = replay_policy(fc, cfg, cost_bps, knobs, 0, split)
+    best = replay_policy(fc, cfg, cost_bps, knobs, 0, split, hc)
     steps: list[dict] = []
     evals = 1
     for _pass in range(max_passes):
@@ -210,7 +218,7 @@ def run_sweep(fc: dict, cfg, cost_bps: float, grid: dict | None = None, max_pass
                 if v == knobs[k]:
                     continue
                 trial = dict(knobs, **{k: v})
-                r = replay_policy(fc, cfg, cost_bps, trial, 0, split)
+                r = replay_policy(fc, cfg, cost_bps, trial, 0, split, hc)
                 evals += 1
                 if progress:
                     progress(evals)
@@ -225,9 +233,9 @@ def run_sweep(fc: dict, cfg, cost_bps: float, grid: dict | None = None, max_pass
         if not changed:
             break
     proposal = {k: v for k, v in knobs.items() if v != current[k]}
-    cur_tune = replay_policy(fc, cfg, cost_bps, current, 0, split)
-    cur_conf = replay_policy(fc, cfg, cost_bps, current, split, n_days)
-    prop_conf = replay_policy(fc, cfg, cost_bps, knobs, split, n_days) if proposal else cur_conf
+    cur_tune = replay_policy(fc, cfg, cost_bps, current, 0, split, hc)
+    cur_conf = replay_policy(fc, cfg, cost_bps, current, split, n_days, hc)
+    prop_conf = replay_policy(fc, cfg, cost_bps, knobs, split, n_days, hc) if proposal else cur_conf
     accepted = bool(proposal) and _objective(prop_conf) > _objective(cur_conf) + 1e-9
     thin = bool(proposal) and is_thin(prop_conf)
     why = ("no setting beat the current gates on the tuning half" if not proposal else
@@ -238,7 +246,8 @@ def run_sweep(fc: dict, cfg, cost_bps: float, grid: dict | None = None, max_pass
                 "that is a hint to tighten the gates, not a setting to copy")
     strip = lambda r: {k: v for k, v in r.items() if k != "nets"}  # noqa: E731
     return {"ran_at": t0, "elapsed_s": time.time() - t0, "forecasts": fc.get("path"), "target": fc.get("target"),
-            "cost_bps": float(cost_bps), "days": n_days, "split_day": split, "evaluations": evals,
+            "cost_bps": float(cost_bps), "hedge_cost_bps": (hc if fc.get("index") else None),
+            "days": n_days, "split_day": split, "evaluations": evals,
             "current": {"knobs": current, "tune": strip(cur_tune), "confirm": strip(cur_conf)},
             "proposal": ({"knobs": proposal, "all": knobs, "tune": strip(best), "confirm": strip(prop_conf)} if proposal else None),
             "accepted": accepted, "thin": thin, "why": why, "steps": steps}
