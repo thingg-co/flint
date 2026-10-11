@@ -38,7 +38,11 @@ ENV=(
     FLINT_BRIEF_OPENAI_BASE=http://127.0.0.1:8080/v1   # llama-server on :8080 -- never a cloud API
 )
 
-if command -v systemd-run >/dev/null 2>&1 && systemctl --user is-system-running >/dev/null 2>&1; then
+# "degraded" is a running manager with some unrelated failed unit (a crash notifier, say); only
+# a manager that is not running at all sends us to the nohup fallback, which no `systemctl stop`
+# can reach.
+case "$(systemctl --user is-system-running 2>/dev/null)" in running|degraded) HAVE_SYSTEMD=1 ;; *) HAVE_SYSTEMD= ;; esac
+if command -v systemd-run >/dev/null 2>&1 && [ -n "$HAVE_SYSTEMD" ]; then
     # A transient user unit of its own, so it outlives the oneshot timer service that calls us
     # and logs to the journal.
     systemd-run --user --unit=flint-run --collect --quiet \

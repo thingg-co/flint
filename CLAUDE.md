@@ -39,7 +39,7 @@ starts Flint each weekday at 19:45 local (08:45 ET, 45 minutes before the 09:30 
 `.venv/bin/python -m flint` as a transient user unit `flint-run`, so the launcher is also the way
 to start by hand: `flint-start`, then `journalctl --user -u flint-run -f` for the log, and
 `systemctl --user stop flint-run` to stop; a stop returns in seconds and saves the checkpoint on
-the way out. The `install.sh` script handles the one-time setup (it checks for `loginctl
+the way out. The launcher uses the unit whenever the user manager reports `running` or `degraded` (degraded is a running manager with some unrelated failed unit; before 0.5.15 it sent the start to the `nohup` fallback, a bare process in `state/flint.log` that no `systemctl stop` can reach). The `install.sh` script handles the one-time setup (it checks for `loginctl
 enable-linger` and for the venv Python's dev headers, and prints the command for whichever is
 missing). A start unloads any llama-server unit first, so a daytime cl session ends at 19:45
 unless Flint is already up.
