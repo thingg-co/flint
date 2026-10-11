@@ -1431,7 +1431,14 @@ async function fetchBacktest() {
   try {
     const r = await fetch("/api/backtest"); if (!r.ok) return;
     const j = await r.json();
-    if ("progress" in j) { const { backtest: _raw, ...summary } = j; state.backtest = summary; renderBacktest(); }   // the summary the socket pushes, minus the raw report
+    if (!("progress" in j)) return;
+    const { backtest: raw, ...summary } = j;
+    if ("totals" in summary || !raw) state.backtest = summary;            // the summary the socket pushes (0.5.15), minus the raw report
+    else {                                                                 // a server from before 0.5.15 sends the raw report beside the progress: shape it here
+      const syms = Object.entries(raw.symbols || {}).filter(([, v]) => v && v.signals).sort((a, b) => a[1].net_bps - b[1].net_bps).map(([sym, v]) => ({ sym, ...v }));
+      state.backtest = { ...raw, progress: j.progress, sweep: j.sweep || null, days: (raw.days || []).slice(-260), best: syms.slice(-8).reverse(), worst: syms.slice(0, 8) };
+    }
+    renderBacktest();
   } catch (e) { /* offline: the next push fills it */ }
 }
 
