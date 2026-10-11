@@ -172,7 +172,8 @@ class PaperBook:
         contracts = notional / (100.0 * spot * dl)
         if eq:                                              # premium at risk capped as a share of equity
             contracts = min(contracts, eq * self.option_max_frac / (prem * 100.0))
-        contracts = float(int(contracts + 0.5)) if eq else contracts   # whole contracts, as a broker fills them; a hedge keeps its exact size
+        if eq:                                              # whole contracts, as a broker fills them, never past the premium cap; a hedge keeps its exact size
+            contracts = float(min(int(contracts + 0.5), int(eq * self.option_max_frac / (prem * 100.0))))
         if contracts < (1.0 if eq else 0.01):
             return
         cost = contracts * prem * 100.0

@@ -220,4 +220,4 @@ def test_paper_book_takes_the_hedge_weight_uncapped_and_outside_the_leverage_sca
     assert abs(put["contracts"] - 60_000.0 / (100.0 * 500.0 * 0.5)) < 1e-6   # delta-equivalent to 60% of equity
     capped = PaperBook(start=100_000.0, cost_bps=0.0, max_weight=0.15)
     capped.rebalance({"A": 0.15, "SPY": -0.6}, prices, 1.0, put_quotes={"SPY": pq})
-    assert capped.puts["SPY"]["contracts"] < put["contracts"] / 3     # without the exemption the weight is clipped to 15% and the premium capped
+    assert capped.puts["SPY"]["contracts"] <= put["contracts"] / 2    # without the exemption the weight is clipped to 15% and the premium capped (one whole contract)

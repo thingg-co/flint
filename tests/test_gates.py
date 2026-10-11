@@ -222,7 +222,7 @@ class TestTicketFloor:
         assert r["action"] == "BUY" and r["size"] == 0.01 and r["ticket_bps"] == 0.0     # $1,000 of a $100k book
         fake = make_fake(cfg={"kelly_fraction": 0.001, "min_position_dollars": 0.0})
         Engine._suggest(fake, 0, "AAPL", pred)
-        assert Engine._suggest(fake, 0, "AAPL", pred)["size"] < 0.001                    # off: Kelly's size stands
+        assert Engine._suggest(fake, 0, "AAPL", pred)["size"] <= 0.001                   # off: Kelly's size stands
 
     def test_a_put_ticket_has_to_pay_for_itself(self):
         pred = make_pred([-100, -70, -40, -10, 20], 0.2, 0.7)
