@@ -277,12 +277,15 @@ def _sweep() -> None:
     cost = float(cfg.backtest_cost_bps)
     hedge = None                                                            # the run's own unless overridden
     path = None
+    single = False                                                          # replay the first member's own forecasts, not the ensemble's
     i = 0
     while i < len(argv):
         if argv[i] == "--cost" and i + 1 < len(argv):
             cost = float(argv[i + 1]); i += 2; continue
         if argv[i] == "--hedge-cost" and i + 1 < len(argv):
             hedge = float(argv[i + 1]); i += 2; continue
+        if argv[i] == "--single":
+            single = True; i += 1; continue
         path = argv[i]; i += 1
     if not path:
         cands = sorted(state.glob("backtest_forecasts_*.npz"), key=lambda p: p.stat().st_mtime)
@@ -290,9 +293,13 @@ def _sweep() -> None:
             print(f"no stored forecasts under {state}; run a backtest first")
             raise SystemExit(1)
         path = str(cands[-1])
-    fc = load_forecasts(path)
+    fc = load_forecasts(path, member=0 if single else None)
+    if single and fc.get("member") is None:
+        print("this run stored no single member's forecasts (it ran one net); replaying the run as it is")
     hc = fc.get("hedge_cost_bps") if hedge is None else hedge
-    print(f"sweeping the gates over {len(fc['day_of'])} forecasts, {int(fc['day_of'].max()) + 1} days ({fc['target']} target), "
+    print(f"sweeping the gates over {len(fc['day_of'])} forecasts, {int(fc['day_of'].max()) + 1} days ({fc['target']} target"
+          + (f", {int(fc['members'])} members" if int(fc.get("members", 1)) > 1 and fc.get("member") is None else "")
+          + (", the first member alone" if fc.get("member") is not None else "") + f"), "
           f"cost {cost:g} bps" + (f", hedge {hc:g} bps" if fc.get("index") and hc is not None else ""))
     res = run_sweep(fc, cfg, cost, progress=lambda n: print(f"\r  {n} settings tried   ", end="", flush=True), hedge_cost_bps=hedge)
     print()
@@ -353,7 +360,8 @@ def _backtest() -> None:
             pass
     opts = {"days": int(cfg.backtest_days), "hours": float(cfg.backtest_hours), "cost": float(cfg.backtest_cost_bps),
             "hedge": float(cfg.hedge_cost_bps),
-            "warm": int(cfg.backtest_warm_days), "night": float(cfg.backtest_night_epochs), "target": str(cfg.backtest_target)}
+            "warm": int(cfg.backtest_warm_days), "night": float(cfg.backtest_night_epochs), "target": str(cfg.backtest_target),
+            "members": int(getattr(cfg, "backtest_members", 1) or 1)}
     argv = sys.argv[2:]
     for i, a in enumerate(argv):
         if a.startswith("--") and a[2:] in opts and i + 1 < len(argv):
@@ -382,7 +390,7 @@ def _backtest() -> None:
                                     progress=prog, hours=opts["hours"] / len(variants), days=opts["days"], warm_days=opts["warm"],
                                     cost_bps=opts["cost"], hedge_cost_bps=opts["hedge"], preset=preset, night_epochs=opts["night"], target=variant,
                                     index_symbols=str(cfg.index_symbols), beta_windows=int(cfg.beta_windows),
-                                    beta_shrink=float(cfg.beta_shrink), store=str(state / "backtest_forecasts")))
+                                    beta_shrink=float(cfg.beta_shrink), store=str(state / "backtest_forecasts"), members=opts["members"]))
         print()
         r = reports[-1]
         if r.get("error"):

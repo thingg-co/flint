@@ -43,14 +43,24 @@ def is_thin(r: dict) -> bool:
     return bool(r.get("days")) and r.get("signals", 0) / r["days"] < THIN_SIGNALS_PER_DAY
 
 
-def load_forecasts(path: str | Path) -> dict:
+def load_forecasts(path: str | Path, member: int | None = None) -> dict:
+    """The stored forecasts of a run. `member=0` replays the first member's own forecasts in
+    place of the ensemble's when the run stored them (`backtest_members` > 1), with the
+    meta-labeler's odds dropped (they were learned on the ensemble's forecasts), so one net and
+    the ensemble can be compared over the same days; `out["member"]` says which was loaded."""
     z = np.load(path, allow_pickle=False)
     out = {k: z[k] for k in z.files}
+    out["members"] = int(out["members"]) if "members" in out else 1
+    out["member"] = None
+    if member == 0 and "q0" in out:
+        out["q"], out["up"], out["dn"] = out.pop("q0"), out.pop("up0"), out.pop("dn0")
+        out["meta"] = None
+        out["member"] = 0
     out["symbols"] = [str(s) for s in out["symbols"]]
     out["index"] = [str(s) for s in out["index"]] if "index" in out else []
     out["target"] = str(out["target"]) if "target" in out else "absolute"
     out["hedge_cost_bps"] = float(out["hedge_cost_bps"]) if "hedge_cost_bps" in out else None   # runs before 0.5.16 charged the hedge the names' cost
-    out["meta"] = out["meta"] if "meta" in out else None                                        # the meta-labeler's odds per forecast (0.5.17), NaN before it had learned
+    out["meta"] = out.get("meta") if "meta" in out else None                                    # the meta-labeler's odds per forecast (0.5.17), NaN before it had learned
     out["path"] = str(path)
     return out
 

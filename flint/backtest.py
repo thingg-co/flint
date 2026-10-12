@@ -80,7 +80,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                  steps_per_day: int = 0, compile_: bool | None = None, hooks: dict | None = None,
                  preset: str = "", night_epochs: float = 0.0, target: str = "absolute", index_symbols: str = "SPY",
                  beta_windows: int = 6000, beta_shrink: float = 400.0, store: str | None = None,
-                 hedge_cost_bps: float | None = None) -> dict:
+                 hedge_cost_bps: float | None = None, members: int = 1) -> dict:
     """See the module docstring. Each day trains the live online budget (steps_per_label per
     bar) plus `night_epochs` passes over everything seen so far, the way the idle trainer does
     each closed session; `hours` > 0 caps the run by shrinking that budget to fit the remaining
@@ -88,8 +88,13 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
     warm_days before them). `store` names a path prefix: every raw forecast the run makes (the
     quantiles, the direction probabilities, the label it was scored against, the mask and the
     loadings in force) is written to `<store>_<target>.npz` so the policy's gates can be swept
-    over them in seconds without re-running the net. Returns the report as a JSON-ready dict."""
+    over them in seconds without re-running the net. `members` > 1 runs an ensemble as the live
+    learner would (the members train in turn, each step is one member's, the forecast is their
+    mean) and stores the first member's own forecasts next to the ensemble's (`q0`, `up0`, `dn0`),
+    so the sweep can replay one net against the ensemble over the same days. Returns the report as
+    a JSON-ready dict."""
     t0 = time.time()
+    members = max(1, int(members or 1))
     hooks = hooks or {}
     cost = float(cfg.cost_bps if cost_bps is None else cost_bps)
     hcost = cost if hedge_cost_bps is None else float(hedge_cost_bps)     # the index legs' own round trip; the names pay `cost`
@@ -124,27 +129,33 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
 
     dev = torch.device(device)
     torch.manual_seed(0)
-    model = FlintNet(n_feat, n_assets, cfg.n_quantiles, cfg.d_model, cfg.dilations, cfg.n_experts, cfg.n_heads,
-                     cfg.dropout).to(dev)
-    opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-    train_model = model
+    models = [FlintNet(n_feat, n_assets, cfg.n_quantiles, cfg.d_model, cfg.dilations, cfg.n_experts, cfg.n_heads,
+                       cfg.dropout).to(dev) for _ in range(members)]
+    opts = [torch.optim.AdamW(m.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay) for m in models]
+    model = models[0]
+    train_models = list(models)
     use_compile = (getattr(cfg, "compile", False) if compile_ is None else compile_) and dev.type == "cuda"
     if use_compile:
         try:
-            train_model = torch.compile(model, dynamic=False)
+            train_models = [torch.compile(m, dynamic=False) for m in models]
         except Exception:  # noqa: BLE001
-            train_model = model
+            train_models = list(models)
     rng = np.random.default_rng(0)
     taus = np.asarray(cfg.quantiles, dtype=np.float64)
+    step_i = 0
 
     def train(seen: np.ndarray, steps: int) -> float | None:
-        nonlocal train_model
-        model.train()
+        nonlocal train_models, step_i
+        for m in models:
+            m.train()
         batch = min(cfg.batch_size, len(seen))
         n_recent = min(cfg.recent_n, len(seen))
         k_recent = int(batch * cfg.recent_frac)
         last = None
         for _ in range(steps):
+            k = step_i % members                                               # the members take turns, as live
+            model_k, opt, train_model = models[k], opts[k], train_models[k]
+            step_i += 1
             recent = seen[len(seen) - 1 - rng.integers(0, n_recent, k_recent)]
             uniform = seen[rng.integers(0, len(seen), batch - k_recent)]
             idx = np.concatenate([recent, uniform])
@@ -157,32 +168,41 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                 try:
                     q, up, dn, gate, _ = train_model(x)
                 except Exception:  # noqa: BLE001
-                    if train_model is model:
+                    if train_model is model_k:
                         raise
                     log.warning("backtest: torch.compile failed on its first step; training eager", exc_info=True)
-                    train_model = model
+                    train_models = list(models)
+                    train_model = model_k
                     q, up, dn, gate, _ = train_model(x)
             loss, _parts = flint_loss(q.float(), up.float(), dn.float(), gate.float(), y, cfg.quantiles,
                                       label_smoothing=cfg.label_smoothing, threshold=cfg.direction_threshold_bps, mask=mk)
             opt.zero_grad(set_to_none=True)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(model_k.parameters(), 1.0)
             opt.step()
             last = float(loss.item())
         return last
 
     @torch.no_grad()
     def predict(idx: np.ndarray):
-        model.eval()
-        qs, ups, dns, gs = [], [], [], []
+        """The ensemble's forecasts for the day's windows (quantiles and gate averaged, the
+        direction heads as mean probabilities) and the first member's own, for the store."""
+        for m in models:
+            m.eval()
+        qs, ups, dns, gs, q0s, up0s, dn0s = [], [], [], [], [], [], []
         for k in range(0, len(idx), 32):
             x = torch.from_numpy(rx[idx[k:k + 32]]).to(dev)
-            q, up, dn, gate, _ = model(x)
-            qs.append(q.float().cpu().numpy())
-            ups.append(torch.sigmoid(up.float()).cpu().numpy())
-            dns.append(torch.sigmoid(dn.float()).cpu().numpy())
-            gs.append(gate.float().cpu().numpy())                              # which experts the regime gate leaned on
-        return np.concatenate(qs), np.concatenate(ups), np.concatenate(dns), np.concatenate(gs)
+            outs = [m(x) for m in models]
+            q = torch.stack([o[0].float() for o in outs]).mean(0)
+            up = torch.stack([torch.sigmoid(o[1].float()) for o in outs]).mean(0)
+            dn = torch.stack([torch.sigmoid(o[2].float()) for o in outs]).mean(0)
+            gate = torch.stack([o[3].float() for o in outs]).mean(0)
+            qs.append(q.cpu().numpy()); ups.append(up.cpu().numpy()); dns.append(dn.cpu().numpy())
+            gs.append(gate.cpu().numpy())                                      # which experts the regime gate leaned on
+            q0s.append(outs[0][0].float().cpu().numpy()); up0s.append(torch.sigmoid(outs[0][1].float()).cpu().numpy())
+            dn0s.append(torch.sigmoid(outs[0][2].float()).cpu().numpy())
+        first = (np.concatenate(q0s), np.concatenate(up0s), np.concatenate(dn0s)) if members > 1 else None
+        return np.concatenate(qs), np.concatenate(ups), np.concatenate(dns), np.concatenate(gs), first
 
     # lagged live state: these only move when a label resolves, one horizon after the forecast
     band_scale, p_scale = 2.0, 0.3
@@ -221,7 +241,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
     steps_lo = steps_hi = 0
     stopped = False
     n_scored = len(groups) - warm_days
-    kept: dict[str, list] = {k: [] for k in ("rows", "q", "up", "dn", "y", "mask", "beta", "gate", "meta")}   # the forecasts, when `store` is set
+    kept: dict[str, list] = {k: [] for k in ("rows", "q", "up", "dn", "y", "mask", "beta", "gate", "meta", "q0", "up0", "dn0")}   # the forecasts, when `store` is set
 
     for di, (date, idx) in enumerate(groups):
         if should_stop and should_stop():
@@ -234,11 +254,13 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
         if scoring:
             if hooks.get("on_predict"):
                 hooks["on_predict"](di)
-            q_all, up_all, dn_all, g_all = predict(idx)
+            q_all, up_all, dn_all, g_all, first = predict(idx)
             if store:
                 kept["rows"].append(idx); kept["q"].append(q_all.astype(np.float32)); kept["up"].append(up_all.astype(np.float32))
                 kept["dn"].append(dn_all.astype(np.float32)); kept["y"].append(relative(ry[idx], beta, icols).astype(np.float32))
                 kept["mask"].append(rmask[idx].astype(np.uint8)); kept["beta"].append(beta.copy()); kept["gate"].append(g_all.astype(np.float32))
+                if first is not None:
+                    kept["q0"].append(first[0].astype(np.float32)); kept["up0"].append(first[1].astype(np.float32)); kept["dn0"].append(first[2].astype(np.float32))
         d = {"signals": 0, "gross": 0.0, "net": 0.0, "hits": 0, "decisions": 0, "pin": 0.0, "pin_n": 0, "inside": 0, "inside_n": 0, "long": 0.0,
              "unhedged": 0.0}
         day_meta: list = []                                                 # the meta-labeler's answer per forecast, stored with the run
@@ -373,13 +395,15 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
         try:                                                                # a failed save must never cost the run
             rows = np.concatenate(kept["rows"])
             stored = f"{store}_{target.split()[0]}.npz"
-            np.savez(stored, rows=rows, t=rt[rows], q=np.concatenate(kept["q"]), up=np.concatenate(kept["up"]),
+            single = ({"q0": np.concatenate(kept["q0"]), "up0": np.concatenate(kept["up0"]), "dn0": np.concatenate(kept["dn0"])}
+                      if kept["q0"] else {})                                    # one member's own forecasts, for the sweep's comparison
+            np.savez(stored, rows=rows, t=rt[rows], q=np.concatenate(kept["q"]), up=np.concatenate(kept["up"]), **single,
                      dn=np.concatenate(kept["dn"]), y=np.concatenate(kept["y"]), mask=np.concatenate(kept["mask"]),
                      beta=np.stack(kept["beta"]), gate=np.concatenate(kept["gate"]),
                      meta=(np.concatenate(kept["meta"]) if kept["meta"] else np.full((len(rows), n_assets), np.nan, dtype=np.float32)),
                      day_of=np.concatenate([np.full(len(r), i) for i, r in enumerate(kept["rows"])]),
                      symbols=np.array(symbols), index=np.array([symbols[c] for c in icols]), target=np.array(target),
-                     quantiles=np.asarray(cfg.quantiles), cost_bps=np.array(cost), hedge_cost_bps=np.array(hcost))
+                     quantiles=np.asarray(cfg.quantiles), cost_bps=np.array(cost), hedge_cost_bps=np.array(hcost), members=np.array(members))
         except Exception as e:  # noqa: BLE001
             log.warning("backtest: could not store the forecasts at %s: %s", store, e)
             stored = None
@@ -387,12 +411,12 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                             "hit": (float(sym_hit[i] / sym_dec[i]) if sym_dec[i] else None), "calls": int(sym_dec[i])}
                for i in range(n_assets)}
     return {"ran_at": t0, "elapsed_s": time.time() - t0, "stopped": stopped,
-            "config": {"preset": preset, "d_model": cfg.d_model, "params": sum(p.numel() for p in model.parameters()),
+            "config": {"preset": preset, "d_model": cfg.d_model, "params": sum(p.numel() for m in models for p in m.parameters()), "members": members,
                        "cost_bps": cost, "hedge_cost_bps": hcost, "meta_cost_bps": meta_cost, "meta_fits": meta.fits, "warm_days": warm_days, "hours": hours, "night_epochs": night_epochs,
                        "target": target, "index": [symbols[c] for c in icols] if icols else None, "forecasts": stored,
                        "beta": ({symbols[i]: {symbols[c]: round(float(beta[i, j]), 2) for j, c in enumerate(icols)}
                                  for i in range(n_assets) if i not in icols} if icols else None),
-                       "compiled": train_model is not model,
+                       "compiled": train_models[0] is not models[0],
                        "steps_per_day": [steps_lo, steps_hi], "device": device, "history_days": len(groups),
                        "windows": int(len(keyed))},
             "days": day_rows, "totals": totals, "symbols": per_sym}

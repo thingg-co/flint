@@ -201,6 +201,7 @@ class Config:
     # The target: "absolute" trains on each name's log return; "relative" on the return minus beta
     # times the index's (the market-relative abnormal return), with the index hedged in the book.
     # The replay stores absolute labels either way, so this is a run-time switch, not a reset.
+    members: int = _env("MEMBERS", 1)                         # ensemble members in the live learner (item 4): they train in turn (each gets 1/members of the steps) and forecast as one; the activations dominate memory, so a member costs its parameters only, and the step `members` times
     target: str = _env("TARGET", "absolute")
     feature_set: str = _env("FEATURE_SET", "core")             # core (the 28 inputs of 0.5.18) | extended (+ the 2d opinions and the earnings flags); flint.features reads the env at import, since the net's shape follows it, and a change resets the model once
     index_symbols: str = _env("INDEX_SYMBOLS", "SPY,QQQ,IWM,SMH,XLF")  # "the market" for the relative target: modeled index names, first = the prior; unmodeled ones are ignored
@@ -342,6 +343,7 @@ class Config:
     hedge_cost_bps: float = _env("HEDGE_COST_BPS", 1.0)       # round-trip cost per unit of index hedge in the backtest and the replay: SPY, QQQ, IWM, SMH and XLF quote a cent or two wide (a fraction of a bp to 2 bps), and at the names' 5 bps the hedge cost 1.5x the basket's cost (2026-10-11)
     backtest_warm_days: int = _env("BACKTEST_WARM_DAYS", 10)   # training-only days before scoring starts, like warmup
     backtest_target: str = _env("BACKTEST_TARGET", "both")    # absolute | relative | both (two runs, each on half the budget, reported side by side)
+    backtest_members: int = _env("BACKTEST_MEMBERS", 1)       # ensemble members in the backtest's net (item 4); > 1 also stores the first member's own forecasts, so `flint sweep --single` replays one net against the ensemble
     memory_floor_gb: float = _env("MEMORY_FLOOR_GB", 10.0)   # GB that must stay free: the backtest sizes its net to fit above it and stops below it; deep paging pauses near it (a live control)
 
     def __post_init__(self):

@@ -773,7 +773,7 @@ class Engine:
             "config": {
                 "symbols": self.symbols, "bar_seconds": cfg.bar_seconds, "horizon": cfg.horizon, "window": cfg.window, "max_universe": cfg.max_universe, "chart_bars": cfg.chart_bars,
                 "quantiles": list(cfg.quantiles), "min_labels": cfg.min_labels, "features": FEATURES,
-                "model": {"params": self.learner.n_params, "d_model": cfg.d_model, "experts": cfg.n_experts,
+                "model": {"params": self.learner.n_params, "members": self.learner.members, "d_model": cfg.d_model, "experts": cfg.n_experts,
                           "dilations": list(cfg.dilations), "heads": cfg.n_heads, "window": cfg.window,
                           "receptive_field": self.learner.model.receptive_field,
                           "device": cfg.device, "ms_per_step": (self.autotune_info or {}).get("ms_per_step"),
@@ -1293,7 +1293,8 @@ class Engine:
                         preset=preset, night_epochs=float(cfg.backtest_night_epochs),
                         target=variant, index_symbols=str(cfg.index_symbols),
                         beta_windows=int(cfg.beta_windows), beta_shrink=float(cfg.beta_shrink),
-                        store=os.path.join(cfg.state_dir, "backtest_forecasts")))
+                        store=os.path.join(cfg.state_dir, "backtest_forecasts"),
+                        members=int(getattr(cfg, "backtest_members", 1) or 1)))
                     done.append(variant_summary(reports[-1]))
                     loop.call_soon_threadsafe(self._publish, {"type": "backtest", "backtest": self.backtest_summary()})
                 return combine_reports(reports)

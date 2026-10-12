@@ -1,6 +1,6 @@
 [project]
 name = "flint"
-version = "0.5.19"
+version = "0.5.20"
 description = "Continuously learning market model with a live web dashboard"
 authors = [{ name = "thingg, LLC" }]
 license = "PolyForm-Noncommercial-1.0.0"

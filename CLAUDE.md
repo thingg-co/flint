@@ -267,6 +267,22 @@ unless Flint is already up.
   not `_build`) and its state rides in the checkpoint's `extra["meta"]`, kept through a migration like the
   book and the normalizer. The band-implied P(move clears the cost) is not a probability (item 6) and sizing
   by any such number is only exposure: the meta-labeler is a gate.
+- The learner is an ensemble of `members` nets (`FLINT_MEMBERS`, 1 by default; item 4, 0.5.20): the members
+  train in turn, each step on its own batch (so each sees 1/members of the steps), and forecast as one
+  (`OnlineLearner._ensemble`: quantiles, gate and attention averaged, the direction heads as the mean
+  probability returned as logits, so the loss and `predict` read the same shapes as a single net).
+  `learner.model` / `opt` / `train_model` are the first member, for the code and tests that speak of one
+  net. The activations dominate a net's memory (a 4XL at 362 names peaks at 52.8 GB with 19.7M
+  parameters) and the members run one after another, so an ensemble costs its extra parameters and Adam
+  state only, and `members` times the step (warmup and the idle trainer's epochs stretch by the same
+  factor; the autotune's budget is per member-step). The checkpoint keeps the first member under the old
+  keys and the rest under `members` / `member_opts`, so a one-member checkpoint seeds an ensemble (the
+  others start fresh, with a warning) and an ensemble's first member serves a one-member run; a universe
+  migration moves every member's embedding rows. The backtest runs `backtest_members` nets the same way
+  and, above one, stores the first member's own forecasts (`q0`, `up0`, `dn0`) with the ensemble's, so
+  `flint sweep --single` (`load_forecasts(path, member=0)`) replays one net against the ensemble over the
+  same days with the meta odds dropped. Change `_ensemble`, the backtest's `predict` and the sweep's loader
+  together.
 - The Portfolio tab and account access are strictly read-only; Flint never places, changes, or cancels an order on any provider.
 - The target is a run-time switch (`FLINT_TARGET=absolute|relative`, `flint/target.py`). The replay
   always stores absolute labels (the hour-ahead log return in bps); with `relative` every consumer

@@ -61,13 +61,14 @@ class OnlineLearner:
         dev = pick_device(cfg.device)
         configure_backend(dev)
         self.device = torch.device(dev)
-        self.model = FlintNet(n_features, cfg.n_assets, cfg.n_quantiles, cfg.d_model, cfg.dilations,
-                              cfg.n_experts, cfg.n_heads, cfg.dropout).to(self.device)
-        self.opt = torch.optim.AdamW(self.model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-        self.compile_broken = False       # set when a compiled step fails; eager for the rest of the run
-        self.train_model = self._compiled(self.model)
-        self.lock = threading.Lock()
         self.n_features = n_features
+        self.members = max(1, int(getattr(cfg, "members", 1) or 1))   # an ensemble: the members train in turn and forecast as one (item 4)
+        self.compile_broken = False       # set when a compiled step fails; eager for the rest of the run
+        self.models: list[FlintNet] = []
+        self.opts: list[torch.optim.Optimizer] = []
+        self.train_models: list = []
+        self._build_members()
+        self.lock = threading.Lock()
         # The target. The replay keeps absolute labels; with the relative target every consumer
         # (training, validation, live scoring) sees the residual against the modeled index names
         # instead, so the switch needs no reset. No columns means absolute, also when no index
@@ -91,6 +92,44 @@ class OnlineLearner:
         self.pinball_ema: float | None = None
         self.bce_ema: float | None = None
         self.rng = np.random.default_rng(0)
+
+    def _build_members(self) -> None:
+        """Fresh members, each from the next draw of the global seed, so they differ. The
+        activations dominate a net's memory and the members train and forecast one after another,
+        so an ensemble costs its parameters and optimizer state only, and `members` times the step."""
+        cfg = self.cfg
+        self.models, self.opts, self.train_models = [], [], []
+        for _ in range(self.members):
+            model = FlintNet(self.n_features, cfg.n_assets, cfg.n_quantiles, cfg.d_model, cfg.dilations,
+                             cfg.n_experts, cfg.n_heads, cfg.dropout).to(self.device)
+            self.models.append(model)
+            self.opts.append(torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay))
+            self.train_models.append(self._compiled(model))
+
+    # the first member, for the code (and tests) that speak of one net
+    @property
+    def model(self):
+        return self.models[0]
+
+    @model.setter
+    def model(self, m):
+        self.models[0] = m
+
+    @property
+    def opt(self):
+        return self.opts[0]
+
+    @opt.setter
+    def opt(self, o):
+        self.opts[0] = o
+
+    @property
+    def train_model(self):
+        return self.train_models[0]
+
+    @train_model.setter
+    def train_model(self, m):
+        self.train_models[0] = m
 
     def _alloc(self) -> None:
         cfg = self.cfg
@@ -120,10 +159,7 @@ class OnlineLearner:
         cfg = self.cfg
         with self.lock:
             torch.manual_seed(int(time.time()) % 100000)
-            self.model = FlintNet(self.rx.shape[-1], cfg.n_assets, cfg.n_quantiles, cfg.d_model, cfg.dilations,
-                                  cfg.n_experts, cfg.n_heads, cfg.dropout).to(self.device)
-            self.opt = torch.optim.AdamW(self.model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-            self.train_model = self._compiled(self.model)
+            self._build_members()
             self.steps = 0
             self.loss_ema = self.pinball_ema = self.bce_ema = None
             if clear_replay:
@@ -165,12 +201,29 @@ class OnlineLearner:
 
     @property
     def n_params(self) -> int:
-        return sum(p.numel() for p in self.model.parameters())
+        return sum(p.numel() for m in self.models for p in m.parameters())
+
+    def _ensemble(self, x: torch.Tensor):
+        """The members' forecasts for a batch as one: quantiles, gate and attention averaged (a
+        mean of non-crossing quantile vectors does not cross), the direction heads as the mean
+        probability, returned as logits so the loss reads them as a single head would. One member
+        returns its own tensors untouched."""
+        outs = []
+        for m in self.models:
+            m.eval()
+            outs.append(m(x))
+        if len(outs) == 1:
+            return outs[0]
+        q = torch.stack([o[0].float() for o in outs]).mean(0)
+        pu = torch.stack([torch.sigmoid(o[1].float()) for o in outs]).mean(0)
+        pd_ = torch.stack([torch.sigmoid(o[2].float()) for o in outs]).mean(0)
+        gate = torch.stack([o[3].float() for o in outs]).mean(0)
+        attn = torch.stack([o[4].float() for o in outs]).mean(0)
+        return q, torch.logit(pu, eps=1e-6), torch.logit(pd_, eps=1e-6), gate, attn
 
     def predict(self, x: np.ndarray) -> Prediction:
         with self.lock, torch.no_grad():
-            self.model.eval()
-            q, up_logit, down_logit, gate, attn = self.model(torch.from_numpy(x)[None].to(self.device))
+            q, up_logit, down_logit, gate, attn = self._ensemble(torch.from_numpy(x)[None].to(self.device))
         return Prediction(q[0].cpu().numpy(), torch.sigmoid(up_logit[0]).cpu().numpy(),
                           torch.sigmoid(down_logit[0]).cpu().numpy(), gate[0].cpu().numpy(), attn[0].cpu().numpy())
 
@@ -301,13 +354,12 @@ class OnlineLearner:
         pin = bce = 0.0
         with self.lock, torch.no_grad():
             self.release_cache()                             # the training step's blocks go first: eval shapes differ, and holding
-            self.model.eval()                                # both stacked the peaks (a 4XL at 362 names was OOM-killed on 2026-10-12)
-            for k in range(0, len(idx), 4):                  # small batches: an eval pass must not widen the allocator's footprint
-                j = idx[k:k + 4]
+            for k in range(0, len(idx), 4):                  # both stacked the peaks (a 4XL at 362 names was OOM-killed on 2026-10-12);
+                j = idx[k:k + 4]                             # small batches: an eval pass must not widen the allocator's footprint
                 x = torch.from_numpy(self.rx[j]).to(self.device)
                 y = torch.from_numpy(self.target(self.ry[j])).to(self.device)
                 mk = torch.from_numpy(self.rmask[j]).to(self.device)
-                q, up, dn, gate, _ = self.model(x)
+                q, up, dn, gate, _ = self._ensemble(x)
                 _, parts = flint_loss(q.float(), up.float(), dn.float(), gate.float(), y, self.cfg.quantiles,
                                       label_smoothing=self.cfg.label_smoothing, threshold=self.cfg.direction_threshold_bps, mask=mk)
                 pin += float(parts["pinball"]) * len(j)
@@ -324,8 +376,11 @@ class OnlineLearner:
         if self.cols and self.labels - self._beta_at >= 78:              # about one session of labels
             self.refresh_beta()
         with self.lock:
-            self.model.train()
+            for m in self.models:
+                m.train()
             for _ in range(n):
+                k = self.steps % self.members                        # the members take turns: each sees its own batches
+                model, opt, train_model = self.models[k], self.opts[k], self.train_models[k]
                 x, y, mask = self._sample(batch)
                 x = x.to(self.device)
                 y = y.to(self.device)
@@ -334,9 +389,9 @@ class OnlineLearner:
                     x = x + self.cfg.input_noise * torch.randn_like(x)
                 with autocast(self.device.type):
                     try:
-                        q, up_logit, down_logit, gate, _ = self.train_model(x)
+                        q, up_logit, down_logit, gate, _ = train_model(x)
                     except Exception:  # noqa: BLE001
-                        if self.train_model is self.model:
+                        if train_model is model:
                             raise
                         # The first compiled forward is where torch.compile really compiles. A
                         # toolchain problem there (a missing Python.h for Triton's CUDA helper,
@@ -345,15 +400,16 @@ class OnlineLearner:
                         log.warning("torch.compile failed on its first train step; training eager for the rest "
                                     "of this run (the FLINT_COMPILE speedup is lost). Cause:", exc_info=True)
                         self.compile_broken = True
-                        self.train_model = self.model
-                        q, up_logit, down_logit, gate, _ = self.train_model(x)
+                        self.train_models = list(self.models)
+                        train_model = model
+                        q, up_logit, down_logit, gate, _ = train_model(x)
                 loss, parts = flint_loss(q.float(), up_logit.float(), down_logit.float(), gate.float(), y, self.cfg.quantiles,
                                          label_smoothing=self.cfg.label_smoothing,
                                          threshold=self.cfg.direction_threshold_bps, mask=mask)
-                self.opt.zero_grad(set_to_none=True)
+                opt.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                self.opt.step()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                opt.step()
                 self.steps += 1
                 a = 0.05
                 total = loss.item()
@@ -373,8 +429,10 @@ class OnlineLearner:
         d.mkdir(parents=True, exist_ok=True)
         with self.lock:
             torch.save({
-                "model": self.model.state_dict(),
-                "opt": self.opt.state_dict(),
+                "model": self.models[0].state_dict(),
+                "opt": self.opts[0].state_dict(),
+                "members": [m.state_dict() for m in self.models[1:]],          # the ensemble's other members (0.5.20); none for one
+                "member_opts": [o.state_dict() for o in self.opts[1:]],
                 "steps": self.steps,
                 "labels": self.labels,
                 "emas": (self.loss_ema, self.pinball_ema, self.bce_ema),
@@ -450,11 +508,7 @@ class OnlineLearner:
         model_fresh = False
         try:
             with self.lock:
-                if migrate:
-                    self._migrate_model(ck, saved_syms)
-                else:
-                    self.model.load_state_dict(ck["model"])
-                    self.opt.load_state_dict(ck["opt"])
+                self._load_members(ck, saved_syms if migrate else None)
                 self.steps = int(ck["steps"])
                 self.labels = int(ck["labels"])
                 self.loss_ema, self.pinball_ema, self.bce_ema = ck["emas"]
@@ -465,10 +519,7 @@ class OnlineLearner:
             log.warning("could not restore model state (%s); fresh model on the saved replay", e)
             model_fresh = True
             with self.lock:
-                self.model = FlintNet(self.n_features, self.cfg.n_assets, self.cfg.n_quantiles, self.cfg.d_model, self.cfg.dilations,
-                                      self.cfg.n_experts, self.cfg.n_heads, self.cfg.dropout).to(self.device)
-                self.opt = torch.optim.AdamW(self.model.parameters(), lr=self.cfg.lr, weight_decay=self.cfg.weight_decay)
-                self.train_model = self._compiled(self.model)
+                self._build_members()
                 self.steps = 0
                 self.loss_ema = self.pinball_ema = self.bce_ema = None
             self.migrated_new = [s for s in cur_syms if s not in set(saved_syms)]
@@ -539,22 +590,54 @@ class OnlineLearner:
             self.ry[j, ni] = np.asarray(rep["y"][s])[:, oi]
             self.rmask[j, ni] = np.asarray(rep["mask"][s])[:, oi]
 
+    def _load_members(self, ck: dict, migrate_from: list[str] | None) -> None:
+        """Load every member the checkpoint holds (the first under the pre-0.5.20 keys), by
+        position; a member the checkpoint lacks starts fresh, so a one-member checkpoint seeds
+        an ensemble, and an ensemble's first member serves a one-member run. With
+        `migrate_from`, the saved symbol list, each member's embedding rows travel by name."""
+        sds = [ck["model"]] + list(ck.get("members") or [])
+        osds = [ck["opt"]] + list(ck.get("member_opts") or [])
+        fresh = 0
+        for k, (model, opt) in enumerate(zip(self.models, self.opts)):
+            if k >= len(sds) or k >= len(osds):
+                fresh += 1
+                continue
+            if migrate_from is not None:
+                self._migrate_one(model, opt, sds[k], osds[k], migrate_from)
+            else:
+                model.load_state_dict(sds[k])
+                opt.load_state_dict(osds[k])
+        if fresh:
+            log.warning("%d ensemble member(s) start fresh: the checkpoint holds %d", fresh, len(sds))
+        elif len(sds) > self.members:
+            log.info("the checkpoint holds %d members; this run uses the first %d", len(sds), self.members)
+        if migrate_from is not None:
+            cur = list(self.cfg.symbols)
+            pos = {s: i for i, s in enumerate(migrate_from)}
+            self.migrated_new = [s for s in cur if s not in pos]
+            log.warning("checkpoint migrated to the new universe: %d names kept, %d dropped, %d new (%s)",
+                        len([s for s in cur if s in pos]), len([s for s in migrate_from if s not in set(cur)]),
+                        len(self.migrated_new), ", ".join(self.migrated_new[:12]) + ("…" if len(self.migrated_new) > 12 else ""))
+
     def _migrate_model(self, ck: dict, saved_syms: list[str]) -> None:
-        """Load a checkpoint saved for another symbol list. Every parameter is shared across
-        assets except the per-asset embedding table (and its Adam moments), whose rows are
+        """Load a checkpoint saved for another symbol list (every member)."""
+        self._load_members(ck, saved_syms)
+
+    def _migrate_one(self, model, opt, sd: dict, opt_sd: dict, saved_syms: list[str]) -> None:
+        """Load one member's weights saved for another symbol list. Every parameter is shared
+        across assets except the per-asset embedding table (and its Adam moments), whose rows are
         copied for retained names and left at their fresh initialisation for new ones."""
-        cur = list(self.cfg.symbols)
+        cur_syms = list(self.cfg.symbols)
         pos = {s: i for i, s in enumerate(saved_syms)}
-        pairs = [(i, pos[s]) for i, s in enumerate(cur) if s in pos]
+        pairs = [(i, pos[s]) for i, s in enumerate(cur_syms) if s in pos]
         ni = torch.tensor([p[0] for p in pairs], dtype=torch.long)
         oi = torch.tensor([p[1] for p in pairs], dtype=torch.long)
-        sd = dict(ck["model"])
-        emb = self.model.asset_emb.detach().clone()
+        sd = dict(sd)
+        emb = model.asset_emb.detach().clone()
         emb[ni.to(emb.device)] = sd["asset_emb"][oi].to(emb.device, emb.dtype)
         sd["asset_emb"] = emb
-        self.model.load_state_dict(sd)
-        opt_sd = ck["opt"]
-        idx = next(i for i, p in enumerate(self.model.parameters()) if p is self.model.asset_emb)
+        model.load_state_dict(sd)
+        idx = next(i for i, p in enumerate(model.parameters()) if p is model.asset_emb)
         st = (opt_sd.get("state") or {}).get(idx)
         if st:
             for key in ("exp_avg", "exp_avg_sq"):
@@ -562,7 +645,4 @@ class OnlineLearner:
                     t = torch.zeros(emb.shape, dtype=st[key].dtype)
                     t[ni] = st[key][oi]
                     st[key] = t
-        self.opt.load_state_dict(opt_sd)
-        self.migrated_new = [s for s in cur if s not in pos]
-        log.warning("checkpoint migrated to the new universe: %d names kept, %d dropped, %d new (%s)",
-                    len(pairs), len(saved_syms) - len(pairs), len(self.migrated_new), ", ".join(self.migrated_new[:12]))
+        opt.load_state_dict(opt_sd)
