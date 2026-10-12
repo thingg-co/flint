@@ -8,8 +8,12 @@ Sources: an at-the-money option's premium is about 0.4 σ √T of spot and decay
 premium / (2 T) per unit time (the Black-Scholes ATM approximation); market impact follows the
 square-root law, cost ≈ η σ √(Q / ADV) (Almgren-Chriss, Gatheral); Amihud's illiquidity,
 |return| per dollar traded, is Kyle's lambda in practice, the price move an order of a given
-size buys; and a straddle's hourly profit is about ½ Γ (ΔS)² − θ Δt, so it pays only when the
-move beats the implied one net of the decay.
+size buys; and a straddle's profit over a hold is about ½ Γ (ΔS)² − θ Δt, with the at-the-money
+pair's gamma 2 φ(0) / (S σ √T), so it pays only when the forecast's E[(ΔS/S)²] beats the implied
+variance over the hold plus the two legs' round-trip spread and commissions (the delta-hedged
+identity: at the implied variance the gamma gain exactly covers the decay, and the spread is what
+a one-hour straddle on a thin chain cannot earn back, which is how the paper book lost 10% of two
+premiums in an hour on 2026-10-12).
 """
 from __future__ import annotations
 
@@ -51,6 +55,34 @@ def expected_abs_move_bps(q) -> float:
     sigma = max(1e-6, (float(q[4]) - float(q[0])) / 2.563)
     z = mu / sigma
     return sigma * math.sqrt(2.0 / math.pi) * math.exp(-0.5 * z * z) + mu * (1.0 - 2.0 * _phi(-z))
+
+
+def straddle_gain_bps(q, iv: float | None, dte_days: float) -> float:
+    """The expected gamma profit of an at-the-money straddle over the forecast horizon, in bps
+    of spot: ½ Γ (ΔS)² with the pair's gamma 2 φ(0) / (S σ √T) and E[(ΔS/S)²] = σ_f² + μ² read
+    from the five quantiles, so gain = 0.3989 E[x²] / (σ √T). Quadratic in the move: twice the
+    forecast move pays four times."""
+    if q is None or len(q) < 5 or not iv or iv <= 0 or dte_days <= 0:
+        return 0.0
+    mu = float(q[2]) / 1e4
+    sigma = max(1e-9, (float(q[4]) - float(q[0])) / 2.563) / 1e4
+    ex2 = sigma * sigma + mu * mu
+    return 1e4 * 0.3989 * ex2 / (float(iv) * math.sqrt(float(dte_days) / 365.0))
+
+
+def straddle_cost_bps(iv: float | None, dte_days: float, hold_h: float, spread_bps: float = 0.0,
+                      ticket_bps: float = 0.0) -> float:
+    """What holding the pair for `hold_h` trading hours costs, in bps of spot: the pair's decay
+    (premium ≈ 0.8 σ √T of spot, spent evenly over the trading hours to expiry, so that at the
+    implied variance the decay equals `straddle_gain_bps`), plus the two legs' round-trip spread
+    and the commissions, both already in bps of spot."""
+    extra = float(spread_bps or 0.0) + float(ticket_bps or 0.0)
+    if not iv or iv <= 0 or dte_days <= 0 or hold_h <= 0:
+        return extra
+    t_years = float(dte_days) / 365.0
+    prem = 0.8 * float(iv) * math.sqrt(t_years)
+    decay = prem * float(hold_h) / (2.0 * t_years * TRADING_DAYS * TRADING_HOURS)
+    return 1e4 * decay + extra
 
 
 def dollar_volume(bars) -> float:

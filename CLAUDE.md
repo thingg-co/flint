@@ -144,7 +144,10 @@ unless Flint is already up.
   when the budget is unset) with `deep_backfill_days` 200; deep paging stops when the ring is
   within a chunk of full, since wrapping would overwrite the newest windows, and a smaller buffer
   on load keeps the newest windows. A restart resumes paging from the oldest window held. `_idle_train_loop` fills the gaps between chunks: while closed it trains on
-  the replay up to `idle_train_epochs` passes per closed session (a live control; 0 disables),
+  the replay up to `idle_train_epochs` passes per closed session (a live control; 0 disables; each
+  open and each close starts a new session with a fresh budget and guard, since 0.5.21: before, an
+  open with `train_in_session` off never registered, so every night after the first shared the
+  first night's exhausted budget and trained one step per new window),
   a budget bounded by replay size rather than by hours, so a long night cannot overfit it. Every
   20th bar by timestamp (5%) is held out of training for good (`learner.validate`, derived from the
   timestamp so a reload keeps the same slice); the idle trainer checks it every 40 steps and ends
@@ -239,9 +242,14 @@ unless Flint is already up.
   order the signal would place (`impact_eta`, from the bars' dollar volume and volatility) and, for
   a bearish view bought as a put, the put's hourly decay (`theta_in_edge`, from the chain's ATM IV
   kept raw in `option_iv`); Amihud's illiquidity blocks a name whose order would move the price more
-  than `max_impact_bps`, which works where no quote exists; a straddle needs the model's expected
-  |move| (folded-normal mean of the quantiles) above `straddle_edge` times the implied one-sigma
-  move plus the decay over the hold, falling back to the width rule when no IV is known. Stock
+  than `max_impact_bps`, which works where no quote exists; a straddle (0.5.21) needs its expected
+  gamma gain over the hold, ½ Γ (ΔS)² on the forecast's E[(ΔS/S)²] (`policy.straddle_gain_bps`),
+  above `straddle_edge` times its costs: the pair's decay, which the gain only matches at the
+  implied variance, the two legs' round-trip spread (`option_spread`, read from the chain with the
+  IV) and four commissions (`policy.straddle_cost_bps`); it falls back to the width rule when no IV
+  is known. Before 0.5.21 the test was E|move| against the implied one-sigma move, which has the
+  straddle paying |move| linearly as only an expiring one does; on 2026-10-12 it bought two
+  one-hour straddles on thin chains and each lost a tenth of its premium, the spread. Stock
   positions exit on `stop_loss_bps` (200 by default), `take_profit_bps` and `max_hold_bars` (both
   off), overriding the minimum hold, then wait `exit_cooldown_bars`; once the book is down
   `daily_loss_limit` of the day's opening equity no new entry opens that day. All of it is

@@ -127,7 +127,9 @@ async def fetch_straddle(auth, symbol: str, target_dte: int = 35) -> dict | None
 
 async def fetch_iv_skew(auth, symbol: str, dte: int = 30) -> dict | None:
     """Forward-looking option signals for the model: ATM implied vol (expected future vol)
-    and put/call skew (downside fear). Returns {iv, skew} as fractions, or None."""
+    and put/call skew (downside fear), and for the policy the ATM pair's round-trip spread (the
+    two legs' ask minus bid, as a fraction of spot; None when a leg has no quote). Returns
+    {iv, skew, spread} as fractions, or None."""
     token = await auth.token()
     frm = (date.today() + timedelta(days=max(1, dte - 12))).isoformat()
     to = (date.today() + timedelta(days=dte + 18)).isoformat()
@@ -149,20 +151,24 @@ async def fetch_iv_skew(auth, symbol: str, dte: int = 30) -> dict | None:
     pexp = sorted(pem.keys())[0]
     cexp = sorted(cem.keys())[0]
 
-    def _iv_at(strikes, target):
+    def _at(strikes, target):
         best = min(strikes.keys(), key=lambda s: abs(float(s) - target))
-        return (strikes[best][0] or {}).get("volatility"), float(best)
+        return (strikes[best][0] or {})
 
-    atm_p, _ = _iv_at(pem[pexp], spot)
-    atm_c, _ = _iv_at(cem[cexp], spot)
-    otm_p, _ = _iv_at(pem[pexp], spot * 0.93)   # ~7% OTM put
-    otm_c, _ = _iv_at(cem[cexp], spot * 1.07)   # ~7% OTM call
+    atm_po, atm_co = _at(pem[pexp], spot), _at(cem[cexp], spot)
+    atm_p, atm_c = atm_po.get("volatility"), atm_co.get("volatility")
+    otm_p = _at(pem[pexp], spot * 0.93).get("volatility")   # ~7% OTM put
+    otm_c = _at(cem[cexp], spot * 1.07).get("volatility")   # ~7% OTM call
     ivs = [v for v in (atm_p, atm_c) if v and v > 0]
     if not ivs:
         return None
     atm_iv = sum(ivs) / len(ivs) / 100.0
     skew = ((otm_p - otm_c) / 100.0) if (otm_p and otm_c) else 0.0
-    return {"iv": atm_iv, "skew": skew}
+    spread = None
+    legs = [(o.get("bid"), o.get("ask")) for o in (atm_po, atm_co)]
+    if all(b is not None and a is not None and a >= b >= 0 and a > 0 for b, a in legs):
+        spread = sum(float(a) - float(b) for b, a in legs) / float(spot)
+    return {"iv": atm_iv, "skew": skew, "spread": spread}
 
 
 async def fetch_call(auth, symbol: str, target_dte: int = 35, otm: float = 0.05,

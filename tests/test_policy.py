@@ -1,6 +1,6 @@
 """The policy's cost and exit arithmetic (flint/policy.py) and its gates in Engine._suggest:
 put decay and price impact in the cost edge, the Amihud illiquidity gate, the straddle's
-gamma breakeven, and the stop / target / time-limit exits."""
+gamma gain against its decay, spread and commissions, and the stop / target / time-limit exits."""
 import collections
 import math
 
@@ -94,11 +94,30 @@ def test_put_decay_is_charged_against_a_bearish_edge_unless_switched_off():
     assert r["action"] == "BUY", r["why"]                               # stock pays no decay
 
 
-def test_straddle_needs_the_move_to_beat_the_implied_one_when_iv_is_known():
-    wide, narrow = [-150, -60, 0, 60, 150], [-80, -30, 0, 30, 80]
+def test_straddle_gamma_gain_covers_the_decay_exactly_at_the_implied_variance():
+    # the delta-hedged identity: a forecast whose variance over the hold is the implied one earns
+    # the decay back and nothing more; twice the move pays four times; the spread and the ticket add on
+    iv, dte, hold_h = 0.3, 35, 1.0
+    sig = policy.implied_move_bps(iv, hold_h)                              # one sigma over the hold
+    q = [-1.2815 * sig, -0.6745 * sig, 0.0, 0.6745 * sig, 1.2815 * sig]
+    gain, decay = policy.straddle_gain_bps(q, iv, dte), policy.straddle_cost_bps(iv, dte, hold_h)
+    assert abs(gain / decay - 1.0) < 0.02, (gain, decay)
+    assert abs(policy.straddle_gain_bps([2 * v for v in q], iv, dte) / gain - 4.0) < 0.02
+    assert abs(policy.straddle_cost_bps(iv, dte, hold_h, 6.0, 1.5) - (decay + 7.5)) < 1e-9
+    assert policy.straddle_gain_bps(q, None, dte) == 0.0 and policy.straddle_gain_bps(None, iv, dte) == 0.0
+    assert policy.straddle_cost_bps(None, dte, hold_h, 6.0, 1.5) == 7.5
+
+
+def test_straddle_needs_the_gamma_gain_to_beat_decay_spread_and_commissions():
+    wide, narrow, huge = [-150, -60, 0, 60, 150], [-80, -30, 0, 30, 80], [-300, -120, 0, 120, 300]
     fake = make_fake(option_iv={"AAPL": 0.3})
-    assert Engine._suggest(fake, 0, "AAPL", make_pred(wide, 0.6, 0.6))["straddle"] is True
-    assert Engine._suggest(fake, 0, "AAPL", make_pred(narrow, 0.6, 0.6))["straddle"] is False   # 160 bps wide, but under the implied move
+    r = Engine._suggest(fake, 0, "AAPL", make_pred(wide, 0.6, 0.6))
+    assert r["straddle"] is True and "gamma gain" in r["why"] and "beats" in r["why"], r["why"]
+    r = Engine._suggest(fake, 0, "AAPL", make_pred(narrow, 0.6, 0.6))
+    assert r["straddle"] is False and "is under" in r["why"], r["why"]  # 160 bps wide, under the implied variance plus the ticket
+    thin = make_fake(option_iv={"AAPL": 0.3}, option_spread={"AAPL": 0.0012})   # the pair quotes 12 bps of spot wide
+    assert Engine._suggest(thin, 0, "AAPL", make_pred(wide, 0.6, 0.6))["straddle"] is False  # the spread eats the same forecast
+    assert Engine._suggest(thin, 0, "AAPL", make_pred(huge, 0.6, 0.6))["straddle"] is True   # four times the gain still clears it
     blind = make_fake()                                                   # no chain: the width rule as before
     assert Engine._suggest(blind, 0, "AAPL", make_pred(narrow, 0.6, 0.6))["straddle"] is True
     assert Engine._suggest(blind, 0, "AAPL", make_pred([-40, -10, 0, 10, 40], 0.6, 0.6))["straddle"] is False

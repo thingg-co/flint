@@ -446,6 +446,7 @@ class Engine:
         self.tick_counts = {s: 0 for s in self.symbols}
         self.bars: dict[str, deque[Bar]] = {s: deque(maxlen=cfg.chart_bars) for s in self.symbols}
         self.option_iv: dict[str, float] = {}             # raw ATM implied vol per name, for the policy's decay and breakeven arithmetic
+        self.option_spread: dict[str, float] = {}         # the ATM pair's round-trip spread as a fraction of spot, for the straddle's costs
         self._cooldown: dict[str, int] = {}               # bar index of a name's last exit (stop, target, time limit)
         self._day_open_equity: tuple[str, float] | None = None   # (ET date, book equity at the day's first bar) for the daily loss limit
         self._book_equity = 0.0
@@ -1422,13 +1423,19 @@ class Engine:
         self._idle_was_open = None
         wait = 20.0
         held: list[float] = []                            # held-out pinball at each check this session
+        ended = False                                     # the overfit guard closed this session's budget
         while True:
             await asyncio.sleep(wait)
             wait = 20.0                                   # idle poll; drops to ~0 while there is budget to burn
             cfg = self.cfg
             is_open = self.market_status.get("isOpen")
-            if is_open is None or (is_open and not getattr(cfg, "train_in_session", False)):
-                continue                                  # unknown status, or open and session training is off
+            if is_open is None:
+                continue                                  # unknown status
+            if is_open != self._idle_was_open:            # each session (open or closed) gets its own budget
+                done, self._idle_was_open, held, ended = 0, is_open, [], False
+            if is_open and not getattr(cfg, "train_in_session", False):
+                continue                                  # open and session training is off (the open still starts a new session above:
+                                                          # before 0.5.21 it was skipped here and every night after the first shared one budget)
             if self._backtesting:
                 continue                                  # the weekend backtest owns the GPU
             free = free_memory_gb(str(self.learner.device))
@@ -1438,15 +1445,13 @@ class Engine:
                     self._lowmem_said = True
                 self.learner.release_cache()
                 continue
-            if is_open != self._idle_was_open:            # each session (open or closed) gets its own budget
-                done, self._idle_was_open, held = 0, is_open, []
             epochs = float(getattr(cfg, "idle_train_epochs", 0) or 0)
             size = self.learner.size
             if epochs <= 0 or not self.learning_enabled or size < 64:
                 continue
             budget = int(epochs * size / max(1, cfg.batch_size))
-            if done >= budget:
-                continue
+            if ended or done >= budget:
+                continue                                  # a guard-ended session stays ended as the replay grows
             wait = 0.5                                    # back to back: keep the GPU busy, yield to the event loop
             chunk = min(4, budget - done)
             res = await asyncio.to_thread(self.learner.train_steps, chunk)
@@ -1467,7 +1472,7 @@ class Engine:
                         self.trace.emit("learn", f"overfit guard: held-out pinball {val['pinball']:.2f} bps has not improved "
                                                  f"over {cfg.overfit_patience} checks (best {min(held):.2f}); ending this session's "
                                                  f"idle training at {done}/{budget} steps", "warn")
-                        done = budget
+                        ended = True
                 self.trace.emit("learn", f"idle training {done}/{budget} steps this {'open' if is_open else 'closed'} session "
                                          f"({size} windows in replay): loss {res['loss']:.3f} "
                                          f"(pinball {res['pinball']:.2f} bps, bce {res['bce']:.3f}{note})")
@@ -2070,19 +2075,27 @@ class Engine:
         width = q90 - q10
         # A fat-tail forecast is tradeable without direction: a long straddle wins on |move|,
         # loss capped at the premium. Requires a live bar and market hours like any entry.
+        straddle_note = ""
         if iv:
-            # Gamma breakeven: a straddle pays only when the move beats what its premium already
-            # prices in (the implied one-sigma move over the hold) plus the decay over that hold.
+            # Gamma breakeven: over the hold the pair earns ½ Γ (ΔS)² on the forecast's E[(ΔS/S)²]
+            # and pays its decay, the two legs' round-trip spread and four commissions; it is bought
+            # only when the gain beats `straddle_edge` times those costs. The spread is the term that
+            # matters at an hour's hold: the gamma gain at the implied variance only covers the decay.
             hold_h = float(getattr(cfg, "straddle_hold_bars", 12)) * float(getattr(cfg, "bar_seconds", 300)) / 3600.0
-            implied = policy.implied_move_bps(iv, hours=hold_h)
-            decay = policy.theta_bps_per_hour(iv, cfg.option_dte) * hold_h
-            big = policy.expected_abs_move_bps(qc) > float(getattr(cfg, "straddle_edge", 1.0)) * implied + decay
+            dte = float(cfg.option_dte)
+            spread_bps = 1e4 * float((getattr(self, "option_spread", None) or {}).get(s) or 0.0)
+            ticket = 400.0 * float(cfg.option_commission) / px0 if px0 > 0 else 0.0   # 2 legs x 2 ways per 100 shares
+            gain = policy.straddle_gain_bps(qc, iv, dte)
+            cost = policy.straddle_cost_bps(iv, dte, hold_h, spread_bps, ticket)
+            big = gain > float(getattr(cfg, "straddle_edge", 1.0)) * cost
+            straddle_note = (f"a straddle's expected gamma gain of {gain:.0f} bps {'beats' if big else 'is under'} "
+                             f"its {cost:.0f} bps of decay, spread and commissions over {hold_h:g} h")
         else:
             big = width >= cfg.straddle_band_bps
         straddle = (cfg.straddle_enabled and fat_tails and big
                     and bool(bar and bar.volume > 0) and self._regular_session())
         if fat_tails:
-            why += "  |  both tails fat — expect a big move, direction unclear"
+            why += "  |  both tails fat — expect a big move, direction unclear" + (f"; {straddle_note}" if straddle_note else "")
         base_side, base_size = side, size
         muted = s in self.muted
         if muted:
@@ -2450,6 +2463,8 @@ class Engine:
                 for s, r in res:
                     if r:
                         self.option_iv[s] = float(r["iv"])
+                        if r.get("spread") is not None:
+                            self.option_spread[s] = float(r["spread"])
                         self.features.set_exo(s, {"opt_iv": max(-1, min(1, (r["iv"] - 0.30) * 2.5)),
                                                   "opt_skew": max(-1, min(1, r["skew"] * 15))})
                         n += 1
