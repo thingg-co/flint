@@ -616,7 +616,8 @@ function renderGate() {
 
 function renderArch() {
   const c = state.config, m = c.model;
-  $("#arch").innerHTML = `FlintNet, <b>${m.params.toLocaleString()}</b> parameters<br>` +
+  const members = m.members > 1 ? ` x <b>${m.members}</b> members (an ensemble: they train in turn and forecast as their mean)` : "";
+  $("#arch").innerHTML = `FlintNet, <b>${m.params.toLocaleString()}</b> parameters${members}<br>` +
     `${c.symbols.length} assets x <b>${c.window}</b> bars of <b>${c.bar_seconds}s</b>, ${c.features.length} features each<br>` +
     `causal conv dilations <b>${m.dilations.join(",")}</b>, receptive field ${m.receptive_field} bars<br>` +
     `cross-asset attention with <b>${m.heads}</b> heads, <b>${m.experts}</b> regime experts<br>` +
