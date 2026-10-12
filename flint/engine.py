@@ -1014,11 +1014,24 @@ class Engine:
             cfg = self.cfg
             days = float(getattr(cfg, "deep_backfill_days", 0) or 0)
             target = time.time() - days * 86400.0
-            if (days <= 0 or self.market_status.get("isOpen") is not False
-                    or not self.learning_enabled or self._deep_cutoff <= target):
+            if days <= 0 or self.market_status.get("isOpen") is not False or not self.learning_enabled:
                 continue
             if self._backtesting:                         # the backtest owns the GPU and the replay must not grow under it
                 wait = 60.0
+                continue
+            fetching = any(t is not None and not t.done() for t in (self._news_task, self._events_task))
+            if self._startup_span and not fetching:       # rewrites windows in place, so a full ring is no reason to skip it
+                lo, hi = self._startup_span
+                self._startup_span = None
+                try:
+                    ticks = await self.sources.backfill_range(lo - WARM_S, hi)
+                    n = await asyncio.to_thread(self._ingest_offline, ticks, lo, True) if ticks else 0
+                    self.trace.emit("learn", f"re-paged the startup days with their news: {n} windows rewritten", "info")
+                except Exception as e:  # noqa: BLE001
+                    self.trace.emit("learn", f"re-paging the startup days failed: {type(e).__name__}: {str(e)[:80]}", "warn")
+                wait = 60.0
+                continue
+            if self._deep_cutoff <= target:               # paged as far back as asked
                 continue
             cap = self.learner.rx.shape[0]
             if self.learner.size >= cap - 800:            # a chunk is ~700 windows; the ring must not wrap onto the newest
@@ -1040,16 +1053,6 @@ class Engine:
             fetching = any(t is not None and not t.done() for t in (self._news_task, self._events_task))
             if fetching and not self._history_ready(cutoff - WARM_S, until):
                 wait = 60.0                               # the chunk's news is still on its way: page it with the news, not without
-                continue
-            if self._startup_span and not fetching:
-                lo, hi = self._startup_span
-                self._startup_span = None
-                try:
-                    ticks = await self.sources.backfill_range(lo - WARM_S, hi)
-                    n = await asyncio.to_thread(self._ingest_offline, ticks, lo, True) if ticks else 0
-                    self.trace.emit("learn", f"re-paged the startup days with their news: {n} windows rewritten", "info")
-                except Exception as e:  # noqa: BLE001
-                    self.trace.emit("learn", f"re-paging the startup days failed: {type(e).__name__}: {str(e)[:80]}", "warn")
                 continue
             try:
                 ticks = await self.sources.backfill_range(cutoff - WARM_S, until)   # a warm prefix the builder walks but does not emit
