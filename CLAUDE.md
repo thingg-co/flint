@@ -309,9 +309,11 @@ unless Flint is already up.
   cgroup limit, so these in-process rules are the only guard. The caching allocator is the other
   way to lose the box: it keeps blocks per shape, so the training step, the held-out validation pass
   and per-bar prediction each held their own working set (about 90 GB outside any process at 232
-  names). The idle trainer and the deep loop release the cache every 40 steps, validation runs at
-  batch 8 and releases after, the idle trainer pauses near the floor like deep paging, and the
-  launcher sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`.
+  names). The idle trainer and the deep loop release the cache every 40 steps, validation releases the
+  training step's blocks first and runs at batch 4 and releases after (releasing only after stacked the
+  two shapes' peaks: a one-member 4XL at 362 names swung the box to 113 GB used and was OOM-killed by the
+  kernel at 08:59 on 2026-10-12, with 10 GB of swap in use), the idle trainer pauses near the floor like
+  deep paging, and the launcher sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`.
 - A failed universe rebuild (no memory to benchmark, a bad symbol) puts the previous universe back
   and resumes the lifecycle on the model it still has; it saves first so the replay in memory is
   not lost. Before 2026-10-10 it left every loop cancelled and the status "starting" for good. The

@@ -300,9 +300,10 @@ class OnlineLearner:
             return None
         pin = bce = 0.0
         with self.lock, torch.no_grad():
-            self.model.eval()
-            for k in range(0, len(idx), 8):                  # small batches: an eval pass must not widen the allocator's footprint
-                j = idx[k:k + 8]
+            self.release_cache()                             # the training step's blocks go first: eval shapes differ, and holding
+            self.model.eval()                                # both stacked the peaks (a 4XL at 362 names was OOM-killed on 2026-10-12)
+            for k in range(0, len(idx), 4):                  # small batches: an eval pass must not widen the allocator's footprint
+                j = idx[k:k + 4]
                 x = torch.from_numpy(self.rx[j]).to(self.device)
                 y = torch.from_numpy(self.target(self.ry[j])).to(self.device)
                 mk = torch.from_numpy(self.rmask[j]).to(self.device)
