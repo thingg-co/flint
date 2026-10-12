@@ -277,15 +277,16 @@ class TestFeatureSets:
 
     def test_sets_masks_and_an_unknown_feature(self):
         from flint.features import CORE, EVENTS, EXTENDED, FEATURE_SET, FEATURE_SETS, OPINIONS, normalize_mask
-        assert len(CORE) == 28 and EXTENDED == CORE + OPINIONS + EVENTS and len(EXTENDED) == 34
+        assert len(CORE) == 28 and EXTENDED == CORE + OPINIONS + EVENTS and len(EXTENDED) == 35
         assert FEATURE_SETS[FEATURE_SET] == FEATURES and len(set(EXTENDED)) == len(EXTENDED)
         m = normalize_mask(EXTENDED)
-        assert not m[EXTENDED.index("ou_z")] and not m[EXTENDED.index("earn_near")] and m[EXTENDED.index("trend_t")] and m[EXTENDED.index("garch")]
+        assert not m[EXTENDED.index("ou_z")] and not m[EXTENDED.index("earn_near")] and not m[EXTENDED.index("div_drop")]
+        assert m[EXTENDED.index("trend_t")] and m[EXTENDED.index("garch")]
         assert np.array_equal(RunningNorm(2, N_FEATURES).normalize, NORMALIZE) and RunningNorm(2, 5).normalize.all()
         with pytest.raises(ValueError):
             FeatureBuilder(["A"], window=1, features=["ret", "bogus"])
         fb = FeatureBuilder(["A"], window=1, features=EXTENDED)
-        assert fb.wants_opinions and fb.wants_events and fb.norm.mean.shape == (1, 34)
+        assert fb.wants_opinions and fb.wants_events and fb.norm.mean.shape == (1, 35)
         assert np.array_equal(fb.norm.normalize, normalize_mask(EXTENDED))
 
 
