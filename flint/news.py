@@ -213,6 +213,11 @@ class NewsSkimmer:
         self.seen: dict[str, float] = {}
         self.status: dict[str, str] = {}
         self.method = "none"
+        self.fails: dict[str, int] = {}           # consecutive passes a source came back empty or failed
+        self.skip_until: dict[str, float] = {}    # a source failing FAIL_PASSES passes running is left out for SKIP_S
+
+    FAIL_PASSES = 3
+    SKIP_S = 3600.0
 
     async def skim(self, say=None) -> dict:
         say = say or (lambda text, level="info": None)
@@ -232,15 +237,28 @@ class NewsSkimmer:
             self.method = "http"
         for name, url in self.sources:
             if raw.get(name):
+                self.fails[name] = 0
+                continue
+            if self.skip_until.get(name, 0.0) > now:                               # backing off: a wall or a block, not a blip
+                raw[name] = []
                 continue
             try:
                 raw[name] = await self._with_http(url)
                 self.status[name] = f"http: {len(raw[name])} candidates"
                 say(f"{name}: fetched over HTTP, {len(raw[name])} headline candidates")
+                self.fails[name] = 0 if raw[name] else self.fails.get(name, 0) + 1
             except Exception as e:  # noqa: BLE001
                 self.status[name] = f"http failed: {type(e).__name__}"
                 raw[name] = []
-                say(f"{name}: fetch failed ({type(e).__name__})", "warn")
+                self.fails[name] = self.fails.get(name, 0) + 1
+                if self.fails[name] >= self.FAIL_PASSES:
+                    say(f"{name}: fetch failed ({type(e).__name__}) {self.fails[name]} passes running; leaving it out for "
+                        f"{self.SKIP_S / 60:.0f} min (Google News answers this box with a consent wall)", "warn")
+                else:
+                    say(f"{name}: fetch failed ({type(e).__name__})", "warn")
+            if self.fails.get(name, 0) >= self.FAIL_PASSES:
+                self.skip_until[name] = now + self.SKIP_S
+                self.fails[name] = 0
 
         headlines: list[Headline] = []
         titles: set[str] = set()

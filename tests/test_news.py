@@ -273,3 +273,30 @@ class TestHeadlineToJson:
         )
         result = h.to_json()
         assert result["assets"] == []
+
+
+def test_a_source_failing_three_passes_is_left_out_for_an_hour(monkeypatch):
+    """The skim's Google News feed answers this box with a consent wall every pass; a source that fails
+    FAIL_PASSES passes running is skipped for SKIP_S instead of warning on every skim."""
+    import asyncio
+    from flint.news import NewsSkimmer
+    sk = NewsSkimmer(["AAPL"], sources_spec="Good|https://good.example/,Bad|https://bad.example/", use_browser=False)
+    calls = []
+
+    async def fake(url):
+        calls.append(url)
+        if "bad" in url:
+            raise RuntimeError("wall")
+        return [("Apple rises on strong iPhone demand", url)]
+    monkeypatch.setattr(sk, "_with_http", fake)
+    said = []
+    for _ in range(3):
+        asyncio.run(sk.skim(say=lambda t, level="info": said.append(t)))
+    assert sum("bad" in u for u in calls) == 3 and any("leaving it out" in t for t in said)
+    assert sk.skip_until.get("Bad", 0) > 0
+    asyncio.run(sk.skim(say=lambda t, level="info": said.append(t)))
+    assert sum("bad" in u for u in calls) == 3                                     # not asked again this hour
+    assert sum("good" in u for u in calls) == 4                                    # the working source is unaffected
+    sk.skip_until["Bad"] = 0.0
+    asyncio.run(sk.skim())
+    assert sum("bad" in u for u in calls) == 4                                     # and tried again once the hour is up
