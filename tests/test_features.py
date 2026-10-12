@@ -270,3 +270,80 @@ class TestBarDerivedFeatures:
         assert warm.n_bars == len(bars) and cold.n_bars == 20
         assert warm._last(warm.R, BARS_W).shape[1] == BARS_W and cold._last(cold.R, BARS_W).shape[1] == 20
         assert warm._lag(warm.R, 78)[0] != 0.0 and cold._lag(cold.R, 78)[0] == 0.0   # the cold builder has no yesterday
+
+
+class TestFeatureSets:
+    """The feature set is a switch: `core` is the live 28, `extended` adds the opinions and the earnings flags."""
+
+    def test_sets_masks_and_an_unknown_feature(self):
+        from flint.features import CORE, EVENTS, EXTENDED, FEATURE_SET, FEATURE_SETS, OPINIONS, normalize_mask
+        assert len(CORE) == 28 and EXTENDED == CORE + OPINIONS + EVENTS and len(EXTENDED) == 34
+        assert FEATURE_SETS[FEATURE_SET] == FEATURES and len(set(EXTENDED)) == len(EXTENDED)
+        m = normalize_mask(EXTENDED)
+        assert not m[EXTENDED.index("ou_z")] and not m[EXTENDED.index("earn_near")] and m[EXTENDED.index("trend_t")] and m[EXTENDED.index("garch")]
+        assert np.array_equal(RunningNorm(2, N_FEATURES).normalize, NORMALIZE) and RunningNorm(2, 5).normalize.all()
+        with pytest.raises(ValueError):
+            FeatureBuilder(["A"], window=1, features=["ret", "bogus"])
+        fb = FeatureBuilder(["A"], window=1, features=EXTENDED)
+        assert fb.wants_opinions and fb.wants_events and fb.norm.mean.shape == (1, 34)
+        assert np.array_equal(fb.norm.normalize, normalize_mask(EXTENDED))
+
+
+class TestOpinionFeatures:
+    """2d: what other forecasters read in the week's ring, as functions of the ring alone."""
+
+    def _ts(self, k):
+        from datetime import datetime
+        from flint.features import NY
+        return datetime(2026, 9, 8, 9, 35, tzinfo=NY).timestamp() + (k // 78) * 86400 + (k % 78) * 300
+
+    def _walk(self, fb, closes, names):
+        px = closes[0]
+        for k, new in enumerate(closes[1:]):
+            fb.push({s: _bar(self._ts(k), px[i], max(px[i], new[i]), min(px[i], new[i]), new[i]) for i, s in enumerate(names)})
+            px = new
+
+    def test_mean_reversion_trend_and_garch_read_as_expected(self):
+        from flint.features import BARS_W, EXTENDED, GARCH_A, GARCH_B, OPINION_MIN_BARS
+        rng = np.random.default_rng(3)
+        names = ["A", "B", "SPY"]
+        lvl, closes = 0.0, [np.array([100.0, 100.0, 50.0])]
+        for k in range(400):
+            lvl = 0.7 * lvl + rng.standard_normal() * 0.003                     # A reverts fast to 100
+            b = 100 * np.exp(0.0005 * (k + 1) + rng.standard_normal() * 0.0005)   # B trends
+            closes.append(np.array([100 * np.exp(lvl), b, 50.0]))
+        fb = FeatureBuilder(names, window=1, index="SPY", features=EXTENDED)
+        self._walk(fb, closes, names)
+        rw, mw = fb._last(fb.R, BARS_W), fb._last(fb.M, BARS_W)
+        ou_z, ou_hl, trend_t, garch = fb._opinions(rw, mw, np.ones(3))
+        assert np.expm1(ou_hl[0]) < 10 < 100 < np.expm1(ou_hl[1])              # A's half-life is bars, B's is the cap
+        assert trend_t[1] > 5 and abs(trend_t[0]) < 4 and abs(ou_z[0]) < 4
+        assert garch[0] > garch[1] > 0 and garch[2] == 0.0                     # the flat index has no vol
+        # the closed form is the GARCH(1,1) recursion started at the ring's variance
+        r = rw[0]; s2 = float((r * r).mean()); omega = (1 - GARCH_A - GARCH_B) * s2
+        for x in r:
+            s2 = omega + GARCH_A * x * x + GARCH_B * s2
+        assert abs(garch[0] - np.sqrt(s2)) < 1e-9
+        short = fb._opinions(rw[:, -(OPINION_MIN_BARS - 1):], mw[-(OPINION_MIN_BARS - 1):], np.ones(3))
+        assert all((v == 0).all() for v in short)                               # too little ring: silence, not noise
+        x = fb.window[-1]
+        F = EXTENDED.index
+        assert np.isfinite(x).all() and abs(x[0, F("ou_z")]) <= 5
+
+    def test_opinions_depend_on_the_ring_alone(self):
+        """Two builders that walked different histories agree once their rings hold the same week:
+        what lets a deep chunk's warm prefix make them exact."""
+        from flint.features import BARS_W, EXTENDED
+        rng = np.random.default_rng(4)
+        names = ["A", "SPY"]
+        closes = [np.array([100.0, 50.0])]
+        for _ in range(BARS_W + 120):
+            closes.append(closes[-1] * np.exp(rng.standard_normal(2) * 0.002))
+        long = FeatureBuilder(names, window=1, index="SPY", features=EXTENDED)
+        late = FeatureBuilder(names, window=1, index="SPY", features=EXTENDED)
+        self._walk(long, closes, names)
+        self._walk(late, closes[100:], names)
+        a = long._opinions(long._last(long.R, BARS_W), long._last(long.M, BARS_W), np.ones(2))
+        b = late._opinions(late._last(late.R, BARS_W), late._last(late.M, BARS_W), np.ones(2))
+        for u, v in zip(a, b):
+            assert np.allclose(u, v, atol=1e-9)

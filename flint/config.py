@@ -202,6 +202,7 @@ class Config:
     # times the index's (the market-relative abnormal return), with the index hedged in the book.
     # The replay stores absolute labels either way, so this is a run-time switch, not a reset.
     target: str = _env("TARGET", "absolute")
+    feature_set: str = _env("FEATURE_SET", "core")             # core (the 28 inputs of 0.5.18) | extended (+ the 2d opinions and the earnings flags); flint.features reads the env at import, since the net's shape follows it, and a change resets the model once
     index_symbols: str = _env("INDEX_SYMBOLS", "SPY,QQQ,IWM,SMH,XLF")  # "the market" for the relative target: modeled index names, first = the prior; unmodeled ones are ignored
     hedge_index: bool = _env("HEDGE_INDEX", "1") not in ("0", "false", "no")  # relative target: hold, per index, the weight that cancels the book's loading on it
     hedge_min: float = _env("HEDGE_MIN", 0.01)          # an index hedge smaller than this share of the book is not worth its cost

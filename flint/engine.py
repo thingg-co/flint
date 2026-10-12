@@ -13,7 +13,7 @@ import re
 import httpx
 import time
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from dataclasses import dataclass, field
@@ -25,7 +25,8 @@ from .backtest import combine_reports, run_backtest, variant_summary
 from .meta import MetaLabeler, features as meta_features
 from .newshist import NewsHistory, backfill_span
 from .bars import Bar, BarBuilder
-from .features import BARS_D, FEATURES, N_FEATURES, FeatureBuilder
+from .events import AHEAD_S, EarningsCalendar
+from .features import BARS_D, FEATURE_SET, FEATURES, N_FEATURES, FeatureBuilder
 from .feed import Tick
 from .learner import OnlineLearner, Prediction
 from .news import TICKER_STOPLIST, NewsHub, is_crypto
@@ -389,7 +390,11 @@ class Engine:
         self.meta = MetaLabeler()                   # the meta-labeler: per forecast, not per name, so it outlives a universe rebuild
         self.news_history = NewsHistory(os.path.join(cfg.state_dir, "news_history.json"))   # dated headlines, so paged history carries the news slots
         self.news_history.load()
+        self.events = EarningsCalendar(os.path.join(cfg.state_dir, "events.json"))   # dated report dates, for the extended set's earnings flags
+        self.events.load()
         self._news_task: asyncio.Task | None = None
+
+        self._events_task: asyncio.Task | None = None
         self._startup_span: tuple[float, float] | None = None   # the startup backfill's days, rewritten once their news is in
         self.sweep: dict = {}                     # the last policy sweep over a backtest's stored forecasts (state/sweep.json)
         try:
@@ -429,6 +434,7 @@ class Engine:
             cfg.device = pick_device(cfg.device)
         self.builder = BarBuilder(self.symbols, cfg.bar_seconds)
         self.features = FeatureBuilder(self.symbols, cfg.window, index=self._market_symbol())
+        self.features.events = self.events                 # the earnings flags read the dated calendar live and for history alike
         self.news_base = {s: (0.0, 0.0) for s in self.symbols}  # last pure news skim, before operator blend
         self.learner = OnlineLearner(cfg, N_FEATURES)
         self.sources = SourceManager(cfg, self.symbols, self.av, on_tick=self._on_live_tick,
@@ -896,6 +902,8 @@ class Engine:
         cutoff = time.time() - cfg.backfill_seconds
         self._deep_cutoff = cutoff                     # deep-backfill loop pages further back from here
         self._news_task = asyncio.create_task(self._news_history_job())   # dated news for the history the deep loop pages
+        if self.features.wants_events:
+            self._events_task = asyncio.create_task(self._events_job())    # and the earnings calendar, when the set reads one
         held = self.learner.rt[:self.learner.size]
         held = held[held > 0]
         if self.learner.migrated_new:                  # new names: walk the whole history again; fill() takes their columns
@@ -1029,8 +1037,8 @@ class Engine:
             wait = 150.0                                  # more history to page: a 211-symbol burst every 150 s stays under Schwab's 120 req/min
             until = self._deep_cutoff
             cutoff = max(target, until - 10 * 86400.0)
-            fetching = self._news_task is not None and not self._news_task.done()
-            if fetching and not self.news_history.covers(self._news_names(), cutoff - WARM_S, until):
+            fetching = any(t is not None and not t.done() for t in (self._news_task, self._events_task))
+            if fetching and not self._history_ready(cutoff - WARM_S, until):
                 wait = 60.0                               # the chunk's news is still on its way: page it with the news, not without
                 continue
             if self._startup_span and not fetching:
@@ -1474,6 +1482,7 @@ class Engine:
         feats = FeatureBuilder(self.symbols, cfg.window, index=self._market_symbol())
         feats.norm.load(self.features.norm.state())
         feats.news_history = self.news_history
+        feats.events = self.events
         emit_from = float(emit_from or 0.0)
         first: dict[str, float] = {}
         for t in ticks:
@@ -1519,6 +1528,43 @@ class Engine:
     def _news_names(self) -> list[str]:
         return [s for s in self.symbols if not is_crypto(s)]
 
+    def _history_span(self) -> tuple[float, float]:
+        """The [lo, hi] of history the deep loop can hold and so the dated stores must cover: the
+        ring's capacity in sessions (about 1.45 calendar days each) plus the warm prefix, under
+        deep_backfill_days, plus the startup backfill, with the skim's horizon in front."""
+        cfg = self.cfg
+        cap_days = float(self.learner.rx.shape[0]) / BARS_D * 1.45 + WARM_S / 86400.0
+        days = min(float(getattr(cfg, "deep_backfill_days", 0) or 0), cap_days) + float(cfg.backfill_seconds) / 86400.0
+        return backfill_span(time.time(), max(days, 3.0))
+
+    def _history_ready(self, lo: float, hi: float) -> bool:
+        """Whether the dated stores hold what a chunk of [lo, hi] needs to carry the features the
+        live feed will: its news, and its earnings calendar when the feature set reads one."""
+        if not self.news_history.covers(self._news_names(), lo, hi):
+            return False
+        return not self.features.wants_events or self.events.covers(lo, hi)
+
+    async def _events_job(self) -> None:
+        """Keep the dated earnings calendar current: at the start the span the deep backfill will
+        page (the deep loop waits for it, as for the news), then the weeks ahead again every six
+        hours, since dates get confirmed and moved. Public Nasdaq calendar, one request per day."""
+        first = True
+        while True:
+            lo, _ = self._history_span()
+            hi = time.time() + AHEAD_S
+            refresh = None if first else (datetime.now(timezone.utc).date() - timedelta(days=1))
+            try:
+                res = await self.events.fetch(lo, hi, say=lambda t: self.trace.emit("news", t, "info"), refresh_from=refresh)
+            except Exception as e:  # noqa: BLE001
+                self.trace.emit("news", f"earnings calendar fetch failed: {type(e).__name__}: {str(e)[:100]}", "warn")
+                res = {}
+            if res.get("days"):
+                self.trace.emit("news", f"earnings calendar: {res['done']} of {res['days']} days fetched, {res['names']} reports"
+                                        + (f"; {res['failed']} days failed" if res.get("failed") else "") + f" ({self.events.status})",
+                                "warn" if res.get("failed") else "info")
+            first = False
+            await asyncio.sleep(6 * 3600)
+
     async def _news_history_job(self) -> None:
         """Fill the dated news store for the span the deep backfill will page, in the
         background and paced under Finnhub's limit; the deep loop waits for a chunk's news
@@ -1528,11 +1574,8 @@ class Engine:
         names = self._news_names()
         if not key or not names:
             return
-        # the span the deep loop can actually hold: the ring's capacity in sessions (about 1.4 calendar
-        # days each) plus the warm prefix, under deep_backfill_days, plus the startup backfill
-        cap_days = float(self.learner.rx.shape[0]) / BARS_D * 1.45 + WARM_S / 86400.0
-        days = min(float(getattr(cfg, "deep_backfill_days", 0) or 0), cap_days) + float(cfg.backfill_seconds) / 86400.0
-        lo, hi = backfill_span(time.time(), max(days, 3.0))
+        lo, hi = self._history_span()
+        days = (hi - lo) / 86400.0
         missing = self.news_history.missing(names, lo, hi)
         if not missing:
             return

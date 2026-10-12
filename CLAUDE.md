@@ -205,6 +205,22 @@ unless Flint is already up.
   under Finnhub's limit; the deep loop waits for a chunk's news before paging it, walks a nine-day
   warm prefix (`WARM_S`) it does not emit so the week-long features are exact from a chunk's first
   window, and rewrites the startup backfill's days once their news is in (`learner.replace`).
+- The feature set is a switch (`FLINT_FEATURE_SET`, `core` by default, read by `flint/features.py` at
+  import because the net's shape follows it; `Config.feature_set` only documents it). `core` is the 28
+  inputs above. `extended` (0.5.19, coded ahead of the reset that will judge it) adds four opinions
+  computed from the week's ring alone (the beta-adjusted residual path's z-score and AR(1) half-life,
+  the trend's t statistic, a GARCH(1,1) one-step vol at fixed persistence; `FeatureBuilder._opinions`,
+  zero under 20 bars of ring, so a chunk's warm prefix makes them exact) and two earnings flags from a
+  dated calendar (`flint/events.py`, `state/events.json`: Nasdaq's public calendar, one request per
+  weekday over the history span plus 45 days ahead at every start, refreshed every six hours; the flags
+  decay as exp(-days/3) to and from a name's report dates, both 1 on the day itself because Nasdaq
+  rarely gives the hour). The deep loop waits for the calendar as it waits for the news
+  (`_history_ready`), the live builder and the offline one read the same store, and a builder without
+  one reads zeros. Flipping the switch in the Spark launcher reshapes the net, so it is a weekend
+  change: the autotune re-benchmarks (the feature count is in its key) and the checkpoint guard backs
+  the model up. Finnhub's free earnings calendar reaches only a few weeks back and its dividend
+  endpoints are premium (probed 2026-10-12), which is why the calendar is Nasdaq's and there is no
+  ex-dividend flag yet.
 - No position may carry unlimited risk, ever. Defined risk is the rule, not premium-capped: long
   options, debit and credit spreads, covered calls on held stock and cash-secured puts are all fine,
   because the worst case is a known finite number at entry. Naked short stock and naked written

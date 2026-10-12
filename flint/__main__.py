@@ -423,13 +423,14 @@ def _check() -> None:
         pick_device,
     )
     from .config import Config
-    from .features import N_FEATURES
+    from .features import FEATURE_SET, N_FEATURES
 
     cfg = Config()
     device = pick_device(cfg.device)
 
     # Device
     print(f"device: {device}")
+    print(f"feature set: {FEATURE_SET} ({N_FEATURES} features)")
 
     # Free memory
     free_gb = free_memory_gb(device)

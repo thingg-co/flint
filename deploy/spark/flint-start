@@ -22,6 +22,8 @@ fi
 # The Spark's environment. Every knob in flint/config.py can go here as FLINT_<NAME>.
 ENV=(
     FLINT_HOST=0.0.0.0                                 # reachable from the LAN and the mobile app
+    # FLINT_FEATURE_SET=extended                       # the next reset's inputs (TODO 2/2d: the opinions and the earnings
+                                                       # flags); flipping it reshapes the net, so only on a weekend
     FLINT_TARGET=relative                              # the hour-ahead residual against SPY/QQQ/IWM/SMH/XLF; the
                                                        # 2026-10-11 backtest: -33 bps against the absolute's -144
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # one growable pool instead of per-shape blocks: training,

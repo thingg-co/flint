@@ -15,11 +15,20 @@ market's return, momentum and vol (the first index name when modeled, else the e
 universe), each name's rolling beta to it, and the market's first half hour. Then the two news
 slots, from the live skim or, for history, a dated store (`NewsHistory`). There is no day-of-week
 or calendar-date feature on purpose.
+
+The feature set is a switch (`FLINT_FEATURE_SET`, read here at import because the model's shape
+follows it): `core` is the 28 inputs above, the live set since the reset of 2026-10-12;
+`extended` adds the next batch, coded ahead of the reset that will judge it: four opinions other
+forecasters would give from the week's ring (2d: the z-score of the beta-adjusted residual path
+and its AR(1) half-life, the trend's t statistic, a GARCH(1,1) one-step vol) and two earnings
+flags from a dated calendar (`EarningsCalendar`: proximity to the next report and to the last).
+Changing the set reshapes the net, so the launcher flips it on a weekend.
 """
 from __future__ import annotations
 
 import logging
 import math
+import os
 from collections import deque
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -36,14 +45,34 @@ RING = BARS_W + 1
 OPEN_BARS = 6                                        # the first half hour
 BETA_SHRINK = 20.0                                   # pseudo-bars behind a beta of 1
 
+OPINION_MIN_BARS = 20                                # the opinions read 0 on less of the ring than this
+GARCH_A, GARCH_B = 0.06, 0.92                        # GARCH(1,1) at a fixed persistence of 0.98 (about four hours of memory)
+
 OWN = ["ret", "range", "logvol", "closepos", "mom", "rvol", "gk", "yz", "rv_d", "rv_w", "mom_d", "lag_d", "slot5",
        "amihud", "roll", "overnight", "intraday", "tod_sin", "tod_cos"]
 MARKET = ["breadth", "breadth_h", "mkt_ret", "mkt_mom", "mkt_rvol", "beta", "open30"]
 NEWS = ["news_sent", "news_attn"]
-FEATURES = OWN + MARKET + NEWS
+OPINIONS = ["ou_z", "ou_hl", "trend_t", "garch"]    # 2d: other forecasters' readings of the week's ring
+EVENTS = ["earn_near", "earn_post"]                  # the dated earnings calendar: proximity to the next report and to the last
+CORE = OWN + MARKET + NEWS
+EXTENDED = CORE + OPINIONS + EVENTS
+FEATURE_SETS = {"core": CORE, "extended": EXTENDED}
+FEATURE_SET = os.environ.get("FLINT_FEATURE_SET", "core").strip().lower() or "core"
+if FEATURE_SET not in FEATURE_SETS:
+    log.warning("unknown FLINT_FEATURE_SET %r; using core", FEATURE_SET)
+    FEATURE_SET = "core"
+FEATURES = FEATURE_SETS[FEATURE_SET]
 EXOGENOUS = NEWS                                     # the only exogenous slots left in the net
-_BOUNDED = {"closepos", "tod_sin", "tod_cos", "breadth", "breadth_h", "news_sent", "news_attn"}   # already on a fixed scale
-NORMALIZE = np.array([f not in _BOUNDED for f in FEATURES], dtype=bool)
+_BOUNDED = {"closepos", "tod_sin", "tod_cos", "breadth", "breadth_h", "news_sent", "news_attn",
+            "ou_z", "earn_near", "earn_post"}         # already on a fixed scale
+
+
+def normalize_mask(features) -> np.ndarray:
+    """Which of `features` the running normalizer standardizes (the rest are already bounded)."""
+    return np.array([f not in _BOUNDED for f in features], dtype=bool)
+
+
+NORMALIZE = normalize_mask(FEATURES)
 N_FEATURES = len(FEATURES)
 
 
@@ -54,8 +83,11 @@ class RunningNorm:
     standardization tracks slow drifts in volatility and volume.
     """
 
-    def __init__(self, n_assets: int, n_features: int, alpha: float = 0.003):
+    def __init__(self, n_assets: int, n_features: int, alpha: float = 0.003, normalize: np.ndarray | None = None):
         self.alpha = alpha
+        if normalize is None:                                            # the active set's mask, else everything
+            normalize = NORMALIZE if n_features == N_FEATURES else np.ones(n_features, dtype=bool)
+        self.normalize = np.asarray(normalize, dtype=bool)
         self.mean = np.zeros((n_assets, n_features), dtype=np.float64)
         self.var = np.ones((n_assets, n_features), dtype=np.float64)
         self.count = np.zeros(n_assets, dtype=np.int64)   # per name: one added by a universe change starts fresh while the rest keep their history
@@ -70,7 +102,7 @@ class RunningNorm:
 
     def apply(self, x: np.ndarray) -> np.ndarray:
         z = (x - self.mean) / np.sqrt(self.var + 1e-8)
-        z = np.where(NORMALIZE[None, :], z, x)
+        z = np.where(self.normalize[None, :], z, x)
         return np.clip(z, -5.0, 5.0).astype(np.float32)
 
     def state(self, symbols: list[str] | None = None) -> dict:
@@ -142,12 +174,19 @@ class FeatureBuilder:
     ring so the longer features are exact once a week of bars has passed; before that they are
     computed on what there is (an offline chunk warms up on a prefix it does not emit)."""
 
-    def __init__(self, symbols: list[str], window: int, mom_bars: int = BARS_H, index: str | None = None):
+    def __init__(self, symbols: list[str], window: int, mom_bars: int = BARS_H, index: str | None = None,
+                 features: list[str] | None = None):
         self.symbols = list(symbols)
         n = len(self.symbols)
         self.window_len = window
         self.mom_bars = int(mom_bars)
-        self.norm = RunningNorm(n, N_FEATURES)
+        self.features = list(features) if features is not None else list(FEATURES)
+        unknown = [f for f in self.features if f not in EXTENDED]
+        if unknown:
+            raise ValueError(f"unknown features {unknown}")
+        self.wants_opinions = any(f in OPINIONS for f in self.features)
+        self.wants_events = any(f in EVENTS for f in self.features)
+        self.norm = RunningNorm(n, len(self.features), normalize=normalize_mask(self.features))
         self.index = self.symbols.index(index) if index in self.symbols else None
         self.prev_close = np.full(n, np.nan)
         self.R = np.zeros((n, RING))                 # returns, bps
@@ -167,6 +206,7 @@ class FeatureBuilder:
         self.news_sent = np.zeros(n)
         self.news_attn = np.zeros(n)
         self.news_history = None                     # a `NewsHistory`: when set, the news slots come from it at the bar's time
+        self.events = None                           # an `EarningsCalendar`: the earnings flags, live and for history alike; zeros without one
         self.exo: dict[str, dict[str, float]] = {s: {} for s in self.symbols}   # live-only signals, kept for the policy and the dashboard, not the net
 
     # -- exogenous inputs ----------------------------------------------------------------
@@ -295,10 +335,23 @@ class FeatureBuilder:
             sent, attn = self.news_history.at(ts, self.symbols)
         else:
             sent, attn = self.news_sent, self.news_attn
-        raw = np.column_stack([ret, rng, np.log1p(v), closepos, mom, rvol, gk, yz, rv_d, rv_w, mom_d, lag_d, slot5,
-                               amihud, roll, overnight, intraday, np.full(n, tod_sin), np.full(n, tod_cos),
-                               np.full(n, breadth), np.full(n, breadth_h), np.full(n, mkt_ret), np.full(n, mkt_mom),
-                               np.full(n, mkt_rvol), beta, np.full(n, self.open30), sent, attn])
+        # the opinions (2d) and the earnings flags, only when the set asks for them
+        if self.wants_opinions:
+            ou_z, ou_hl, trend_t, garch = self._opinions(rw, self._last(self.M, BARS_W), beta)
+        else:
+            ou_z = ou_hl = trend_t = garch = np.zeros(n)
+        if self.wants_events and self.events is not None:
+            earn_near, earn_post = self.events.at(ts, self.symbols)
+        else:
+            earn_near = earn_post = np.zeros(n)
+        same = lambda x: np.full(n, x)  # noqa: E731
+        cols = {"ret": ret, "range": rng, "logvol": np.log1p(v), "closepos": closepos, "mom": mom, "rvol": rvol, "gk": gk,
+                "yz": yz, "rv_d": rv_d, "rv_w": rv_w, "mom_d": mom_d, "lag_d": lag_d, "slot5": slot5, "amihud": amihud,
+                "roll": roll, "overnight": overnight, "intraday": intraday, "tod_sin": same(tod_sin), "tod_cos": same(tod_cos),
+                "breadth": same(breadth), "breadth_h": same(breadth_h), "mkt_ret": same(mkt_ret), "mkt_mom": same(mkt_mom),
+                "mkt_rvol": same(mkt_rvol), "beta": beta, "open30": same(self.open30), "news_sent": sent, "news_attn": attn,
+                "ou_z": ou_z, "ou_hl": ou_hl, "trend_t": trend_t, "garch": garch, "earn_near": earn_near, "earn_post": earn_post}
+        raw = np.column_stack([cols[f] for f in self.features])
         raw = np.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0)
         self.prev_close = np.where(c > 0, c, self.prev_close)
         self.norm.update(raw)
@@ -306,6 +359,40 @@ class FeatureBuilder:
         if len(self.window) < self.window_len:
             return None
         return np.stack(self.window, axis=1)
+
+    def _opinions(self, rw: np.ndarray, mw: np.ndarray, beta: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """What four classical forecasters read in the week's ring of returns `rw` (names, k) against
+        the market's `mw` (k,): the z-score of the beta-adjusted residual path at its last point
+        (how stretched the name is against its own week), the AR(1) half-life of that path in bars
+        (log1p; a random walk reads about 6.5), the t statistic of the own log-price path's slope on
+        time (the trend), and a GARCH(1,1) one-step volatility in bps at a fixed persistence,
+        started at the ring's variance, closed-form over the ring so it needs no state beyond the
+        ring itself. All zero while the ring holds fewer than OPINION_MIN_BARS bars."""
+        n, k = rw.shape
+        if k < OPINION_MIN_BARS:
+            z = np.zeros(n)
+            return z, z.copy(), z.copy(), z.copy()
+        path = np.cumsum(rw - beta[:, None] * mw[None, :], axis=1)
+        d = path - path.mean(axis=1, keepdims=True)
+        sd = np.sqrt((d * d).mean(axis=1))
+        ou_z = np.where(sd > 0, d[:, -1] / np.where(sd > 0, sd, 1.0), 0.0)
+        num = (d[:, 1:] * d[:, :-1]).sum(axis=1)
+        den = (d[:, :-1] ** 2).sum(axis=1)
+        phi = np.clip(np.where(den > 0, num / np.where(den > 0, den, 1.0), 0.0), 1e-3, 0.999)
+        ou_hl = np.log1p(-math.log(2.0) / np.log(phi))
+        own = np.cumsum(rw, axis=1)
+        t = np.arange(k) - (k - 1) / 2.0
+        stt = float((t * t).sum())
+        oc = own - own.mean(axis=1, keepdims=True)
+        slope = oc @ t / stt
+        resid = oc - slope[:, None] * t[None, :]
+        se = np.sqrt((resid * resid).sum(axis=1) / max(k - 2, 1) / stt)
+        trend_t = np.clip(np.where(se > 0, slope / np.where(se > 0, se, 1.0), 0.0), -20.0, 20.0)
+        var_w = (rw * rw).mean(axis=1)
+        pw = GARCH_B ** np.arange(k - 1, -1, -1)                              # beta^(k-1-j) weights the j-th squared return
+        s2 = GARCH_B ** k * var_w + (1.0 - GARCH_A - GARCH_B) * var_w * float(pw.sum()) + GARCH_A * ((rw * rw) @ pw)
+        garch = np.sqrt(np.maximum(s2, 0.0))
+        return ou_z, ou_hl, trend_t, garch
 
     def _yang_zhang(self) -> np.ndarray:
         """Yang-Zhang volatility over the hour's bars, in bps: the overnight (close-to-open)
