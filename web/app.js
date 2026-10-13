@@ -1031,7 +1031,7 @@ function renderOnboard() {
   const body = $("#onboard-body");
   if (step.type === "intro") {
     body.innerHTML = `<h2>Welcome to Flint</h2>` +
-      `<p>Flint runs out of the box on free, no-key data sources. Adding an API key unlocks better or faster data for that provider \u2014 but <b>every key is optional</b>, and you can add them anytime from the Control panel.</p>` +
+      `<p>Flint runs out of the box on free, no-key data sources. Adding an API key unlocks better or faster data for that provider \u2014 but <b>every key is optional</b>, and you can add them anytime from the Control Panel.</p>` +
       `<p class="onb-sub">Let's walk through them. Skip any you don't have.</p>` +
       `<div class="onb-actions"><button class="onb-ghost" id="onb-skipall">Skip setup</button><button class="onb-primary" id="onb-go">Get started</button></div>`;
   } else if (step.type === "key") {
@@ -1054,7 +1054,7 @@ function renderOnboard() {
       `<div class="onb-actions"><button class="onb-ghost" id="onb-back">Back</button><button class="onb-primary" id="onb-go">Continue</button></div>`;
   } else {
     body.innerHTML = `<h2>You're all set</h2>` +
-      `<p>Flint is already running on free sources and learning from live data. Add or change keys anytime from <b>Control panel \u2192 API keys</b>.</p>` +
+      `<p>Flint is already running on free sources and learning from live data. Add or change keys anytime from <b>Control Panel \u2192 API keys</b>.</p>` +
       `<div class="onb-actions"><button class="onb-primary" id="onb-go">Enter Flint</button></div>`;
   }
   const on = (id, fn) => { const b = $("#" + id); if (b) b.onclick = fn; };
@@ -1551,7 +1551,7 @@ function renderSweep(sw) {
   const cell = (v, cls) => `<span class="num ${cls || ""}">${v}</span>`;
   if (!sw || sw.error) { root.innerHTML = ""; if (meta && sw && sw.error) meta.textContent = sw.error; return; }
   const cur = sw.current || {}, prop = sw.proposal, pd = v => v != null ? fmtBps(v) + "/day" : "·";
-  const live = state.controls || {};                                  // "now" is the Control panel today, not the run's snapshot
+  const live = state.controls || {};                                  // "now" is the Control Panel today, not the run's snapshot
   const nowOf = k => (k in live && live[k] != null) ? live[k] : (cur.knobs || {})[k];
   const applied = !!(prop && prop.knobs && Object.keys(prop.knobs).length && Object.keys(prop.knobs).every(k => Number(nowOf(k)) === Number(prop.knobs[k])));
   const half = r => r ? pd(r.net_bps_per_day) : "·";

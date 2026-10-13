@@ -90,7 +90,7 @@ unless Flint is already up.
   price and bid/ask but never build bars; otherwise a closed-market feed echoing a stale
   quote fabricates flat bars.
 - Sources live in `REGISTRY` (sources.py); their keys live in `KEY_SERVICES` (engine.py).
-  `KEY_SERVICES` drives onboarding and the Control panel, so adding a provider there makes
+  `KEY_SERVICES` drives onboarding and the Control Panel, so adding a provider there makes
   it appear as a skippable setup step with no frontend code. `set_key` writes the service's
   gitignored file, the one the config reads on the next start, and `_apply_key` pushes the key
   into everything that copied it at construction (the source; for Finnhub also the radar and the
@@ -111,7 +111,7 @@ unless Flint is already up.
   known symbols, and the tracked funds' 13F positions) and `pick_universe` promotes the top of the
   ranking into the room left (never on a thin pool: the radar, the news skim and the 13F books must
   have reported and at least 20 candidates scored, else it waits; "Refresh universe now" on the
-  Control panel queues a pass); a promoted name is demoted only after `interesting_grace_days`
+  Control Panel queues a pass); a promoted name is demoted only after `interesting_grace_days`
   without ranking in the top 1.5 x count and `interesting_min_tenure_days` of tenure, because a
   demotion forfeits its learned row and history. `state/universe.json` persists the list, the
   refresh date and each promoted name's since/last_hit; delete it to shrink back to the config.
@@ -162,7 +162,7 @@ unless Flint is already up.
   its own budget; a step can delay a forecast by at most one step. Both loops wait on the Finnhub
   market status (holiday-aware; unknown counts as neither open nor closed), so without a Finnhub key
   neither runs and the GPU idles all night. The status poll checks for a key on every pass, so one
-  saved in the Control panel starts it without a restart; a rejected key is reported in the trace.
+  saved in the Control Panel starts it without a restart; a rejected key is reported in the trace.
 - On CUDA the train step runs under bf16 autocast with TF32 matmuls (loss in fp32); MPS and CPU
   stay fp32. `FLINT_COMPILE=1` wraps the training forward in `torch.compile` (2.1x on the GB10,
   same loss range; a two-minute compile on the first step after each start). Prediction and
@@ -258,7 +258,7 @@ unless Flint is already up.
   `session` names pre- and post-market); a stale or missing status leaves the clock and calendar to
   decide, a fresh one saying closed overrules them. `Engine._regular_session` / `_extended_session` /
   `_stock_session` are the gates; the paper book itself refuses option fills outside the regular
-  session (`options_ok`). "Reset paper book" on the Control panel (`paper_reset`) starts a fresh book
+  session (`options_ok`). "Reset paper book" on the Control Panel (`paper_reset`) starts a fresh book
   at `paper_start` and saves. Columbus Day is not an exchange holiday (2026-10-12 traded). The kill
   switch is a bar under the header on every tab (`renderKillbar`), shown only while there is something
   to kill: open paper positions ("Flatten everything": the `flatten` action closes every stock position
@@ -274,7 +274,7 @@ unless Flint is already up.
   chains, the Portfolio tab and Schwab's ranged history stop. Both bars are `display: none` under the
   `hidden` attribute explicitly, because the flex display rule beat the attribute and an empty bar showed
   its red edge.
-- A live control set from the Control panel or the sweep's "apply these gates" is kept in
+- A live control set from the Control Panel or the sweep's "apply these gates" is kept in
   `state/controls.json` (`Engine._remember_controls`) and laid over the launcher's environment at the
   next start (`_load_controls`, since 0.5.22): the panel is the operator's last word, so a gate applied
   on Tuesday is still there after Wednesday's restart. Delete the file to fall back to the environment.
@@ -407,7 +407,7 @@ unless Flint is already up.
   for equities, the crypto desks only when crypto is modeled. Equity mentions come mainly from
   `FinnhubNews`, company news keyed by ticker (30 names per pass in rotation, three days kept), with
   general market news for the tone; headline text matches a ticker only as an upper-case word of
-  three or more letters outside `TICKER_STOPLIST`. The Control panel lists only covered names.
+  three or more letters outside `TICKER_STOPLIST`. The Control Panel lists only covered names.
   Headline tone is graded (`flint/sentiment.py`): `news_scorer=finbert` (the default) runs
   ProsusAI/finbert locally on the CPU, tone = P(positive) − P(negative), fetched from the Hugging
   Face hub on first use (about 440 MB, cached under ~/.cache/huggingface) and cached per title so a

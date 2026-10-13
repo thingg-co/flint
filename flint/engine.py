@@ -2742,7 +2742,7 @@ class Engine:
     async def _market_status_loop(self) -> None:
         """Poll Finnhub for the holiday-aware US market status (open/pre/post/closed). The
         deep-backfill and idle-training loops wait on this status, so the poll checks for a
-        key on every pass: one saved from the Control panel starts it without a restart."""
+        key on every pass: one saved from the Control Panel starts it without a restart."""
         while True:
             polled = await self._poll_market_status()
             await asyncio.sleep(60 if polled else 5)

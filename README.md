@@ -109,7 +109,7 @@ it.
   rotation, top movers, and the model's strongest calls.
 - **Dashboard** — a forecast card per symbol (the session's chart plus the forecast fan),
   ranked by volatility, with a whole-market panel and the 250-name movers grid below.
-- **Control panel** — the universe, data sources, API keys, the investor council, the
+- **Control Panel** — the universe, data sources, API keys, the investor council, the
   movers radar, runtime policy controls, and one live console per stage of the system.
 
 Everything is on the websocket, also reachable over HTTP: `GET /api/state`, `/api/news`,

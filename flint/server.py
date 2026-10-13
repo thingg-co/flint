@@ -51,7 +51,7 @@ def create_app(engine: Engine) -> FastAPI:
     async def never_stale(request, call_next):
         # The page and its script and stylesheet carry no Cache-Control, so a browser kept them by
         # the heuristic rule (a tenth of the file's age) and a normal reload re-ran a script fixed
-        # hours earlier (2026-10-11: the Control panel's "cannot be parsed" warnings outlived their
+        # hours earlier (2026-10-11: the Control Panel's "cannot be parsed" warnings outlived their
         # fix by a day). no-cache makes every load revalidate; the ETag answers 304 when unchanged.
         resp = await call_next(request)
         if request.url.path == "/" or request.url.path.startswith("/static/"):

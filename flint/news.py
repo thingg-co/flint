@@ -300,7 +300,7 @@ class NewsSkimmer:
 
     def _ideas(self, per_asset: dict, headlines: list[Headline]) -> list[str]:
         """One line per name with coverage, most covered first, and one line for the rest:
-        212 "no direct coverage" lines were the 2026-10-10 Control panel."""
+        212 "no direct coverage" lines were the 2026-10-10 Control Panel."""
         ideas = []
         covered = sorted(((s, pa) for s, pa in per_asset.items() if pa["mentions"]),
                          key=lambda kv: (-kv[1]["mentions"], -abs(kv[1]["sentiment"])))
@@ -453,7 +453,7 @@ class FinnhubNews:
     sector fill) and keeps every name's last articles for three days, so a 212-name universe
     is fully refreshed about every 25 minutes at the default 3-minute cadence. General market
     news (/news?category=general) gives the market tone every pass. The key is read on every
-    pass, so one saved in the Control panel takes effect without a restart."""
+    pass, so one saved in the Control Panel takes effect without a restart."""
 
     id = "finnhub"
     name = "Finnhub company news"

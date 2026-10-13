@@ -1,4 +1,4 @@
-"""Keys saved from the Control panel: written to the file the config reads on the next start,
+"""Keys saved from the Control Panel: written to the file the config reads on the next start,
 and applied live to every consumer. Exists because set_key raised NameError on every service
 (2026-10-10), so no key could be entered without a restart, and a Finnhub key entered at
 runtime never reached the market-status poll, the radar or the fundamentals signal."""
