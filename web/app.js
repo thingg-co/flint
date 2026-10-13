@@ -1515,7 +1515,12 @@ function renderSweep(sw) {
   const live = state.controls || {};                                  // "now" is the Control panel today, not the run's snapshot
   const nowOf = k => (k in live && live[k] != null) ? live[k] : (cur.knobs || {})[k];
   const applied = !!(prop && prop.knobs && Object.keys(prop.knobs).length && Object.keys(prop.knobs).every(k => Number(nowOf(k)) === Number(prop.knobs[k])));
-  const half = r => r ? `${pd(r.net_bps_per_day)}<br>${r.signals} trades · hit ${fmtPct(r.hit_rate)}` : "·";
+  const half = r => r ? pd(r.net_bps_per_day) : "·";
+  const trades = r => r ? String(r.signals) : "·", hit = r => r ? fmtPct(r.hit_rate) : "·";
+  const halfRows = (label, a, b, cls) => [                            // the half's return, its trades and its hit rate as rows of their own
+    `<div class="prow half"><span>${label}</span>${cell(half(a))}${cell(half(b), cls)}</div>`,
+    `<div class="prow"><span>&nbsp;&nbsp;trades</span>${cell(trades(a))}${cell(trades(b))}</div>`,
+    `<div class="prow"><span>&nbsp;&nbsp;hit rate</span>${cell(hit(a))}${cell(hit(b))}</div>`];
   if (meta) meta.textContent = `${sw.days} days, split at day ${sw.split_day}; ${sw.evaluations} settings tried · ${sw.accepted && sw.thin ? "proposal confirmed on the second half, on too few trades to act on" : sw.accepted ? "proposal confirmed on the second half" : (prop ? "proposal failed the second half: not recommended" : "no setting beat the current gates")} · ${esc(sw.target || "")} target, cost ${sw.cost_bps} bps${sw.hedge_cost_bps != null ? `, hedge ${sw.hedge_cost_bps} bps` : ""}`;
   if (applied) {                                                     // nothing left to propose: the gates are the proposal, shown as before and after
     const was = cur.knobs || {};
@@ -1524,7 +1529,7 @@ function renderSweep(sw) {
       const b = k in was ? was[k] : "—", a = prop.knobs[k];
       rows.push(`<div class="prow"><span>${esc(k.replace(/_/g, " "))}</span>${cell(b)}${cell(a, Number(b) !== Number(a) ? "up" : "")}</div>`);
     });
-    rows.push(`<div class="prow half"><span>confirming half</span>${cell(half(cur.confirm))}${cell(half(prop.confirm), sw.accepted && !sw.thin ? "up" : "")}</div>`);
+    rows.push(...halfRows("confirming half", cur.confirm, prop.confirm, sw.accepted && !sw.thin ? "up" : ""));
     root.innerHTML = rows.join("") + `<div class="snote">applied: the Control panel carries this run's proposal; the next run judges it and may propose again</div>`;
     return;
   }
@@ -1534,7 +1539,7 @@ function renderSweep(sw) {
     rows.push(`<div class="prow"><span>${esc(k.replace(/_/g, " "))}</span>${cell(v)}${cell(pv != null ? pv : "—", pv != null ? (sw.accepted && !sw.thin ? "up" : "") : "")}</div>`);
   });
   rows.push(`<div class="prow half"><span>tuning half</span>${cell(half(cur.tune))}${cell(prop ? half(prop.tune) : "·")}</div>`);
-  rows.push(`<div class="prow half"><span>confirming half</span>${cell(half(cur.confirm))}${cell(prop ? half(prop.confirm) : "·", prop && sw.accepted && !sw.thin ? "up" : prop && !sw.accepted ? "down" : "")}</div>`);
+  rows.push(...halfRows("confirming half", cur.confirm, prop ? prop.confirm : null, prop && sw.accepted && !sw.thin ? "up" : prop && !sw.accepted ? "down" : ""));
   root.innerHTML = rows.join("") + (sw.why ? `<div class="snote">${esc(sw.why)}</div>` : "") +
     (prop && prop.knobs && Object.keys(prop.knobs).length
       ? (applied
