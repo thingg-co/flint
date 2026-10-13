@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from flint.features import CORE, EXTENDED, FILINGS, NY, VALUATION, FeatureBuilder
-from flint.filings import (EIGHTK_DAYS, STAKE_DAYS, EdgarStore, _avail, latest, sector_relative, ttm)
+from flint.filings import (EIGHTK_DAYS, STAKE_DAYS, EdgarStore, _avail, _ts, latest, sector_relative, ttm)
 
 
 def _d(y, m, d, h=12):
@@ -125,6 +125,29 @@ def test_the_ratios_are_point_in_time_and_relative_to_the_sector_and_the_flags_d
     before = st.at(datetime(2026, 9, 28, 12, tzinfo=NY).timestamp(), syms, closes)
     assert before["filing_8k"][0] == 0.0                              # accepted after that bar
     assert st.at(_d(2026, 11, 15), syms, closes)["filing_8k"][0] == 0.0   # past EIGHTK_MAX
+
+
+def test_renamed_schedules_count_and_a_filer_that_changed_tags_keeps_its_history():
+    st = EdgarStore(contact="dev@example.com")
+    now = _d(2026, 10, 1)
+    st.add_filings("AAPL", {"form": ["SCHEDULE 13G/A", "SC 13G", "SCHEDULE 13D"], "filingDate": ["2026-09-20", "2026-09-10", "2026-09-01"],
+                            "acceptanceDateTime": ["", "", ""]}, now)
+    assert len(st.filings["AAPL"]["stake"]) == 3                     # EDGAR's 2025 spelling and the old one
+    facts = {"facts": {"us-gaap": {
+        "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations": {"units": {"USD": [
+            {"start": "2024-01-01", "end": "2024-12-31", "val": 100.0, "filed": "2025-02-20"}]}},
+        "NetCashProvidedByUsedInOperatingActivities": {"units": {"USD": [
+            {"start": "2025-01-01", "end": "2025-12-31", "val": 120.0, "filed": "2026-02-20"},
+            {"start": "2024-01-01", "end": "2024-12-31", "val": 100.0, "filed": "2026-02-20"}]}}}}}
+    st.add_facts("XOM", facts, now)
+    rows = st.facts["XOM"]["ocf"]
+    assert len(rows) == 2 and rows[0][0] == _avail("2025-02-20")      # the comparative in the later filing does not postpone when FY2024 was known
+    assert ttm(rows, _d(2025, 6, 1)) == 100.0 and ttm(rows, now) == 120.0
+    # a total reported in the per-share tag reads as unknown, not as a 10,000% yield
+    st.sectors = {"MOS": "Materials"}
+    st.facts["MOS"] = {"dps": [[_avail("2026-02-20"), _ts("2025-01-01"), _ts("2025-12-31"), 220000.0]], "shares": [[_avail("2026-02-20"), 0, _ts("2025-12-31"), 100.0]]}
+    out = st.at(now, ["MOS"], np.array([18.9]))
+    assert out["val_dy"][0] == 0.0
 
 
 def test_persistence_round_trips(tmp_path):

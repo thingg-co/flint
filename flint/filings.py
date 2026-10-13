@@ -56,9 +56,10 @@ TAGS: dict[str, tuple[str, ...]] = {
     "equity": ("StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"),
     "shares": ("EntityCommonStockSharesOutstanding", "WeightedAverageNumberOfDilutedSharesOutstanding",
                "CommonStockSharesOutstanding"),
-    "debt": ("LongTermDebt", "LongTermDebtNoncurrent", "DebtInstrumentCarryingAmount", "LongTermDebtAndCapitalLeaseObligations"),
+    "debt": ("LongTermDebt", "LongTermDebtNoncurrent", "DebtInstrumentCarryingAmount", "LongTermDebtAndCapitalLeaseObligations",
+             "DebtLongtermAndShorttermCombinedAmount"),
     "cash": ("CashAndCashEquivalentsAtCarryingValue", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"),
-    "ocf": ("NetCashProvidedByUsedInOperatingActivities",),
+    "ocf": ("NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"),
     "capex": ("PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"),
     "opinc": ("OperatingIncomeLoss",),
     "da": ("DepreciationDepletionAndAmortization", "DepreciationAndAmortization", "DepreciationAmortizationAndAccretionNet"),
@@ -66,7 +67,14 @@ TAGS: dict[str, tuple[str, ...]] = {
     "dps": ("CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid"),
 }
 INSTANT = {"equity", "shares", "debt", "cash"}       # balance-sheet facts: the latest reading; the rest are flows (TTM)
+# a filer that reports a total in a per-share tag, or a penny stock's book, would dominate a sector's median: raw ratios outside these are unknown
+BOUNDS = {"pb": (-4.0, 6.0), "fcfy": (-1.0, 1.0), "evx": (-3.0, 6.0), "dy": (0.0, 0.25), "roe": (-2.0, 2.0)}
 FORMS = {"8-K": "8k", "8-K/A": "8k", "4": "ins", "4/A": "ins", "SC 13D": "stake", "SC 13D/A": "stake", "SC 13G": "stake", "SC 13G/A": "stake"}
+# EDGAR renamed the schedules in 2025 ("SCHEDULE 13G/A" beside the older "SC 13G/A"); both spellings count
+
+
+def _form(form: str) -> str:
+    return str(form).strip().upper().replace("SCHEDULE ", "SC ")
 REPORTS = {"10-K", "10-Q", "10-K/A", "10-Q/A", "20-F", "40-F"}   # a new one of these means the facts changed
 
 
@@ -123,6 +131,12 @@ def latest(rows: list[list[float]], ts: float) -> float:
     if not seen:
         return math.nan
     return float(max(seen, key=lambda r: (r[2], r[0]))[3])
+
+
+def _within(vals: np.ndarray, which: str) -> np.ndarray:
+    """A raw ratio outside its plausible range (BOUNDS) is unknown, not an outlier to standardize."""
+    lo, hi = BOUNDS[which]
+    return np.where((vals >= lo) & (vals <= hi), vals, np.nan)
 
 
 def sector_relative(vals: np.ndarray, sectors: list[str | None]) -> np.ndarray:
@@ -222,15 +236,15 @@ class EdgarStore:
             ev = mcap + np.nan_to_num(inp["debt"], nan=0.0) - np.nan_to_num(inp["cash"], nan=0.0)
             ebitda = inp["opinc"] + np.nan_to_num(inp["da"], nan=0.0)
             fcf = inp["ocf"] - np.nan_to_num(inp["capex"], nan=0.0)
-            pb = np.where(inp["equity"] > 0, np.log(mcap / inp["equity"]), np.nan)
-            fcfy = np.where(mcap > 0, fcf / mcap, np.nan)
-            evx = np.where((ebitda > 0) & (ev > 0), np.log(ev / ebitda), np.nan)
-            dy = np.where(c > 0, np.nan_to_num(inp["dps"], nan=np.nan) / c, np.nan)
-            roe = np.where(inp["equity"] > 0, inp["netinc"] / inp["equity"], np.nan)
+            pb = _within(np.where(inp["equity"] > 0, np.log(mcap / inp["equity"]), np.nan), "pb")
+            fcfy = _within(np.where(mcap > 0, fcf / mcap, np.nan), "fcfy")
+            evx = _within(np.where((ebitda > 0) & (ev > 0), np.log(ev / ebitda), np.nan), "evx")
+            dy = _within(np.where(c > 0, inp["dps"] / c, np.nan), "dy")
+            roe = _within(np.where(inp["equity"] > 0, inp["netinc"] / inp["equity"], np.nan), "roe")
         secs = [self.sectors.get(s) for s in symbols]
         out = {"val_pb": sector_relative(pb, secs), "val_fcf": sector_relative(fcfy, secs),
                "val_ev": sector_relative(evx, secs), "val_dy": sector_relative(dy, secs),
-               "qual_roe": sector_relative(np.clip(roe, -2.0, 2.0), secs)}
+               "qual_roe": sector_relative(roe, secs)}
         for k in out:
             out[k] = np.nan_to_num(out[k], nan=0.0, posinf=0.0, neginf=0.0)
         eightk, ins, stake = np.zeros(n), np.zeros(n), np.zeros(n)
@@ -273,12 +287,12 @@ class EdgarStore:
                 units.setdefault(tag, body.get("units") or {})
         kept: dict[str, list[list[float]]] = {}
         for k, tags in TAGS.items():
-            for tag in tags:
+            rows: dict[tuple, list[float]] = {}
+            for tag in tags:                                 # every spelling the filer used over the years
                 u = units.get(tag)
                 if not u:
                     continue
                 series = next(iter(u.values()), [])
-                rows: dict[tuple, list[float]] = {}
                 for e in series:
                     try:
                         end, filed, val = e["end"], e["filed"], float(e["val"])
@@ -292,9 +306,8 @@ class EdgarStore:
                     key = (start_ts, end_ts)
                     if key not in rows or avail < rows[key][0]:      # the first filing of a period is when it became known
                         rows[key] = [avail, start_ts, end_ts, val]
-                if rows:
-                    kept[k] = sorted(rows.values(), key=lambda r: (r[0], r[2]))
-                    break
+            if rows:
+                kept[k] = sorted(rows.values(), key=lambda r: (r[0], r[2]))
         if kept:
             self.facts[symbol] = kept
         self._cache = None
@@ -310,7 +323,7 @@ class EdgarStore:
         accepted = recent.get("acceptanceDateTime") or []
         n_rep = 0
         for i, form in enumerate(forms):
-            form = str(form).strip()
+            form = _form(form)
             if form in REPORTS:
                 n_rep += 1
             g = FORMS.get(form)
