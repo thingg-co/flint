@@ -48,6 +48,7 @@ TUNABLE = {"score_threshold": float, "prob_margin": float, "cost_bps": float, "m
            "kelly_fraction": float, "move_floor_bps": float, "min_hit_rate": float, "meta_min": float,
            "deep_backfill_days": float, "idle_train_epochs": float,
            "extended_hours": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
+           "trading_halted": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
            "train_in_session": lambda v: str(v).lower() in ("1", "true", "yes", "on"),
            "skill_min_n": int, "confirm_bars": int, "stock_min_hold_bars": int, "max_spread_bps": float,
            "min_price": float, "option_max_frac": float, "min_position_dollars": float,
@@ -653,6 +654,7 @@ class Engine:
         return {"phase": self.status, "feed": ", ".join(active) or "none", "providers": providers,
                 "started": self.started, "now": time.time(), "bar_index": self.bar_index,
                 "pending": len(self.pending), "learning": self.learning_enabled, "subscribers": len(self.subs),
+                "halted": bool(getattr(self.cfg, "trading_halted", False)),
                 "market_status": self.market_status,
                 "stalled": bool(getattr(self, "_stalled", False)),
                 "last_bar_age": round(time.time() - getattr(self, "_last_row_at", time.time())),
@@ -1876,7 +1878,8 @@ class Engine:
                                   **({"beta": {self.symbols[c]: round(float(self.learner.beta[i, j]), 2)
                                                for j, c in enumerate(self.learner.cols)}} if self.learner.cols else {})}
             # trade only once the model is trusted AND has shown real directional skill (not just tenure)
-            tradeable = self.metrics.trusted and (self.metrics.hit_ema or 0.0) > cfg.min_hit_rate
+            halted = bool(getattr(cfg, "trading_halted", False))     # the kill switch: nothing opens, everything held reads a zero target
+            tradeable = self.metrics.trusted and (self.metrics.hit_ema or 0.0) > cfg.min_hit_rate and not halted
             targets = {s: (self.latest[s]["side"] * self.latest[s]["size"] if tradeable else 0.0) for s in self.symbols}
             # minimum hold: a fading signal does not close a young position; a reversed one does
             for s in self.symbols:
@@ -1942,7 +1945,7 @@ class Engine:
                         put_quotes[s] = pq
             # Fat-tail forecasts trade as long straddles: they need band skill, not directional
             # skill, so they gate on calibrated coverage instead of hit rate.
-            vol_tradeable = (self.metrics.trusted and cfg.straddle_enabled
+            vol_tradeable = (self.metrics.trusted and cfg.straddle_enabled and not halted
                              and (self.metrics.coverage_ema or 0.0) >= cfg.straddle_min_coverage)
             straddle_targets: dict[str, float] = {}
             straddle_quotes: dict[str, dict] = {}
@@ -2800,6 +2803,25 @@ class Engine:
         elif action == "refresh_universe":
             self._universe_refreshed = ""                 # the loop runs the next pass the pool allows
             return {"ok": True, "universe": "refresh queued"}
+        elif action == "flatten":
+            # the kill switch: every paper position closed now, at the quoted side for stock and the mark
+            # for options, and no new entry until "resume_trading"; the halt outlives a restart
+            prices = self._live_prices()
+            quotes = {s: {"bid": (self.prices.get(s) or {}).get("bid"), "ask": (self.prices.get(s) or {}).get("ask")} for s in prices}
+            res = self.paper.flatten(prices, time.time(), quotes)
+            self.cfg.trading_halted = True
+            if hasattr(self, "_remember_controls"):
+                self._remember_controls({"trading_halted": True})
+            self.trace.emit("system", f"kill switch: {len(res['closed'])} position(s) closed ({', '.join(res['closed']) or 'none open'}), "
+                                      f"realized {res['realized']:+,.2f}; trading halted until resumed", "act")
+            self._save()
+            return {"ok": True, "closed": res["closed"], "realized": res["realized"], "halted": True}
+        elif action == "resume_trading":
+            self.cfg.trading_halted = False
+            if hasattr(self, "_remember_controls"):
+                self._remember_controls({"trading_halted": False})
+            self.trace.emit("system", "trading resumed: the paper book may open positions again", "act")
+            return {"ok": True, "halted": False}
         elif action == "paper_reset":
             old = self.paper.snapshot(self._live_prices())
             self.paper = self._new_paper()

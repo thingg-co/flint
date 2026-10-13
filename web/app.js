@@ -690,9 +690,36 @@ function renderStall(s) {
   if (s.stalled) el.textContent = `No candle for ${Math.round((s.last_bar_age || 0) / 60)} minutes while the market is open: prices tick but no source is delivering trades, so nothing forecasts or trades.`;
 }
 
+function renderKillbar() {
+  // the kill switch rides under the header on every tab, only while there is something to kill:
+  // open paper positions (flatten them, which also halts new entries) or a halt to lift
+  const bar = $("#killbar"); if (!bar) return;
+  const s = state.status || {}, pos = (state.paper && state.paper.positions) || [];
+  const risk = pos.reduce((a, p) => a + Math.abs(p.kind === "stock" ? (p.value || 0) : (p.risk || p.value || 0)), 0);
+  const halted = !!s.halted;
+  bar.hidden = !(pos.length || halted);
+  if (bar.hidden) return;
+  bar.classList.toggle("halted", halted && !pos.length);
+  $("#kill-text").innerHTML = pos.length
+    ? `<b>${pos.length}</b> open paper position${pos.length === 1 ? "" : "s"}, <b>${fmtUSD(risk)}</b> at risk${halted ? " · trading halted" : ""}`
+    : `trading halted · the paper book opens nothing until resumed`;
+  $("#kill-flatten").hidden = !pos.length;
+  $("#kill-resume").hidden = !halted;
+}
+{ const f = $("#kill-flatten"); if (f) f.onclick = async () => {
+    if (!confirm("Close every paper position now and halt new entries?")) return;
+    f.disabled = true; const r = await control({ action: "flatten" }); f.disabled = false;
+    if (r && r.ok) { if (state.status) state.status.halted = true; if (state.paper) state.paper.positions = []; renderKillbar(); }
+  }; }
+{ const b = $("#kill-resume"); if (b) b.onclick = async () => {
+    b.disabled = true; const r = await control({ action: "resume_trading" }); b.disabled = false;
+    if (r && r.ok) { if (state.status) state.status.halted = false; renderKillbar(); }
+  }; }
+
 function renderStatus() {
   const s = state.status || {};
   renderStall(s);
+  renderKillbar();
   const phase = $("#phase");   // the phase pill is gone from the header; the session pill and loading bar carry it
   if (phase) { phase.textContent = s.phase || "?"; phase.className = "pill " + (s.phase === "live" ? "live" : s.phase === "error" ? "err" : "warn"); }
   $("#feed").textContent = "feed: " + (s.feed || "?");
@@ -2016,7 +2043,7 @@ function handle(msg) {
     case "bar":
       state.status = msg.status;
       Object.entries(msg.bars).forEach(([s, b]) => { (state.bars[s] ||= []).push(b); if (state.bars[s].length > 240) state.bars[s].shift(); });
-      state.latest = msg.latest; state.gate = msg.gate; state.metrics = msg.metrics; state.outcomes = msg.outcomes; state.log = msg.log; if (msg.paper) state.paper = msg.paper;
+      state.latest = msg.latest; state.gate = msg.gate; state.metrics = msg.metrics; state.outcomes = msg.outcomes; state.log = msg.log; if (msg.paper) { state.paper = msg.paper; renderKillbar(); }
       state.providers = (msg.status && msg.status.providers) || state.providers;
       absorbHistory(msg.history);
       renderAll();

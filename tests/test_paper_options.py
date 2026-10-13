@@ -284,3 +284,17 @@ class TestPaperBookEquity:
         straddle_value = book._straddle_value("AAPL", prices, ts)
         equity = book.equity(prices, ts)
         assert equity == pytest.approx(book.cash + put_value + straddle_value)
+
+
+    def test_flatten_closes_stock_puts_and_straddles_at_once(self):
+        book = PaperBook(start=100_000.0, cost_bps=8.0, option_max_frac=0.02)
+        prices = {"AAPL": 200.0, "MSFT": 300.0}
+        SQ = {"put_premium": 4.0, "call_premium": 4.0, "strike": 200.0, "expiry_ts": ts + 30 * DAY, "put_iv": 0.4, "call_iv": 0.4}
+        PQ = {"strike": 300.0, "expiry_ts": ts + 30 * DAY, "premium": 6.0, "iv": 0.4, "delta": -0.5, "spot": 300.0}
+        book.rebalance({"AAPL": 0.1, "MSFT": -0.1}, prices, ts, put_quotes={"MSFT": PQ}, straddle_targets={"AAPL": 0.01}, straddle_quotes={"AAPL": SQ})
+        assert book.pos and book.puts and book.straddles
+        res = book.flatten(prices, ts + 600)
+        assert sorted(res["closed"]) == ["AAPL", "AAPL", "MSFT"] and res["left"] == 0
+        assert not book.pos and not book.puts and not book.straddles
+        assert abs(book.equity(prices, ts + 600) - book.cash) < 1e-6           # nothing left to mark: equity is cash
+        assert book.flatten(prices, ts + 900) == {"closed": [], "realized": 0.0, "left": 0}

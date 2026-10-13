@@ -255,7 +255,13 @@ unless Flint is already up.
   decide, a fresh one saying closed overrules them. `Engine._regular_session` / `_extended_session` /
   `_stock_session` are the gates; the paper book itself refuses option fills outside the regular
   session (`options_ok`). "Reset paper book" on the Control panel (`paper_reset`) starts a fresh book
-  at `paper_start` and saves. Columbus Day is not an exchange holiday (2026-10-12 traded).
+  at `paper_start` and saves. Columbus Day is not an exchange holiday (2026-10-12 traded). The kill
+  switch is a bar under the header on every tab (`renderKillbar`), shown only while there is something
+  to kill: open paper positions ("Flatten everything": the `flatten` action closes every stock position
+  at the quoted side and every put and straddle at its mark, `PaperBook.flatten`, and sets
+  `trading_halted`, a live control kept in `state/controls.json` so the halt outlives a restart; while
+  halted the bar loop reads a zero target for every name and opens nothing) or a halt to lift ("Resume
+  trading", `resume_trading`). `status_dict` carries `halted`.
 - A live control set from the Control panel or the sweep's "apply these gates" is kept in
   `state/controls.json` (`Engine._remember_controls`) and laid over the launcher's environment at the
   next start (`_load_controls`, since 0.5.22): the panel is the operator's last word, so a gate applied

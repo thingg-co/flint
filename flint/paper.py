@@ -243,6 +243,27 @@ class PaperBook:
         self.trades.appendleft({"t": ts, "sym": s, "side": "sell straddle", "shares": round(st["contracts"], 2),
                                 "price": round(px, 2), "notional": round(val, 2)})
 
+    def flatten(self, prices: dict, ts: float, quotes: dict | None = None) -> dict:
+        """The kill switch: close every stock position at the quoted side, every put and every
+        straddle at its mark, now. Returns what was closed and the realized change."""
+        before = self.realized
+        closed = []
+        for s, cur in list(self.pos.items()):
+            ref = self._px(s, prices)
+            if ref and cur:
+                self._fill(s, cur, -cur, self._exec_price(s, -cur, ref, quotes or {}), ts)
+                closed.append(s)
+        for s in list(self.puts):
+            px = self._px(s, prices) or self.puts[s]["strike"]
+            self._close_put(s, px, ts)
+            closed.append(s)
+        for s in list(self.straddles):
+            px = self._px(s, prices) or self.straddles[s]["strike"]
+            self._close_straddle(s, px, ts)
+            closed.append(s)
+        self.curve.append({"t": ts, "eq": round(self.equity(prices, ts), 2)})
+        return {"closed": closed, "realized": round(self.realized - before, 2), "left": len(self.pos) + len(self.puts) + len(self.straddles)}
+
     def _settle_expired(self, prices, ts) -> None:
         for s in [s for s, pt in self.puts.items() if years_to(pt["expiry_ts"], ts) <= 0]:
             self._close_put(s, self._px(s, prices) or self.puts[s]["strike"], ts)

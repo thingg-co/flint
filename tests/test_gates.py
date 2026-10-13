@@ -305,3 +305,25 @@ def test_controls_set_from_the_panel_survive_a_restart(tmp_path):
     assert fresh.score_threshold == 0.8 and fresh.skill_min_n == 16 and fresh.prob_margin == 0.04 and eng2._overrides == applied
     eng3 = SimpleNamespace(cfg=Config(), _controls_path=lambda: str(tmp_path / "missing.json"))
     assert Engine._load_controls(eng3) == {}                            # no file: nothing changes
+
+
+
+def test_flatten_action_closes_the_book_and_halts_until_resumed():
+    from types import SimpleNamespace
+    from flint.engine import Engine
+    from flint.paper import PaperBook
+    said, remembered = [], []
+    book = PaperBook(100_000.0, 5.0)
+    book.rebalance({"AAPL": 0.1}, {"AAPL": 200.0}, 1.0)
+    cfg = SimpleNamespace(trading_halted=False, min_labels=48, paper_start=100_000.0)
+    eng = SimpleNamespace(paper=book, cfg=cfg, prices={"AAPL": {"price": 201.0, "bid": 200.9, "ask": 201.1}},
+                          _live_prices=lambda: {"AAPL": 201.0}, _save=lambda: None, _remember_controls=lambda c: remembered.append(c),
+                          trace=SimpleNamespace(emit=lambda ch, text, lvl="info": said.append(text)),
+                          learning_enabled=True, metrics=SimpleNamespace(live_labels=0, trusted=False, as_dict=lambda: {}),
+                          controls=lambda: {}, sources=SimpleNamespace(status=lambda: {}), news_hub=SimpleNamespace(status=lambda: {}),
+                          signals=SimpleNamespace(status=lambda: {}), _publish=lambda msg: None)
+    r = Engine.apply_control(eng, {"action": "flatten"})
+    assert r["ok"] and r["closed"] == ["AAPL"] and r["halted"] is True and cfg.trading_halted is True
+    assert not book.pos and remembered == [{"trading_halted": True}] and "kill switch" in said[0]
+    r = Engine.apply_control(eng, {"action": "resume_trading"})
+    assert r == {"ok": True, "halted": False} and cfg.trading_halted is False and remembered[-1] == {"trading_halted": False}

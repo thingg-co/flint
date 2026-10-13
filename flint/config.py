@@ -246,6 +246,7 @@ class Config:
     torch_threads: int = _env("TORCH_THREADS", 2)   # overridden by autotune (up to half the cores on a GPU box)
 
     # Suggestion policy
+    trading_halted: bool = _env("TRADING_HALTED", "0") not in ("0", "false", "no")   # the kill switch: no paper entries until resumed (set by the flatten action, kept in state/controls.json)
     extended_hours: bool = _env("EXTENDED_HOURS", "0") not in ("0", "false", "no")  # allow long-stock entries/exits in Schwab's extended sessions (4:00-9:30, 16:00-20:00 ET); puts and straddles stay regular-hours (options do not trade then)
     score_threshold: float = _env("SCORE_THRESHOLD", 0.35)  # |q50| / IQR needed to act
     prob_margin: float = _env("PROB_MARGIN", 0.06)          # |P(up) - 0.5| needed to act
