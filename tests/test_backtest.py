@@ -229,3 +229,10 @@ def test_a_finished_variant_rides_along_as_the_baseline_while_the_next_one_runs(
     assert Engine.backtest_summary(eng)["baseline"] is None                           # first variant still running: nothing finished yet
     eng.backtest_progress = {"running": False}
     assert Engine.backtest_summary(eng)["baseline"] == {"target": "stale"}            # idle: the saved report's own baseline
+    # while running, the scored rows ride under "rows" and "days" stays the count the tab prints (before 0.5.22 the rows
+    # overwrote the count and the tab read "day 5 of [object Object],...")
+    rows = [{"date": "2026-07-14", "cum_net_bps": -5.4}, {"date": "2026-07-15", "cum_net_bps": -7.6}]
+    eng.backtest_progress = {"running": True, "variant": "relative", "variants": ["relative"], "day": 2, "days": 74, "rows": rows,
+                             "totals": {"days": 2}, "done": []}
+    s = Engine.backtest_summary(eng)
+    assert s["days"] == rows and s["progress"]["days"] == 74

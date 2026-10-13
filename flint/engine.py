@@ -1184,7 +1184,7 @@ class Engine:
         return {"progress": pr, "ran_at": b.get("ran_at"), "elapsed_s": b.get("elapsed_s"), "stopped": b.get("stopped"),
                 "error": b.get("error"), "config": b.get("config"),
                 "totals": pr.get("totals") if pr.get("running") else b.get("totals"),
-                "days": (pr.get("days") or []) if pr.get("running") else (b.get("days") or [])[-260:],
+                "days": (pr.get("rows") or []) if pr.get("running") else (b.get("days") or [])[-260:],
                 "baseline": ((pr.get("done") or [None])[0] if pr.get("running") else b.get("baseline")),   # a finished variant shows under the one still running
                 "best": [dict(sym=k, **v) for k, v in syms[-8:][::-1]], "worst": [dict(sym=k, **v) for k, v in syms[:8]],
                 "sweep": self.sweep or None}
@@ -1280,8 +1280,10 @@ class Engine:
                 return False
 
             def prog(day: int, total: int, totals: dict, info: dict | None = None) -> None:
+                info = dict(info or {})
+                rows = info.pop("days", None)                          # the scored rows ride as "rows": "days" stays the count the tab prints
                 self.backtest_progress = {**self.backtest_progress, "running": True, "day": day, "days": total, "started": started,
-                                          "totals": totals, **(info or {})}
+                                          "totals": totals, **info, **({"rows": rows} if rows is not None else {})}
                 loop.call_soon_threadsafe(self._publish, {"type": "backtest", "backtest": self.backtest_summary()})
 
             def job() -> dict:

@@ -1448,9 +1448,10 @@ function fmtElapsed(s) { s = Math.max(0, Math.round(s)); const h = Math.floor(s 
 function renderBacktest() {
   const b = state.backtest, root = $("#bt-stats"); if (!root) return;
   const meta = $("#bt-meta"), pr = (b && b.progress) || {}, bar = $("#bt-progress");
+  const nDays = Array.isArray(pr.days) ? null : pr.days;   // the count; a server before 0.5.22 sent the scored rows under this key, no count
   if (!b || !("progress" in b)) fetchBacktest();
   if (bar) {
-    const warming = pr.running && !pr.day && !pr.days;
+    const warming = pr.running && !pr.day && !nDays;
     bar.hidden = !pr.running;
     bar.classList.toggle("indeterminate", !!(pr.running && !pr.history_days));
     if (pr.running && pr.history_days) {
@@ -1468,7 +1469,7 @@ function renderBacktest() {
   root.innerHTML = [
     ["net", fmtBps(t.net_bps)], ["per day", fmtBps(t.net_bps_per_day)], ["Sharpe", f2(t.sharpe)], ["max drawdown", fmtBps(t.max_drawdown_bps)],
     ["hit rate", fmtPct(t.hit_rate)], ["10-90 coverage", fmtPct(t.coverage)], ["pinball", f1(t.pinball)],
-    ["signals", t.signals ?? 0], ["days", `${t.days ?? 0}${pr.running ? " / " + (pr.days || "?") : ""}`], ["always long", fmtBps(t.long_bps)],
+    ["signals", t.signals ?? 0], ["days", `${t.days ?? 0}${pr.running ? " / " + (nDays || "?") : ""}`], ["always long", fmtBps(t.long_bps)],
     ...(c.target === "relative" ? [["unhedged", fmtBps(t.unhedged_bps)]] : []),
     ...(b.baseline && b.baseline.totals ? [[`${b.baseline.target || "other"} target`, `${fmtBps(b.baseline.totals.net_bps)} · Sharpe ${f2(b.baseline.totals.sharpe)}`]] : []),
   ].map(([k, v]) => `<div class="pstat"><label>${esc(k)}</label><b>${esc(String(v))}</b></div>`).join("");
@@ -1476,8 +1477,8 @@ function renderBacktest() {
   const elapsed = pr.started ? ` · ${fmtElapsed(Date.now() / 1000 - pr.started)} elapsed` : "";
   const warmN = pr.warm_days || (state.controls && state.controls.backtest_warm_days) || 10;
   const phase = pr.phase === "warming" ? `warming up: training-only day ${pr.history_day || 1} of ${warmN}, scoring starts after`
-    : pr.phase === "scoring" ? `scoring day ${pr.day} of ${pr.days || "?"}${pr.step_s ? ` · ${pr.step_s.toFixed(1)} s/step` : ""}`
-    : (!pr.day && !pr.days) ? `warming up on the first ${warmN} training-only days, then scoring` : `day ${pr.day} of ${pr.days || "?"}`;
+    : pr.phase === "scoring" ? `scoring day ${pr.day} of ${nDays || "?"}${pr.step_s ? ` · ${pr.step_s.toFixed(1)} s/step` : ""}`
+    : (!pr.day && !nDays) ? `warming up on the first ${warmN} training-only days, then scoring` : `day ${pr.day} of ${nDays || "?"}`;
   if (meta) meta.textContent = pr.running ? `running: ${phase}${variant}${elapsed}`
     : (b.ran_at ? `ran ${fmtTime(b.ran_at)} · ${c.preset || "model"}${c.params ? " " + (c.params / 1e6).toFixed(1) + "M params" : ""} · ${c.target || "absolute"} target${c.index && c.index.length ? " vs " + c.index.join(", ") : ""} · cost ${c.cost_bps} bps${c.hedge_cost_bps != null && c.index && c.index.length ? `, hedge ${c.hedge_cost_bps} bps` : ""} · ${c.history_days} days of history, ${c.warm_days} warm · ${b.stopped ? "stopped early" : "complete"}` : "");
   const days = (b.days || []).slice(-40).reverse();
