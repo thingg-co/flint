@@ -137,7 +137,7 @@
   </section>
   <section class="panel signals">
     <div class="sources-head">
-      <h3>Signals &amp; Strategy <small>retail chatter, market breadth, and guru 13Fs — fed to the model and the Burry overlay</small></h3>
+      <h3>Signals &amp; Strategy <small>retail chatter, market breadth and guru 13Fs — read by the policy and the Burry overlay, not by the net</small></h3>
       <label class="overlay-toggle" id="burry-toggle-wrap">Burry / Buffett overlay</label>
       <button type="button" data-action="refresh_signals" id="refresh-signals">Refresh Signals</button>
     </div>
@@ -194,7 +194,7 @@
     <section class="panel"><h3>Holdings <small id="p-pos-meta"></small></h3><div class="ptable" id="p-positions"></div></section>
     <section class="panel"><h3>Options <small id="p-opt-meta"></small></h3><div class="ptable" id="p-options"></div></section>
   </div>
-  <div class="why">Simulated. The model runs a $100k long/short book, rebalancing to its own suggestions with no leverage and a small cost per trade. It compounds continuously and persists across restarts. These are not real orders.</div>
+  <div class="why">Simulated. The model runs a $100k book of long stock, puts for bearish views and straddles for volatility views, sized to its own suggestions with no leverage, paying the quoted spread and commissions. It compounds continuously, persists across restarts and trades only once the model is trusted. These are not real orders.</div>
 </main>
 <main id="backtest" class="view">
   <section class="panel"><h3>Walk-Forward Backtest <small id="bt-meta"></small> <button class="mini" id="bt-run">Run Now</button></h3><div class="bt-progress" id="bt-progress" hidden><i></i></div><div class="pstats" id="bt-stats"></div></section>
