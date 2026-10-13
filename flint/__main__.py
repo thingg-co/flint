@@ -382,6 +382,12 @@ def _backtest() -> None:
         print(f"\r  day {day}/{total}  net {t['net_bps']:+.0f} bps  per day {t['net_bps_per_day']:+.1f}  "
               f"hit {((t['hit_rate'] or 0) * 100):.0f}%  signals {t['signals']}   ", end="", flush=True)
 
+    since: dict = {}                                        # promoted names and the day each joined: masked before it
+    try:
+        uni = json.loads((state / "universe.json").read_text())
+        since = {s: v.get("since") for s, v in (uni.get("interesting") or {}).items() if isinstance(v, dict)}
+    except (OSError, ValueError):
+        pass
     reports = []
     for variant in variants:
         if len(variants) > 1:
@@ -390,7 +396,8 @@ def _backtest() -> None:
                                     progress=prog, hours=opts["hours"] / len(variants), days=opts["days"], warm_days=opts["warm"],
                                     cost_bps=opts["cost"], hedge_cost_bps=opts["hedge"], preset=preset, night_epochs=opts["night"], target=variant,
                                     index_symbols=str(cfg.index_symbols), beta_windows=int(cfg.beta_windows),
-                                    beta_shrink=float(cfg.beta_shrink), store=str(state / "backtest_forecasts"), members=opts["members"]))
+                                    beta_shrink=float(cfg.beta_shrink), store=str(state / "backtest_forecasts"), members=opts["members"],
+                                    since=since))
         print()
         r = reports[-1]
         if r.get("error"):

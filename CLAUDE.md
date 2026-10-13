@@ -356,7 +356,13 @@ unless Flint is already up.
   stops there and at 362 names the 30 GB budget holds 6,474 windows of the 128-bar preset, about 83
   days, well short of `deep_backfill_days`), and the idle trainer yields the GPU while it runs. It is out of sample by construction:
   the fresh net forecasts day D before it trains on day D, signals wait for the live trust rule, and
-  every calibration update lands one horizon late, as live. `backtest.decide` mirrors the gates of
+  every calibration update lands one horizon late, as live. A day's last `horizon` windows are labeled
+  by the next day's first bars, so they join the training set a day late (0.5.23; before, the net
+  learned each open the night before and the first hour of the 2026-10-11 run scored 75% direction
+  hits decaying to 50% by the twelfth bar, the label overlap exactly, against 50.4% for the rest of
+  the day). A promoted name's rows before the day it joined are masked out of training, the loadings
+  and the scoring (`since`, from `state/universe.json`; the report's `hindsight_names`), because the
+  universe loop promotes recent movers and a run over their pre-promotion days scores hindsight. `backtest.decide` mirrors the gates of
   `_suggest` that history can answer; change them together. Each simulated day trains the live
   online budget plus `backtest_night_epochs` passes over the history so far (the idle trainer's
   regimen); `backtest_hours` (30 by default, a weekend) caps the run by shrinking that budget, so a

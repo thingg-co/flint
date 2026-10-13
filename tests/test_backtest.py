@@ -69,6 +69,33 @@ def test_predicts_each_day_before_training_on_it():
     assert set(res["symbols"]) == {"A", "B"}
 
 
+def test_a_days_last_windows_train_only_once_their_labels_have_resolved():
+    """The last `horizon` windows of day D are labeled by day D+1's first bars; training on them
+    at the end of D would teach the net D+1's open before it forecasts it."""
+    cfg = toy_cfg()                                                # horizon 2, 6 bars a day
+    rx, ry, rmask, rt = toy_replay()
+    seen_at = {}
+    run_backtest(cfg, rx, ry, rmask, rt, device="cpu", symbols=["A", "B"], warm_days=3, steps_per_day=2,
+                 hooks={"on_seen": lambda d, seen: seen_at.__setitem__(d, set(seen.tolist()))})
+    for d in range(1, 8):
+        today = set(range(d * 6, d * 6 + 6))
+        assert seen_at[d] & today == today - {d * 6 + 4, d * 6 + 5}          # today's last two wait
+        assert {(d - 1) * 6 + 4, (d - 1) * 6 + 5} <= seen_at[d]             # yesterday's last two are in
+        assert len(seen_at[d]) == len(set(seen_at[d]))
+
+
+def test_a_promoted_name_is_masked_before_the_day_it_joined(tmp_path):
+    cfg = toy_cfg()
+    rx, ry, rmask, rt = toy_replay()
+    res = run_backtest(cfg, rx, ry, rmask, rt, device="cpu", symbols=["A", "B"], warm_days=3, steps_per_day=1,
+                       since={"B": "2026-09-06", "ZZ": "2026-09-01"}, store=str(tmp_path / "fc"))
+    assert res["config"]["hindsight_names"] == 1 and res["config"]["hindsight_rows"] == 5 * 6
+    assert rmask.min() == 1.0                                       # the caller's mask is untouched
+    z = np.load(tmp_path / "fc_absolute.npz")
+    before = z["day_of"] < 2                                       # scored days 0,1 are Sep 4 and 5
+    assert not z["mask"][before, 1].any() and z["mask"][~before, 1].all() and z["mask"][:, 0].all()
+
+
 def test_untimed_windows_are_ignored_and_too_little_history_is_an_error():
     cfg = toy_cfg()
     rx, ry, rmask, rt = toy_replay(n_days=4)
@@ -136,10 +163,11 @@ def test_night_epochs_add_training_over_the_history_seen():
     rx, ry, rmask, rt = toy_replay(n_days=6, bars=6)
     plain = run_backtest(cfg, rx, ry, rmask, rt, device="cpu", warm_days=2)
     night = run_backtest(cfg, rx, ry, rmask, rt, device="cpu", warm_days=2, night_epochs=1.0)
-    # day k (0-based) has seen 6*(k+1) windows; one pass over them at batch 4 is 6*(k+1)/4 extra steps
+    # day k (0-based) has seen 6*(k+1) windows less today's last `horizon` (2), whose labels have not
+    # resolved; one pass over them at batch 4 is that many / 4 extra steps
     for p, q, k in zip(plain["days"], night["days"], range(2, 6)):
         assert p["steps"] == cfg.steps_per_label * 6
-        assert q["steps"] == p["steps"] + int(6 * (k + 1) / 4)
+        assert q["steps"] == p["steps"] + int((6 * (k + 1) - 2) / 4)
     assert night["config"]["night_epochs"] == 1.0
 
 

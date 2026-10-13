@@ -80,7 +80,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                  steps_per_day: int = 0, compile_: bool | None = None, hooks: dict | None = None,
                  preset: str = "", night_epochs: float = 0.0, target: str = "absolute", index_symbols: str = "SPY",
                  beta_windows: int = 6000, beta_shrink: float = 400.0, store: str | None = None,
-                 hedge_cost_bps: float | None = None, members: int = 1) -> dict:
+                 hedge_cost_bps: float | None = None, members: int = 1, since: dict | None = None) -> dict:
     """See the module docstring. Each day trains the live online budget (steps_per_label per
     bar) plus `night_epochs` passes over everything seen so far, the way the idle trainer does
     each closed session; `hours` > 0 caps the run by shrinking that budget to fit the remaining
@@ -91,7 +91,11 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
     over them in seconds without re-running the net. `members` > 1 runs an ensemble as the live
     learner would (the members train in turn, each step is one member's, the forecast is their
     mean) and stores the first member's own forecasts next to the ensemble's (`q0`, `up0`, `dn0`),
-    so the sweep can replay one net against the ensemble over the same days. Returns the report as
+    so the sweep can replay one net against the ensemble over the same days. `since` maps a
+    promoted name to the date it joined the universe: its rows before that day are masked out of
+    training, the loadings and the scoring, because the name was picked for what it did on those
+    days (the universe loop promotes recent movers), so a run over them would score hindsight.
+    Returns the report as
     a JSON-ready dict."""
     t0 = time.time()
     members = max(1, int(members or 1))
@@ -123,6 +127,16 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
     groups = [(d, np.asarray(ix, dtype=np.int64)) for d, ix in groups]
     if days > 0:
         groups = groups[-(days + warm_days):]
+    hindsight = 0                                                           # rows masked for a name not yet promoted
+    if since:
+        rmask = np.array(rmask, dtype=np.float32, copy=True)
+        cols = {s: i for i, s in enumerate(symbols)}
+        for sym, day in since.items():
+            if sym in cols and day:
+                for d, ix in groups:
+                    if d < str(day):
+                        hindsight += int((rmask[ix, cols[sym]] > 0).sum())
+                        rmask[ix, cols[sym]] = 0.0
     if len(groups) <= warm_days:
         return {"error": f"not enough timestamped history: {len(groups)} day(s), need more than {warm_days}",
                 "ran_at": t0, "days": [], "totals": {}}
@@ -236,6 +250,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
     sym_dec = np.zeros(n_assets, dtype=np.int64)
     tot = {"bars": 0, "signals": 0, "hits": 0, "decisions": 0, "pin": 0.0, "pin_n": 0, "inside": 0, "inside_n": 0}
     seen = np.empty(0, dtype=np.int64)
+    unresolved = np.empty(0, dtype=np.int64)                                # yesterday's last windows: their labels reach into today
     bar_no = 0
     step_s: float | None = None
     steps_lo = steps_hi = 0
@@ -340,8 +355,16 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
             kept["meta"].append(np.stack(day_meta))
         if stopped:
             break
-        # today's labels are known now: train on everything up to and including today
-        seen = np.concatenate([seen, idx])
+        # Today's labels are known now, except the last `horizon` windows', which resolve in
+        # tomorrow's first hour: those join the training set tomorrow. Training on them tonight
+        # (before 0.5.23) taught the net tomorrow's open before it forecast it, and the first hour
+        # scored 75% direction hits decaying to 50% by the twelfth bar, the label overlap exactly.
+        h = max(0, int(cfg.horizon))
+        resolved, held = (idx[:-h], idx[-h:]) if h and len(idx) > h else (idx, idx[:0])
+        seen = np.concatenate([seen, unresolved, resolved])
+        unresolved = held
+        if hooks.get("on_seen"):
+            hooks["on_seen"](di, seen.copy())
         if steps_per_day > 0:
             steps = steps_per_day
         else:
@@ -418,6 +441,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                                  for i in range(n_assets) if i not in icols} if icols else None),
                        "compiled": train_models[0] is not models[0],
                        "steps_per_day": [steps_lo, steps_hi], "device": device, "history_days": len(groups),
+                       "hindsight_rows": hindsight, "hindsight_names": sum(1 for s_ in (since or {}) if s_ in symbols),
                        "windows": int(len(keyed))},
             "days": day_rows, "totals": totals, "symbols": per_sym}
 

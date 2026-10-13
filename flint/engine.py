@@ -1352,7 +1352,8 @@ class Engine:
                         target=variant, index_symbols=str(cfg.index_symbols),
                         beta_windows=int(cfg.beta_windows), beta_shrink=float(cfg.beta_shrink),
                         store=os.path.join(cfg.state_dir, "backtest_forecasts"),
-                        members=int(getattr(cfg, "backtest_members", 1) or 1)))
+                        members=int(getattr(cfg, "backtest_members", 1) or 1),
+                        since={s: v.get("since") for s, v in self._interesting.items() if isinstance(v, dict)}))
                     done.append(variant_summary(reports[-1]))
                     loop.call_soon_threadsafe(self._publish, {"type": "backtest", "backtest": self.backtest_summary()})
                 return combine_reports(reports)
