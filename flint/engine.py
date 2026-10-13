@@ -779,7 +779,7 @@ class Engine:
             "type": "snapshot",
             "config": {
                 "symbols": self.symbols, "bar_seconds": cfg.bar_seconds, "horizon": cfg.horizon, "window": cfg.window, "max_universe": cfg.max_universe, "chart_bars": cfg.chart_bars,
-                "quantiles": list(cfg.quantiles), "min_labels": cfg.min_labels, "features": FEATURES,
+                "quantiles": list(cfg.quantiles), "min_labels": cfg.min_labels, "features": FEATURES, "feature_set": FEATURE_SET,
                 "model": {"params": self.learner.n_params, "members": self.learner.members, "d_model": cfg.d_model, "experts": cfg.n_experts,
                           "dilations": list(cfg.dilations), "heads": cfg.n_heads, "window": cfg.window,
                           "receptive_field": self.learner.model.receptive_field,
