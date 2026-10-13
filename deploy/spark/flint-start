@@ -26,6 +26,9 @@ ENV=(
                                                        # flags); flipping it reshapes the net, so only on a weekend
     # FLINT_SEC_CONTACT=you@example.com               # the contact EDGAR requires in the User-Agent; the extended
                                                        # set's valuation and filing features read 0 without it
+    FLINT_EXTENDED_HOURS=1                             # long stock trades in Schwab's 4:00-9:30 and 16:00-20:00 ET
+                                                       # sessions too (2026-10-13: trade wherever a venue allows); options
+                                                       # stay regular-hours
     FLINT_TARGET=relative                              # the hour-ahead residual against SPY/QQQ/IWM/SMH/XLF; the
                                                        # 2026-10-11 backtest: -33 bps against the absolute's -144
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # one growable pool instead of per-shape blocks: training,
