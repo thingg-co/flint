@@ -1568,7 +1568,7 @@ function renderSweep(sw) {
       rows.push(`<div class="prow"><span>${esc(k.replace(/_/g, " "))}</span>${cell(b)}${cell(a, Number(b) !== Number(a) ? "up" : "")}</div>`);
     });
     rows.push(...halfRows("confirming half", cur.confirm, prop.confirm, sw.accepted && !sw.thin ? "up" : ""));
-    root.innerHTML = rows.join("") + `<div class="snote">applied: the Control panel carries this run's proposal; the next run judges it and may propose again</div>`;
+    root.innerHTML = rows.join("") + `<div class="sw-actions"><span class="pill live">applied</span><span class="snote">these gates are on the Control panel; the next run judges them and may propose again</span></div>`;
     return;
   }
   const rows = [`<div class="prow phead"><span>gate</span>${cell("now")}${cell("proposed")}</div>`];

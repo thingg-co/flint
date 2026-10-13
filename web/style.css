@@ -694,7 +694,7 @@ ul.headlines li.new a { color: var(--ink); } ul.headlines li:not(.new) a { color
 .legend span::before { content: ""; display: inline-block; width: 18px; border-top: 2px solid var(--c, var(--muted)); vertical-align: middle; margin-right: 7px; }
 .legend .thin::before { border-top-width: 1px; }
 .sw-actions { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
-.sw-actions .snote { margin: 0; }
+.sw-actions .snote { margin: 0; flex: 1 1 220px; color: var(--muted); font-family: var(--sans); font-size: 12px; line-height: 1.35; white-space: normal; }
 .bt-progress { height: 4px; background: var(--grid); border-radius: 2px; margin: 6px 0 10px; overflow: hidden; }
 .bt-progress[hidden] { display: none; }
 .bt-progress i { display: block; height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--blue), var(--good)); transition: width .4s; }
