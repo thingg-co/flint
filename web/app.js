@@ -583,7 +583,21 @@ function updateCard(sym) {
   drawChart(card);
 }
 
+function renderTrust() {
+  // the trust pill beside the market's regime and breadth: live, out-of-sample labels toward
+  // the count the paper book waits for, then the running count once it is trusted
+  const el = $("#trust-stat"); if (!el) return;
+  const m = state.metrics, cfg = state.config || {};
+  if (!m) { el.hidden = true; return; }
+  el.hidden = false;
+  el.classList.toggle("on", !!m.trusted); el.classList.toggle("off", !m.trusted);
+  el.innerHTML = m.trusted
+    ? `trusted <b>${(m.live_labels || 0).toLocaleString()}</b> live labels`
+    : `trust <b>${m.live_labels || 0}/${cfg.min_labels ?? "?"}</b> live labels`;
+}
+
 function renderTiles() {
+  renderTrust();
   const m = state.metrics || {}, cfg = state.config;
   const f2 = v => v != null ? v.toFixed(2) : "·";
   const tiles = [

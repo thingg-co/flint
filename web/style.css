@@ -332,6 +332,8 @@ ul.headlines li.new a { color: var(--ink); } ul.headlines li:not(.new) a { color
 .mstat b { color: var(--ink); font-size: 14px; }
 .mstat.regime.on b { color: var(--good); } .mstat.regime.off b { color: var(--serious); } .mstat.regime.mixed b { color: var(--warning); }
 .mstat .up { color: var(--good); } .mstat .down { color: var(--serious); }
+.mstat-group { display: contents; }                       /* the market's stats flow in the same row as the trust pill */
+.mstat.trust.off b { color: var(--warning); } .mstat.trust.on b { color: var(--good); }
 .market-grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin-top: 12px; }  /* sectors row, then movers row */
 .market-sectors { padding-bottom: 12px; border-bottom: 1px solid var(--border); }
 @media (max-width: 820px) { .market-grid { grid-template-columns: 1fr; } }
