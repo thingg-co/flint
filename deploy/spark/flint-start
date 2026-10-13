@@ -22,7 +22,7 @@ fi
 # The Spark's environment. Every knob in flint/config.py can go here as FLINT_<NAME>.
 ENV=(
     FLINT_HOST=0.0.0.0                                 # reachable from the LAN and the mobile app
-    # FLINT_FEATURE_SET=extended                       # the next reset's inputs (TODO 2/2d: the opinions and the earnings
+    FLINT_FEATURE_SET=extended                       # the next reset's inputs (TODO 2/2d: the opinions and the earnings
                                                        # flags); flipping it reshapes the net, so only on a weekend
     # FLINT_SEC_CONTACT=you@example.com               # the contact EDGAR requires in the User-Agent; the extended
                                                        # set's valuation and filing features read 0 without it
