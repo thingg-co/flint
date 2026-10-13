@@ -76,7 +76,7 @@ class PaperBook:
 
     def rebalance(self, targets: dict, prices: dict, ts: float, quotes: dict | None = None,
                   put_quotes: dict | None = None, straddle_targets: dict | None = None,
-                  straddle_quotes: dict | None = None, uncapped: set | None = None) -> None:
+                  straddle_quotes: dict | None = None, uncapped: set | None = None, options_ok: bool = True) -> None:
         """targets: symbol -> desired signed weight (side * size). A negative weight is a short,
         opened as a delta-equivalent long put from put_quotes[sym] (fetched from a live chain).
         straddle_targets: symbol -> premium budget as a fraction of equity (0/absent = no signal);
@@ -107,7 +107,7 @@ class PaperBook:
             if not ref or ref <= 0:
                 continue
             if w >= 0:                                      # long or flat: close any put (once past min hold), manage stock
-                if s in self.puts and ts - self.puts[s].get("opened", 0.0) >= self.put_min_hold_s:
+                if options_ok and s in self.puts and ts - self.puts[s].get("opened", 0.0) >= self.put_min_hold_s:
                     self._close_put(s, ref, ts)
                 desired = eq * w * scale / ref
                 cur = self.pos.get(s, 0.0)
@@ -118,15 +118,18 @@ class PaperBook:
                 cur = self.pos.get(s, 0.0)
                 if cur > 0:                                 # close any long stock first
                     self._fill(s, cur, -cur, self._exec_price(s, -cur, ref, quotes), ts)
-                if s not in self.puts and s in put_quotes:
+                if options_ok and s not in self.puts and s in put_quotes:
                     self._open_put(s, eq * abs(w) * scale, ref, put_quotes[s], ts, None if s in uncapped else eq)
                 # already holding a put -> hold it (marked); wanted-short-but-no-chain -> stay flat
+        # options trade only in the regular session (`options_ok`): outside it a put or a straddle is
+        # neither opened nor closed, only marked (on 2026-10-12 two straddles were closed at 16:05 and
+        # 16:25 ET on post-market bars, fills no exchange would have given)
         for s, frac in straddle_targets.items():
-            if frac > 0 and s not in self.straddles and s in straddle_quotes:
+            if options_ok and frac > 0 and s not in self.straddles and s in straddle_quotes:
                 self._open_straddle(s, eq * min(frac, self.option_max_frac), straddle_quotes[s], ts)
         for s in list(self.straddles):
             held = ts - self.straddles[s].get("opened", 0.0)
-            if straddle_targets.get(s, 0.0) <= 0 and held >= self.straddle_min_hold_s:
+            if options_ok and straddle_targets.get(s, 0.0) <= 0 and held >= self.straddle_min_hold_s:
                 px = self._px(s, prices)
                 if px:
                     self._close_straddle(s, px, ts)

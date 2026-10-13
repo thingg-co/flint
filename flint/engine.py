@@ -26,6 +26,7 @@ from .meta import MetaLabeler, features as meta_features
 from .newshist import NewsHistory, backfill_span
 from .bars import Bar, BarBuilder
 from .events import AHEAD_S, EarningsCalendar
+from .filings import EdgarStore
 from .features import BARS_D, FEATURE_SET, FEATURES, N_FEATURES, FeatureBuilder
 from .feed import Tick
 from .learner import OnlineLearner, Prediction
@@ -392,6 +393,10 @@ class Engine:
         self.news_history.load()
         self.events = EarningsCalendar(os.path.join(cfg.state_dir, "events.json"))   # dated report dates, for the extended set's earnings flags
         self.events.load()
+        self.filings = EdgarStore(os.path.join(cfg.state_dir, "edgar.json"), os.path.join(cfg.state_dir, "sectors.json"),
+                                  contact=getattr(cfg, "sec_contact", ""))   # dated EDGAR facts and filings, for the extended set
+        self.filings.load()
+        self._filings_task: asyncio.Task | None = None
         self._news_task: asyncio.Task | None = None
 
         self._events_task: asyncio.Task | None = None
@@ -435,6 +440,7 @@ class Engine:
         self.builder = BarBuilder(self.symbols, cfg.bar_seconds)
         self.features = FeatureBuilder(self.symbols, cfg.window, index=self._market_symbol())
         self.features.events = self.events                 # the earnings flags read the dated calendar live and for history alike
+        self.features.filings = self.filings               # as do the valuation ratios and filing flags
         self.news_base = {s: (0.0, 0.0) for s in self.symbols}  # last pure news skim, before operator blend
         self.learner = OnlineLearner(cfg, N_FEATURES)
         self.sources = SourceManager(cfg, self.symbols, self.av, on_tick=self._on_live_tick,
@@ -905,6 +911,8 @@ class Engine:
         self._news_task = asyncio.create_task(self._news_history_job())   # dated news for the history the deep loop pages
         if self.features.wants_events:
             self._events_task = asyncio.create_task(self._events_job())    # and the earnings calendar, when the set reads one
+        if self.features.wants_filings:
+            self._filings_task = asyncio.create_task(self._filings_job())  # and EDGAR's facts and filings
         held = self.learner.rt[:self.learner.size]
         held = held[held > 0]
         if self.learner.migrated_new:                  # new names: walk the whole history again; fill() takes their columns
@@ -1020,7 +1028,7 @@ class Engine:
             if self._backtesting:                         # the backtest owns the GPU and the replay must not grow under it
                 wait = 60.0
                 continue
-            fetching = any(t is not None and not t.done() for t in (self._news_task, self._events_task))
+            fetching = any(t is not None and not t.done() for t in (self._news_task, self._events_task, self._filings_task))
             if self._startup_span and not fetching:       # rewrites windows in place, so a full ring is no reason to skip it
                 lo, hi = self._startup_span
                 self._startup_span = None
@@ -1051,7 +1059,7 @@ class Engine:
             wait = 150.0                                  # more history to page: a 211-symbol burst every 150 s stays under Schwab's 120 req/min
             until = self._deep_cutoff
             cutoff = max(target, until - 10 * 86400.0)
-            fetching = any(t is not None and not t.done() for t in (self._news_task, self._events_task))
+            fetching = any(t is not None and not t.done() for t in (self._news_task, self._events_task, self._filings_task))
             if fetching and not self._history_ready(cutoff - WARM_S, until):
                 wait = 60.0                               # the chunk's news is still on its way: page it with the news, not without
                 continue
@@ -1492,6 +1500,7 @@ class Engine:
         feats.norm.load(self.features.norm.state())
         feats.news_history = self.news_history
         feats.events = self.events
+        feats.filings = self.filings
         emit_from = float(emit_from or 0.0)
         first: dict[str, float] = {}
         for t in ticks:
@@ -1551,6 +1560,8 @@ class Engine:
         live feed will: its news, and its earnings calendar when the feature set reads one."""
         if not self.news_history.covers(self._news_names(), lo, hi):
             return False
+        if self.features.wants_filings and not self.filings.ready(self.symbols):
+            return False
         return not self.features.wants_events or self.events.covers(lo, hi)
 
     async def _events_job(self) -> None:
@@ -1573,6 +1584,23 @@ class Engine:
                                 "warn" if res.get("failed") else "info")
             first = False
             await asyncio.sleep(6 * 3600)
+
+    async def _filings_job(self) -> None:
+        """Keep EDGAR's facts and filings current for every modeled name: all of them at the
+        start (the deep loop waits for it, as for the news), then the names not read for six hours
+        again every hour, so a day's 8-Ks and Form 4s are in by the next session. Paced under
+        EDGAR's ten requests a second; needs the contact in `sec_contact`."""
+        while True:
+            try:
+                res = await self.filings.fetch(self.symbols, say=lambda t: self.trace.emit("news", t, "warn"))
+            except Exception as e:  # noqa: BLE001
+                self.trace.emit("news", f"EDGAR fetch failed: {type(e).__name__}: {str(e)[:100]}", "warn")
+                res = {}
+            if res.get("names"):
+                self.trace.emit("news", f"EDGAR: {res['names']} names read, {res['facts']} facts and {res['filings']} filings kept"
+                                        + (f"; {res['failed']} failed" if res.get("failed") else "") + f" ({self.filings.status})",
+                                "warn" if res.get("failed") else "info")
+            await asyncio.sleep(3600)
 
     async def _news_history_job(self) -> None:
         """Fill the dated news store for the span the deep backfill will page, in the
@@ -1893,7 +1921,8 @@ class Engine:
                                  quotes={s: {"bid": self.prices[s].get("bid"), "ask": self.prices[s].get("ask")}
                                          for s in self.symbols},
                                  put_quotes=put_quotes,
-                                 straddle_targets=straddle_targets, straddle_quotes=straddle_quotes, uncapped=hedge_syms)
+                                 straddle_targets=straddle_targets, straddle_quotes=straddle_quotes, uncapped=hedge_syms,
+                                 options_ok=self._regular_session())
             self.trace.emit("model", f"bar #{self.bar_index}: regime gate " + " ".join(
                 f"E{k + 1}={g:.2f}" for k, g in enumerate(self.gate)) +
                 f" | band scale x{self.metrics.band_scale:.2f}, P(up) temper {self.metrics.p_scale:.2f}")

@@ -37,6 +37,23 @@ class TestPaperBookStraddles:
         # Newest trade has side "buy straddle"
         assert book.trades[0]["side"] == "buy straddle"
 
+    def test_options_neither_open_nor_close_outside_the_regular_session(self):
+        book = PaperBook(start=100_000.0, cost_bps=8.0, option_max_frac=0.02)
+        prices = {"AAPL": 200.0}
+        SQ = {"put_premium": 4.0, "call_premium": 4.0, "strike": 200.0, "expiry_ts": ts + 30 * DAY, "put_iv": 0.4, "call_iv": 0.4}
+        PQ = {"strike": 200.0, "expiry_ts": ts + 30 * DAY, "premium": 4.0, "iv": 0.4, "delta": -0.5, "spot": 200.0}
+        book.rebalance({"AAPL": -0.1}, prices, ts, put_quotes={"AAPL": PQ}, straddle_targets={"AAPL": 0.01},
+                       straddle_quotes={"AAPL": SQ}, options_ok=False)
+        assert not book.straddles and not book.puts and book.cash == 100_000.0      # post-market: nothing opened
+        book.rebalance({"AAPL": -0.1}, prices, ts, put_quotes={"AAPL": PQ}, straddle_targets={"AAPL": 0.01},
+                       straddle_quotes={"AAPL": SQ}, options_ok=True)
+        assert "AAPL" in book.straddles and "AAPL" in book.puts
+        later = ts + 2 * DAY                                                        # past every minimum hold
+        book.rebalance({"AAPL": 0.0}, prices, later, straddle_targets={}, options_ok=False)
+        assert "AAPL" in book.straddles and "AAPL" in book.puts                     # the signal is gone, the session is not open: held and marked
+        book.rebalance({"AAPL": 0.0}, prices, later, straddle_targets={}, options_ok=True)
+        assert not book.straddles and not book.puts
+
     def test_straddle_loss_is_bounded_by_premium(self):
         # Open the straddle; cash_after = book.cash
         # For every spot in (50.0, 100.0, 150.0, 200.0, 300.0, 400.0):

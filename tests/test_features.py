@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from flint.bars import Bar
-from flint.features import FEATURES, N_FEATURES, NORMALIZE, RunningNorm, FeatureBuilder
+from flint.features import FEATURES, N_FEATURES, NORMALIZE, RunningNorm, FeatureBuilder, VALUATION, FILINGS
 
 
 def bar(o, h, l, c, v=100.0, buy=60.0, sell=40.0, trades=10, spread=5.0):
@@ -277,7 +277,7 @@ class TestFeatureSets:
 
     def test_sets_masks_and_an_unknown_feature(self):
         from flint.features import CORE, EVENTS, EXTENDED, FEATURE_SET, FEATURE_SETS, OPINIONS, normalize_mask
-        assert len(CORE) == 28 and EXTENDED == CORE + OPINIONS + EVENTS and len(EXTENDED) == 35
+        assert len(CORE) == 28 and EXTENDED == CORE + OPINIONS + EVENTS + VALUATION + FILINGS and len(EXTENDED) == 43
         assert FEATURE_SETS[FEATURE_SET] == FEATURES and len(set(EXTENDED)) == len(EXTENDED)
         m = normalize_mask(EXTENDED)
         assert not m[EXTENDED.index("ou_z")] and not m[EXTENDED.index("earn_near")] and not m[EXTENDED.index("div_drop")]
@@ -286,7 +286,7 @@ class TestFeatureSets:
         with pytest.raises(ValueError):
             FeatureBuilder(["A"], window=1, features=["ret", "bogus"])
         fb = FeatureBuilder(["A"], window=1, features=EXTENDED)
-        assert fb.wants_opinions and fb.wants_events and fb.norm.mean.shape == (1, 35)
+        assert fb.wants_opinions and fb.wants_events and fb.norm.mean.shape == (1, 43)
         assert np.array_equal(fb.norm.normalize, normalize_mask(EXTENDED))
 
 

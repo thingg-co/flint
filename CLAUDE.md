@@ -226,7 +226,21 @@ unless Flint is already up.
   change: the autotune re-benchmarks (the feature count is in its key) and the checkpoint guard backs
   the model up. Finnhub's free earnings calendar reaches only a few weeks back and its dividend
   endpoints are premium (probed 2026-10-12), which is why the calendars are Nasdaq's. EDGAR (item 8)
-  refuses requests without a declared contact in the User-Agent, so filings wait for one.
+  needs a declared contact in the User-Agent: `FLINT_SEC_CONTACT` (an email; the Spark launcher
+  carries it, the repo copy a placeholder). With it, 0.5.22 adds eight more inputs to `extended` (43 in
+  all) from `flint/filings.py` (`EdgarStore`, `state/edgar.json`): five valuation ratios from EDGAR's
+  companyfacts (log price to book, free-cash-flow yield, log EV/EBITDA, dividend yield, return on equity;
+  a fact counts from the session after its filing date, flows are the trailing twelve months as the
+  filings public then gave them, `ttm`: the latest annual plus the year to date less the same stretch a
+  year before; each ratio relative to the sector's median among the names modeled, the universe median
+  under three names, `state/sectors.json` supplying the sectors) and three filing flags from the
+  submissions index (decay since the last 8-K, the month's Form 4 count, decay since the last 13D/G, by
+  acceptance time). `_filings_job` reads every name at the start (one submissions page per name back 450
+  days, the companyfacts document when never read or when a 10-K/10-Q appeared since; paced at 0.15 s a
+  request, well under EDGAR's ten a second) and stale names hourly; the deep loop waits for the store
+  (`_history_ready`) as for the news; `flint edgar` fills it ahead of a start. Without the contact, or
+  for an ETF, an IFRS filer or a name without a CIK, the eight read 0. At 43 inputs the 30 GB replay
+  holds about 3,760 windows (48 sessions), against 5,780 at 28.
 - No position may carry unlimited risk, ever. Defined risk is the rule, not premium-capped: long
   options, debit and credit spreads, covered calls on held stock and cash-secured puts are all fine,
   because the worst case is a known finite number at entry. Naked short stock and naked written

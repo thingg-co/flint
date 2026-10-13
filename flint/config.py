@@ -203,6 +203,7 @@ class Config:
     # The replay stores absolute labels either way, so this is a run-time switch, not a reset.
     members: int = _env("MEMBERS", 1)                         # ensemble members in the live learner (item 4): they train in turn (each gets 1/members of the steps) and forecast as one; the activations dominate memory, so a member costs its parameters only, and the step `members` times
     target: str = _env("TARGET", "absolute")
+    sec_contact: str = _env("SEC_CONTACT", "")                 # the contact EDGAR requires in the User-Agent (an email); without it the extended set's valuation and filing features read 0
     feature_set: str = _env("FEATURE_SET", "core")             # core (the 28 inputs of 0.5.18) | extended (+ the 2d opinions and the earnings flags); flint.features reads the env at import, since the net's shape follows it, and a change resets the model once
     index_symbols: str = _env("INDEX_SYMBOLS", "SPY,QQQ,IWM,SMH,XLF")  # "the market" for the relative target: modeled index names, first = the prior; unmodeled ones are ignored
     hedge_index: bool = _env("HEDGE_INDEX", "1") not in ("0", "false", "no")  # relative target: hold, per index, the weight that cancels the book's loading on it

@@ -55,8 +55,10 @@ MARKET = ["breadth", "breadth_h", "mkt_ret", "mkt_mom", "mkt_rvol", "beta", "ope
 NEWS = ["news_sent", "news_attn"]
 OPINIONS = ["ou_z", "ou_hl", "trend_t", "garch"]    # 2d: other forecasters' readings of the week's ring
 EVENTS = ["earn_near", "earn_post", "div_drop"]      # the dated calendar: proximity to the next report and to the last, the dividend about to come off
+VALUATION = ["val_pb", "val_fcf", "val_ev", "val_dy", "qual_roe"]   # 2c: EDGAR facts against the price, relative to the sector's median
+FILINGS = ["filing_8k", "insider_n", "stake_13d"]    # 8: the decay since the last 8-K, the month's Form 4 count, the decay since the last 13D/G
 CORE = OWN + MARKET + NEWS
-EXTENDED = CORE + OPINIONS + EVENTS
+EXTENDED = CORE + OPINIONS + EVENTS + VALUATION + FILINGS
 FEATURE_SETS = {"core": CORE, "extended": EXTENDED}
 FEATURE_SET = os.environ.get("FLINT_FEATURE_SET", "core").strip().lower() or "core"
 if FEATURE_SET not in FEATURE_SETS:
@@ -65,7 +67,7 @@ if FEATURE_SET not in FEATURE_SETS:
 FEATURES = FEATURE_SETS[FEATURE_SET]
 EXOGENOUS = NEWS                                     # the only exogenous slots left in the net
 _BOUNDED = {"closepos", "tod_sin", "tod_cos", "breadth", "breadth_h", "news_sent", "news_attn",
-            "ou_z", "earn_near", "earn_post", "div_drop"}   # already on a fixed scale
+            "ou_z", "earn_near", "earn_post", "div_drop", "filing_8k", "stake_13d"}   # already on a fixed scale
 
 
 def normalize_mask(features) -> np.ndarray:
@@ -187,6 +189,7 @@ class FeatureBuilder:
             raise ValueError(f"unknown features {unknown}")
         self.wants_opinions = any(f in OPINIONS for f in self.features)
         self.wants_events = any(f in EVENTS for f in self.features)
+        self.wants_filings = any(f in VALUATION or f in FILINGS for f in self.features)
         self.norm = RunningNorm(n, len(self.features), normalize=normalize_mask(self.features))
         self.index = self.symbols.index(index) if index in self.symbols else None
         self.prev_close = np.full(n, np.nan)
@@ -208,6 +211,7 @@ class FeatureBuilder:
         self.news_attn = np.zeros(n)
         self.news_history = None                     # a `NewsHistory`: when set, the news slots come from it at the bar's time
         self.events = None                           # an `EarningsCalendar`: the earnings flags, live and for history alike; zeros without one
+        self.filings = None                          # an `EdgarStore`: the valuation ratios and filing flags, point in time; zeros without one
         self.exo: dict[str, dict[str, float]] = {s: {} for s in self.symbols}   # live-only signals, kept for the policy and the dashboard, not the net
 
     # -- exogenous inputs ----------------------------------------------------------------
@@ -346,6 +350,10 @@ class FeatureBuilder:
             div_drop = np.log1p(np.where((div_rate > 0) & (c > 0), div_rate / np.where(c > 0, c, 1.0) * 1e4, 0.0))   # log1p of the drop in bps
         else:
             earn_near = earn_post = div_drop = np.zeros(n)
+        if self.wants_filings and self.filings is not None:
+            edgar = self.filings.at(ts, self.symbols, c)
+        else:
+            edgar = {f: np.zeros(n) for f in (*VALUATION, *FILINGS)}
         same = lambda x: np.full(n, x)  # noqa: E731
         cols = {"ret": ret, "range": rng, "logvol": np.log1p(v), "closepos": closepos, "mom": mom, "rvol": rvol, "gk": gk,
                 "yz": yz, "rv_d": rv_d, "rv_w": rv_w, "mom_d": mom_d, "lag_d": lag_d, "slot5": slot5, "amihud": amihud,
@@ -353,7 +361,7 @@ class FeatureBuilder:
                 "breadth": same(breadth), "breadth_h": same(breadth_h), "mkt_ret": same(mkt_ret), "mkt_mom": same(mkt_mom),
                 "mkt_rvol": same(mkt_rvol), "beta": beta, "open30": same(self.open30), "news_sent": sent, "news_attn": attn,
                 "ou_z": ou_z, "ou_hl": ou_hl, "trend_t": trend_t, "garch": garch, "earn_near": earn_near, "earn_post": earn_post,
-                "div_drop": div_drop}
+                "div_drop": div_drop, **edgar}
         raw = np.column_stack([cols[f] for f in self.features])
         raw = np.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0)
         self.prev_close = np.where(c > 0, c, self.prev_close)

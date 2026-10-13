@@ -152,7 +152,7 @@ def test_history_ready_asks_the_calendar_only_when_the_set_reads_it():
     news = NewsHistory()
     news.add("A", [], 0.0, 10 * 86400.0)
     cal = EarningsCalendar()
-    eng = SimpleNamespace(news_history=news, _news_names=lambda: ["A"], events=cal, features=SimpleNamespace(wants_events=False))
+    eng = SimpleNamespace(news_history=news, _news_names=lambda: ["A"], events=cal, features=SimpleNamespace(wants_filings=False, wants_events=False))
     ready = Engine._history_ready
     assert ready(eng, 86400.0, 5 * 86400.0)                                      # the news is in and no calendar is needed
     eng.features.wants_events = True

@@ -418,6 +418,34 @@ def _version() -> None:
         print("unknown")
 
 
+def _edgar() -> None:
+    """Fill `state/edgar.json` for the universe ahead of a start (the deep loop would wait for
+    it otherwise): the configured symbols plus the names `state/universe.json` promoted."""
+    import asyncio
+    import json
+    import time
+
+    from .config import Config
+    from .filings import EdgarStore
+    cfg = Config()
+    syms = list(cfg.symbols)
+    upath = os.path.join(cfg.state_dir, "universe.json")
+    if os.path.exists(upath):
+        try:
+            with open(upath) as f:
+                u = json.load(f)
+            syms = [str(s) for s in (u.get("symbols") or u.get("universe") or syms)] or syms
+        except (OSError, ValueError):
+            pass
+    store = EdgarStore(os.path.join(cfg.state_dir, "edgar.json"), os.path.join(cfg.state_dir, "sectors.json"),
+                       contact=getattr(cfg, "sec_contact", ""))
+    store.load()
+    t0 = time.time()
+    res = asyncio.run(store.fetch(syms, say=print))
+    print(f"EDGAR: {res['names']} names read ({res['skipped']} current), {res['facts']} facts, {res['filings']} filings, "
+          f"{res['failed']} failed in {time.time() - t0:.0f}s; {store.status}")
+
+
 def _check() -> None:
     """Print what a start would do without loading a model or opening the port."""
     import json
@@ -504,6 +532,9 @@ def main() -> None:
         return
     if len(sys.argv) > 1 and sys.argv[1] == "backtest":
         _backtest()
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "edgar":
+        _edgar()
         return
     if len(sys.argv) > 1 and sys.argv[1] == "version":
         _version()
