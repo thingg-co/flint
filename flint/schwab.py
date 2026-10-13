@@ -25,6 +25,9 @@ AUTH_BASE = "https://api.schwabapi.com/v1/oauth/authorize"
 TOKEN_URL = "https://api.schwabapi.com/v1/oauth/token"
 
 
+REFRESH_TOKEN_LIFE_S = 7 * 86400.0   # Schwab's refresh token lives seven days from the login; only the browser login mints a new one
+
+
 class SchwabAuth:
     def __init__(self, app_key: str, app_secret: str, callback: str, token_path: str | Path):
         self.app_key = app_key or ""
@@ -34,8 +37,14 @@ class SchwabAuth:
         self.access_token: str | None = None
         self.refresh_token: str | None = None
         self.expires_at: float = 0.0
+        self.minted_at: float | None = None   # when the refresh token was minted by a login; the file's birth time for one saved before 0.5.24
         self.status = ""
         self._load()
+
+    @property
+    def login_expires_at(self) -> float | None:
+        """When the refresh token dies and `flint schwab-auth` is needed again; None when unknown."""
+        return (self.minted_at + REFRESH_TOKEN_LIFE_S) if (self.refresh_token and self.minted_at) else None
 
     @property
     def has_creds(self) -> bool:
@@ -60,6 +69,7 @@ class SchwabAuth:
             self.refresh_token = d.get("refresh_token")
             self.access_token = d.get("access_token")
             self.expires_at = float(d.get("expires_at", 0))
+            self.minted_at = float(d["minted_at"]) if d.get("minted_at") else _birth_time(self.token_path)
             self.status = "loaded tokens"
         except (OSError, ValueError):
             self.status = "no tokens on disk"
@@ -68,7 +78,7 @@ class SchwabAuth:
         self.token_path.parent.mkdir(parents=True, exist_ok=True)
         self.token_path.write_text(json.dumps({
             "refresh_token": self.refresh_token, "access_token": self.access_token,
-            "expires_at": self.expires_at, "saved_at": time.time(),
+            "expires_at": self.expires_at, "saved_at": time.time(), "minted_at": self.minted_at,
         }))
         try:
             self.token_path.chmod(0o600)
@@ -83,6 +93,7 @@ class SchwabAuth:
                              data={"grant_type": "authorization_code", "code": code, "redirect_uri": self.callback})
             r.raise_for_status()
             self._apply(r.json())
+        self.minted_at = time.time()
         self._save()
 
     async def _refresh(self) -> None:
@@ -112,3 +123,16 @@ class SchwabAuth:
         if not self.access_token or time.time() >= self.expires_at:
             await self._refresh()
         return self.access_token
+
+
+def _birth_time(path: Path) -> float | None:
+    """The file's creation time, for a token file saved before the mint time was recorded: the
+    file is rewritten in place at every refresh, so its birth is the login. Linux `stat`; None
+    where the filesystem does not keep it."""
+    try:
+        import subprocess
+        out = subprocess.run(["stat", "-c", "%W", str(path)], capture_output=True, text=True, timeout=5).stdout.strip()
+        t = float(out or 0)
+        return t if t > 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None

@@ -265,7 +265,15 @@ unless Flint is already up.
   at the quoted side and every put and straddle at its mark, `PaperBook.flatten`, and sets
   `trading_halted`, a live control kept in `state/controls.json` so the halt outlives a restart; while
   halted the bar loop reads a zero target for every name and opens nothing) or a halt to lift ("Resume
-  trading", `resume_trading`). `status_dict` carries `halted`.
+  trading", `resume_trading`). `status_dict` carries `halted`, and `notices` (`Engine._notices`): operator
+  notices for a second bar under the kill switch (`#warnbar`, amber, shown only while there is one). Today
+  that is the Schwab login: the refresh token dies seven days after `flint schwab-auth` and nothing but the
+  browser login mints another (Schwab has no offline grant), so `SchwabAuth.minted_at` is recorded at the
+  login (a token file from before 0.5.24 is dated by its birth time) and the bar names the expiry from 48
+  hours out, critical once it has passed. When it lapses the feed fails over to Alpaca per symbol, but
+  chains, the Portfolio tab and Schwab's ranged history stop. Both bars are `display: none` under the
+  `hidden` attribute explicitly, because the flex display rule beat the attribute and an empty bar showed
+  its red edge.
 - A live control set from the Control panel or the sweep's "apply these gates" is kept in
   `state/controls.json` (`Engine._remember_controls`) and laid over the launcher's environment at the
   next start (`_load_controls`, since 0.5.22): the panel is the operator's last word, so a gate applied

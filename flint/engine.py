@@ -649,6 +649,28 @@ class Engine:
     def _live_prices(self) -> dict:
         return {s: self.prices[s]["price"] for s in self.symbols if self.prices.get(s) and self.prices[s].get("price")}
 
+    NOTICE_AHEAD_S = 48 * 3600.0
+
+    def _notices(self) -> list[dict]:
+        """Operator notices for the bar under the kill switch: things that need a hand soon.
+        Today: the Schwab login, which dies seven days after `flint schwab-auth` and cannot be
+        renewed by code, named from 48 hours out."""
+        out: list[dict] = []
+        auth = getattr(self, "schwab_auth", None)
+        exp = getattr(auth, "login_expires_at", None)
+        if exp:
+            left = float(exp) - time.time()
+            when = datetime.fromtimestamp(float(exp), ZoneInfo("America/New_York")).strftime("%a %H:%M ET")
+            if left <= 0:
+                out.append({"key": "schwab_login", "level": "critical",
+                            "text": f"the Schwab login expired {when}: run flint schwab-auth to restore its feed, chains and history"})
+            elif left < Engine.NOTICE_AHEAD_S:
+                h = int(left // 3600)
+                span = f"{h // 24} d {h % 24} h" if h >= 24 else f"{h} h {int((left % 3600) // 60)} min"
+                out.append({"key": "schwab_login", "level": "warning",
+                            "text": f"the Schwab login expires in {span} ({when}): run flint schwab-auth before then"})
+        return out
+
     def status_dict(self) -> dict:
         providers = self.sources.provider_map()
         active = sorted({p for p in providers.values() if p})
@@ -656,6 +678,7 @@ class Engine:
                 "started": self.started, "now": time.time(), "bar_index": self.bar_index,
                 "pending": len(self.pending), "learning": self.learning_enabled, "subscribers": len(self.subs),
                 "halted": bool(getattr(self.cfg, "trading_halted", False)),
+                "notices": Engine._notices(self),
                 "market_status": self.market_status,
                 "stalled": bool(getattr(self, "_stalled", False)),
                 "last_bar_age": round(time.time() - getattr(self, "_last_row_at", time.time())),

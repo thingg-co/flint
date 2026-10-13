@@ -335,3 +335,31 @@ def test_flatten_action_closes_the_book_and_halts_until_resumed():
     assert not book.pos and remembered == [{"trading_halted": True}] and "kill switch" in said[0]
     r = Engine.apply_control(eng, {"action": "resume_trading"})
     assert r == {"ok": True, "halted": False} and cfg.trading_halted is False and remembered[-1] == {"trading_halted": False}
+
+
+def test_the_schwab_login_is_a_notice_from_48_hours_out(tmp_path):
+    """The refresh token dies seven days after the browser login; the bar under the kill switch
+    names it from 48 hours out, and the mint time survives the token file."""
+    import json, time
+    from types import SimpleNamespace
+    from flint.engine import Engine
+    from flint.schwab import SchwabAuth, REFRESH_TOKEN_LIFE_S
+    def notices(exp):
+        return Engine._notices(SimpleNamespace(schwab_auth=SimpleNamespace(login_expires_at=exp)))
+    assert notices(None) == [] and notices(time.time() + 5 * 86400) == []
+    soon = notices(time.time() + 10 * 3600 + 5)
+    assert len(soon) == 1 and soon[0]["level"] == "warning" and "10 h" in soon[0]["text"] and "flint schwab-auth" in soon[0]["text"]
+    assert notices(time.time() + 30 * 3600 + 5)[0]["text"].startswith("the Schwab login expires in 1 d 6 h")
+    gone = notices(time.time() - 60)
+    assert gone[0]["level"] == "critical" and "expired" in gone[0]["text"]
+    assert Engine._notices(SimpleNamespace()) == []                         # no Schwab at all
+    # the mint time rides in the token file; a file from before it is dated by its birth
+    tok = tmp_path / "schwab_tokens.json"
+    tok.write_text(json.dumps({"refresh_token": "r", "access_token": "a", "expires_at": 1.0}))
+    old = SchwabAuth("k", "s", "", tok)
+    assert old.minted_at is None or abs(old.minted_at - time.time()) < 120    # born just now, where the filesystem says
+    old.minted_at = 1_000_000.0
+    old._save()
+    again = SchwabAuth("k", "s", "", tok)
+    assert again.minted_at == 1_000_000.0 and again.login_expires_at == 1_000_000.0 + REFRESH_TOKEN_LIFE_S
+    assert SchwabAuth("k", "s", "", tmp_path / "none.json").login_expires_at is None

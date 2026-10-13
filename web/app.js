@@ -716,10 +716,21 @@ function renderKillbar() {
     if (r && r.ok) { if (state.status) state.status.halted = false; renderKillbar(); }
   }; }
 
+function renderNotices() {
+  // operator notices under the kill switch, only while there are any: today the Schwab login,
+  // which dies seven days after the browser login and is named from 48 hours out
+  const bar = $("#warnbar"); if (!bar) return;
+  const notes = (state.status && state.status.notices) || [];
+  bar.hidden = !notes.length;
+  if (bar.hidden) return;
+  bar.innerHTML = notes.map(n => `<span class="${n.level === "critical" ? "critical" : ""}">${esc(n.text).replace(/flint schwab-auth/g, "<code>flint schwab-auth</code>")}</span>`).join("");
+}
+
 function renderStatus() {
   const s = state.status || {};
   renderStall(s);
   renderKillbar();
+  renderNotices();
   const phase = $("#phase");   // the phase pill is gone from the header; the session pill and loading bar carry it
   if (phase) { phase.textContent = s.phase || "?"; phase.className = "pill " + (s.phase === "live" ? "live" : s.phase === "error" ? "err" : "warn"); }
   $("#feed").textContent = "feed: " + (s.feed || "?");
