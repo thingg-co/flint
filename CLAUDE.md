@@ -110,7 +110,7 @@ unless Flint is already up.
   (`universe_candidates`: radar movers by move x dollar volume, tickers named in headlines that are
   known symbols, and the tracked funds' 13F positions) and `pick_universe` promotes the top of the
   ranking into the room left (never on a thin pool: the radar, the news skim and the 13F books must
-  have reported and at least 20 candidates scored, else it waits; "Refresh universe now" on the
+  have reported and at least 20 candidates scored, else it waits; "Refresh Universe Now" on the
   Control Panel queues a pass); a promoted name is demoted only after `interesting_grace_days`
   without ranking in the top 1.5 x count and `interesting_min_tenure_days` of tenure, because a
   demotion forfeits its learned row and history. `state/universe.json` persists the list, the
@@ -258,10 +258,10 @@ unless Flint is already up.
   `session` names pre- and post-market); a stale or missing status leaves the clock and calendar to
   decide, a fresh one saying closed overrules them. `Engine._regular_session` / `_extended_session` /
   `_stock_session` are the gates; the paper book itself refuses option fills outside the regular
-  session (`options_ok`). "Reset paper book" on the Control Panel (`paper_reset`) starts a fresh book
+  session (`options_ok`). "Reset Paper Book" on the Control Panel (`paper_reset`) starts a fresh book
   at `paper_start` and saves. Columbus Day is not an exchange holiday (2026-10-12 traded). The kill
   switch is a bar under the header on every tab (`renderKillbar`), shown only while there is something
-  to kill: open paper positions ("Flatten everything": the `flatten` action closes every stock position
+  to kill: open paper positions ("Flatten Everything": the `flatten` action closes every stock position
   at the quoted side and every put and straddle at its mark, `PaperBook.flatten`, and sets
   `trading_halted`, a live control kept in `state/controls.json` so the halt outlives a restart; while
   halted the bar loop reads a zero target for every name and opens nothing) or a halt to lift ("Resume
@@ -274,7 +274,7 @@ unless Flint is already up.
   chains, the Portfolio tab and Schwab's ranged history stop. Both bars are `display: none` under the
   `hidden` attribute explicitly, because the flex display rule beat the attribute and an empty bar showed
   its red edge.
-- A live control set from the Control Panel or the sweep's "apply these gates" is kept in
+- A live control set from the Control Panel or the sweep's "Apply These Gates" is kept in
   `state/controls.json` (`Engine._remember_controls`) and laid over the launcher's environment at the
   next start (`_load_controls`, since 0.5.22): the panel is the operator's last word, so a gate applied
   on Tuesday is still there after Wednesday's restart. Delete the file to fall back to the environment.
@@ -382,7 +382,7 @@ unless Flint is already up.
   first and waits for it, because a benchmark next to another net reads nonsense peaks.
 - A backtest owns the GPU. While one runs, nothing else trains: matured labels are stored and
   trained on afterwards, the idle trainer skips, and the deep backfill pauses so the replay cannot
-  grow under the run; a manual "Run now" also waits for paging to finish. Before it starts, the
+  grow under the run; a manual "Run Now" also waits for paging to finish. Before it starts, the
   backtest sizes its net to the memory actually free (`backtest_preset_for`: the widest preset no
   wider than the live one whose peak, scaled from the live rung's measured peak by d_model, fits
   above `memory_floor_gb`), it stops itself at the next day boundary if free memory falls below the
@@ -436,7 +436,7 @@ unless Flint is already up.
   device, free memory, any llama-server unit on the same memory, the cached preset and its peak,
   and whether the model plus replay fits. Exit 2 means a start would refuse. Run it with the same
   `FLINT_*` environment the launcher uses, or the replay size and universe will be the defaults.
-- The Backtest tab shows the last walk-forward report and live progress; "Run now" queues one. The
+- The Backtest tab shows the last walk-forward report and live progress; "Run Now" queues one. The
   loop logs a one-line summary to the trace when it finishes; `state/backtest.json` holds the report.
   Each run also stores every raw forecast it made (`state/backtest_forecasts_<target>.npz`) and then
   runs the policy sweep (`flint/sweep.py`, `flint sweep` by hand): `replay_policy` is the backtest's

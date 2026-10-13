@@ -908,7 +908,7 @@ function syncControls() {
   if (!form.elements.length) return;
   CONTROL_FIELDS.forEach(([k]) => { const inp = form.elements[k]; if (inp && document.activeElement !== inp) inp.value = ctlValue(state.controls[k]); });
   const b = $("#btn-pause");
-  b.textContent = state.controls.learning === false ? "Resume learning" : "Pause learning";
+  b.textContent = state.controls.learning === false ? "Resume Learning" : "Pause Learning";
   b.dataset.action = state.controls.learning === false ? "resume" : "pause";
   $("#learning").classList.toggle("off", state.controls.learning === false);
 }
@@ -1001,7 +1001,7 @@ function renderUniverse() {
     ct.innerHTML = classes.map(cls => {
       const syms = universe2.filter(s => (state.classes || {})[s] === cls);
       const allMuted = syms.every(s => !active.has(s));
-      return `<button type="button" class="${allMuted ? "" : "danger"}" data-class="${esc(cls)}" data-on="${allMuted ? "0" : "1"}">${allMuted ? "Enable" : "Disable"} ${esc(cls)}</button>`;
+      return `<button type="button" class="${allMuted ? "" : "danger"}" data-class="${esc(cls)}" data-on="${allMuted ? "0" : "1"}">${allMuted ? "Enable" : "Disable"} ${esc(cls.charAt(0).toUpperCase() + cls.slice(1))}</button>`;
     }).join("");
   }
 }
@@ -1033,7 +1033,7 @@ function renderOnboard() {
     body.innerHTML = `<h2>Welcome to Flint</h2>` +
       `<p>Flint runs out of the box on free, no-key data sources. Adding an API key unlocks better or faster data for that provider \u2014 but <b>every key is optional</b>, and you can add them anytime from the Control Panel.</p>` +
       `<p class="onb-sub">Let's walk through them. Skip any you don't have.</p>` +
-      `<div class="onb-actions"><button class="onb-ghost" id="onb-skipall">Skip setup</button><button class="onb-primary" id="onb-go">Get started</button></div>`;
+      `<div class="onb-actions"><button class="onb-ghost" id="onb-skipall">Skip Setup</button><button class="onb-primary" id="onb-go">Get Started</button></div>`;
   } else if (step.type === "key") {
     const k = (state.keys || []).find(x => x.id === step.id);
     if (!k) { onbNext(); return; }
@@ -1045,15 +1045,15 @@ function renderOnboard() {
       `<p>${esc(k.note || "")}</p>` +
       `<a class="onb-link" href="${esc(safeUrl(k.url))}" target="_blank" rel="noopener noreferrer">Get a ${esc(k.name)} key \u2197</a>` +
       `<div class="onb-fields">${fields}</div>` +
-      `<div class="onb-actions"><button class="onb-ghost" id="onb-back">Back</button><button class="onb-ghost" id="onb-skip">Skip</button><button class="onb-primary" id="onb-save">Save &amp; continue</button></div>`;
+      `<div class="onb-actions"><button class="onb-ghost" id="onb-back">Back</button><button class="onb-ghost" id="onb-skip">Skip</button><button class="onb-primary" id="onb-save">Save &amp; Continue</button></div>`;
   } else if (step.type === "brief") {
-    body.innerHTML = `<h2>Narrative brief <span class="onb-opt">local \u00b7 optional</span></h2>` +
+    body.innerHTML = `<h2>Narrative Brief <span class="onb-opt">local \u00b7 optional</span></h2>` +
       `<p>Flint can write a plain-English market brief with a local LLM through <b>Ollama</b> \u2014 it runs entirely on your machine, no key and no cloud. If Ollama is installed and running, the brief works automatically.</p>` +
       `<a class="onb-link" href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">Install Ollama \u2197</a>` +
       `<p class="onb-sub">You can switch the brief on and off anytime in the control panel.</p>` +
       `<div class="onb-actions"><button class="onb-ghost" id="onb-back">Back</button><button class="onb-primary" id="onb-go">Continue</button></div>`;
   } else {
-    body.innerHTML = `<h2>You're all set</h2>` +
+    body.innerHTML = `<h2>You're All Set</h2>` +
       `<p>Flint is already running on free sources and learning from live data. Add or change keys anytime from <b>Control Panel \u2192 API keys</b>.</p>` +
       `<div class="onb-actions"><button class="onb-primary" id="onb-go">Enter Flint</button></div>`;
   }
@@ -1333,7 +1333,7 @@ function briefText(sig, m) {
 function briefColumn() {
   const b = state.brief;
   const busy = b && b.generating;
-  const regen = `<button id="brief-regen"${busy ? " disabled" : ""}>${busy ? "writing…" : "\u21bb regenerate"}</button>`;
+  const regen = `<button id="brief-regen"${busy ? " disabled" : ""}>${busy ? "Writing…" : "\u21bb Regenerate"}</button>`;
   const masthead = meta => `<div class="col-masthead"><span class="col-name">Flint \u00b7 Markets</span><span class="col-meta">${esc(meta)}</span>${regen}</div>`;
   if (busy && !(b && b.text)) {
     return `<div class="brief-column">${masthead("the local desk is writing\u2026")}<div class="col-loading"><div class="spark-mini"></div>` +
@@ -1391,7 +1391,7 @@ function renderBrief() {
   // model calls (strongest by |score|)
   const calls = state.config.symbols.map(s => state.latest[s]).filter(L => L && L.q)
     .sort((a, b) => Math.abs(b.score) - Math.abs(a.score)).slice(0, 6);
-  const callPanel = `<div class="bpanel"><h3>Model calls <small>60s forecast, 10–90 band</small></h3>` +
+  const callPanel = `<div class="bpanel"><h3>Model Calls <small>60s forecast, 10–90 band</small></h3>` +
     (calls.length ? calls.map(L => `<div class="bcall"><span class="sym tk" data-sym="${esc(L.symbol)}">${esc(base(L.symbol))}</span>` +
       `<span class="badge ${L.action.toLowerCase()}">${L.action}</span>${rangeBar(L.q)}</div>`).join("")
       : `<div class="why">warming up…</div>`) + `</div>`;
@@ -1400,7 +1400,7 @@ function renderBrief() {
   const cr = sig.crowding || {};
   const crowdRows = Object.entries(cr).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 4)
     .map(([s, v]) => `<div class="bline"><span>${esc(base(s))} crowding</span><b class="${v >= 0 ? "down" : "up"}">${v >= 0 ? "+" : ""}${v.toFixed(2)}</b></div>`).join("");
-  const posPanel = `<div class="bpanel"><h3>Positioning &amp; sentiment</h3>` +
+  const posPanel = `<div class="bpanel"><h3>Positioning &amp; Sentiment</h3>` +
     (fg.value != null ? `<div class="bline"><span>Fear &amp; Greed</span><b>${fg.value} ${esc(fg.class || "")}</b></div>` : "") +
     crowdRows + `</div>`;
 
@@ -1411,11 +1411,11 @@ function renderBrief() {
   const gt = sig.guru_tilt || {};
   const gtRows = Object.entries(gt).filter(([, v]) => Math.abs(v) > 0.05).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 5)
     .map(([s, v]) => `<div class="bline"><span>${esc(base(s))}</span><b class="${v >= 0 ? "up" : "down"}">${v >= 0 ? "+" : ""}${v.toFixed(2)}</b></div>`).join("");
-  const smartPanel = `<div class="bpanel"><h3>Smart money <small>${(sig.gurus || []).filter(g => g.enabled).length} investors</small></h3>` +
+  const smartPanel = `<div class="bpanel"><h3>Smart Money <small>${(sig.gurus || []).filter(g => g.enabled).length} investors</small></h3>` +
     `<div class="ethos-mini">${ethos}</div>` + (gtRows || `<div class="why">loading 13Fs…</div>`) + `</div>`;
 
   // sectors
-  const sectorPanel = m.sectors && m.sectors.length ? `<div class="bpanel"><h3>Sector rotation</h3><div class="sector-heat">` +
+  const sectorPanel = m.sectors && m.sectors.length ? `<div class="bpanel"><h3>Sector Rotation</h3><div class="sector-heat">` +
     m.sectors.map(sc => { const t = Math.max(-1, Math.min(1, sc.chg / 2));
       const bg = t >= 0 ? `rgba(${C.heatUp},${0.25 + 0.55 * t})` : `rgba(${C.heatDown},${0.25 + 0.55 * -t})`;
       return `<div class="sc tk" data-sym="${esc(sc.etf)}" data-etf="${esc(sc.etf)}" data-chg="${sc.chg}" style="background:${bg}" title="${esc(sc.name)}"><span>${esc(sc.etf)}</span><b>${sc.chg >= 0 ? "+" : ""}${sc.chg.toFixed(1)}</b></div>`; }).join("") + `</div></div>` : "";
@@ -1502,7 +1502,7 @@ function renderBacktest() {
   }
   if (!b || (!b.totals && !pr.running)) {
     root.innerHTML = ""; $("#bt-days").innerHTML = ""; $("#bt-names").innerHTML = "";
-    if (meta) meta.textContent = b && b.error ? b.error : "no run yet — runs on weekends over the replay, or press Run now";
+    if (meta) meta.textContent = b && b.error ? b.error : "no run yet — runs on weekends over the replay, or press Run Now";
     paintBacktest([]); return;
   }
   const t = b.totals || {}, c = b.config || {};
@@ -1582,8 +1582,8 @@ function renderSweep(sw) {
   root.innerHTML = rows.join("") + (sw.why ? `<div class="snote">${esc(sentence(sw.why))}</div>` : "") +
     (prop && prop.knobs && Object.keys(prop.knobs).length
       ? (applied
-        ? `<div class="sw-actions"><button class="mini" id="sw-apply" disabled>applied</button><span class="snote" id="sw-applied">The control panel carries these values; the next run judges them.</span></div>`
-        : `<div class="sw-actions"><button class="mini" id="sw-apply" data-knobs="${esc(JSON.stringify(prop.knobs))}">apply these gates</button><span class="snote" id="sw-applied">Sets the proposed values on the control panel; nothing else changes.</span></div>`)
+        ? `<div class="sw-actions"><button class="mini" id="sw-apply" disabled>Applied</button><span class="snote" id="sw-applied">The control panel carries these values; the next run judges them.</span></div>`
+        : `<div class="sw-actions"><button class="mini" id="sw-apply" data-knobs="${esc(JSON.stringify(prop.knobs))}">Apply These Gates</button><span class="snote" id="sw-applied">Sets the proposed values on the control panel; nothing else changes.</span></div>`)
       : "");
 }
 
@@ -2140,11 +2140,11 @@ $$(".tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab, true));
   b.disabled = true;
   const knobs = JSON.parse(b.dataset.knobs), r = await control({ set: knobs });
   const ok = r && r.controls && Object.keys(knobs).every(k => !(k in r.controls) || Number(r.controls[k]) === Number(knobs[k]));
-  b.textContent = ok ? "applied" : "could not apply"; b.disabled = !ok ? false : true;
+  b.textContent = ok ? "Applied" : "Could Not Apply"; b.disabled = !ok ? false : true;
   if (ok && r.controls) { state.controls = r.controls; syncControls(); if (state.backtest) renderSweep(state.backtest.sweep); }
   const a = $("#sw-applied"); if (a) a.textContent = ok ? "The control panel now carries these values; the next weekend's run judges them." : "The server did not take every value; check the control panel.";
 }); }
-{ const b = $("#bt-run"); if (b) b.onclick = async () => { b.disabled = true; const r = await control({ action: "backtest" }); b.textContent = r && r.backtest ? r.backtest : "Run now"; setTimeout(() => { b.disabled = false; b.textContent = "Run now"; }, 4000); }; }
+{ const b = $("#bt-run"); if (b) b.onclick = async () => { b.disabled = true; const r = await control({ action: "backtest" }); b.textContent = r && r.backtest ? r.backtest : "Run Now"; setTimeout(() => { b.disabled = false; b.textContent = "Run now"; }, 4000); }; }
 // routes: #<tab> or #<tab>/<SYMBOL> (symbol detail open). Back/forward and refresh replay them.
 function route() {
   const [t, sym] = location.hash.slice(1).split("/");

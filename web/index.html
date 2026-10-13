@@ -31,8 +31,8 @@
 </header>
 <div id="killbar" class="killbar" hidden>
   <span id="kill-text"></span>
-  <button type="button" class="danger" id="kill-flatten" hidden>Flatten everything</button>
-  <button type="button" id="kill-resume" hidden>Resume trading</button>
+  <button type="button" class="danger" id="kill-flatten" hidden>Flatten Everything</button>
+  <button type="button" id="kill-resume" hidden>Resume Trading</button>
 </div>
 <div id="warnbar" class="warnbar" hidden></div>
 
@@ -43,7 +43,7 @@
 <main id="dashboard" class="view">
   <section class="panel market" id="market-panel">
     <div class="market-head">
-      <h3>Whole market <small id="market-meta">scanning…</small></h3>
+      <h3>Whole Market <small id="market-meta">scanning…</small></h3>
       <div class="market-stats" id="market-stats"></div>
     </div>
     <div class="market-grid">
@@ -52,10 +52,10 @@
     </div>
   </section>
   <section class="cards" id="cards"></section>
-  <div class="more-wrap" id="more-wrap" hidden><button id="more-cards">Show 50 more</button><small id="more-meta"></small></div>
+  <div class="more-wrap" id="more-wrap" hidden><button id="more-cards">Show 50 More</button><small id="more-meta"></small></div>
   <section class="panel market-watch" id="market-watch">
     <div class="mw-head">
-      <h3>Market watch <small id="mw-meta">everything we can see, most urgent first</small></h3>
+      <h3>Market Watch <small id="mw-meta">everything we can see, most urgent first</small></h3>
       <input type="text" id="watch-filter" placeholder="filter…" autocomplete="off">
     </div>
     <div class="watch-grid" id="watch-grid"></div>
@@ -64,21 +64,21 @@
     <div class="tiles" id="tiles"></div>
     <div class="row">
       <div class="block">
-        <h3>Live pinball loss <small>out of sample, bps</small></h3>
+        <h3>Live Pinball Loss <small>out of sample, bps</small></h3>
         <canvas class="spark" id="spark-loss"></canvas>
       </div>
       <div class="block">
-        <h3>Directional hit rate <small>EMA, 0.5 = coin flip</small></h3>
+        <h3>Directional Hit Rate <small>EMA, 0.5 = coin flip</small></h3>
         <canvas class="spark" id="spark-hit"></canvas>
       </div>
       <div class="block">
-        <h3>10-90 band coverage <small>target 0.80</small></h3>
+        <h3>10-90 Band Coverage <small>target 0.80</small></h3>
         <canvas class="spark" id="spark-coverage"></canvas>
       </div>
     </div>
     <div class="row">
       <div class="block">
-        <h3>Regime gate <small>mixture over expert heads</small></h3>
+        <h3>Regime Gate <small>mixture over expert heads</small></h3>
         <div class="gate" id="gate"></div>
       </div>
       <div class="block">
@@ -86,13 +86,13 @@
         <div class="arch" id="arch"></div>
       </div>
       <div class="block wide">
-        <h3>Resolved suggestions</h3>
+        <h3>Resolved Suggestions</h3>
         <ul class="log" id="log"></ul>
       </div>
     </div>
     <div class="row holds">
       <div class="block wide">
-        <h3>Why Flint is holding</h3>
+        <h3>Why Flint Is Holding</h3>
         <ul class="holds-list" id="holds-list"></ul>
       </div>
     </div>
@@ -103,11 +103,11 @@
   <section class="panel controls">
     <form id="controls" class="controls-form"></form>
     <div class="actions">
-      <button type="button" data-action="pause" id="btn-pause">Pause learning</button>
-      <button type="button" data-action="checkpoint">Save checkpoint</button>
-      <button type="button" data-action="skim">Skim news now</button>
-      <button type="button" data-action="reset" class="danger">Reset model</button>
-      <button type="button" data-action="paper_reset" class="danger">Reset paper book</button>
+      <button type="button" data-action="pause" id="btn-pause">Pause Learning</button>
+      <button type="button" data-action="checkpoint">Save Checkpoint</button>
+      <button type="button" data-action="skim">Skim News Now</button>
+      <button type="button" data-action="reset" class="danger">Reset Model</button>
+      <button type="button" data-action="paper_reset" class="danger">Reset Paper Book</button>
     </div>
   </section>
   <section class="panel universe">
@@ -116,49 +116,49 @@
     <div class="uni-add">
       <input type="text" id="uni-add-input" placeholder="add ticker, e.g. NKE" autocomplete="off" autocapitalize="characters">
       <button type="button" data-action="add_symbol">Add</button>
-      <button type="button" data-action="add_movers">+ Top 20 movers</button>
-      <button type="button" data-action="refresh_universe">Refresh universe now</button>
+      <button type="button" data-action="add_movers">+ Top 20 Movers</button>
+      <button type="button" data-action="refresh_universe">Refresh Universe Now</button>
     </div>
     <div class="uni-list" id="uni-list"></div>
   </section>
   <section class="panel keys">
-    <div class="sources-head"><h3>API keys <small>stored locally in gitignored files, never shown in full</small></h3><button type="button" id="run-setup">Setup walkthrough</button></div>
+    <div class="sources-head"><h3>API Keys <small>stored locally in gitignored files, never shown in full</small></h3><button type="button" id="run-setup">Setup Walkthrough</button></div>
     <div class="key-list" id="key-list"></div>
   </section>
   <section class="panel sources">
     <div class="sources-head">
-      <h3>Data sources <small>toggle any source; the highest-priority live one serves each symbol</small></h3>
+      <h3>Data Sources <small>toggle any source; the highest-priority live one serves each symbol</small></h3>
     </div>
     <div class="source-list" id="source-list"></div>
     <div class="news-sources">
-      <h3>News sources <small>merged per asset; sentiment feeds two model features</small></h3>
+      <h3>News Sources <small>merged per asset; sentiment feeds two model features</small></h3>
       <div class="source-list compact" id="news-source-list"></div>
     </div>
   </section>
   <section class="panel signals">
     <div class="sources-head">
-      <h3>Signals &amp; strategy <small>retail chatter, market breadth, and guru 13Fs — fed to the model and the Burry overlay</small></h3>
+      <h3>Signals &amp; Strategy <small>retail chatter, market breadth, and guru 13Fs — fed to the model and the Burry overlay</small></h3>
       <label class="overlay-toggle" id="burry-toggle-wrap">Burry / Buffett overlay</label>
-      <button type="button" data-action="refresh_signals" id="refresh-signals">Refresh signals</button>
+      <button type="button" data-action="refresh_signals" id="refresh-signals">Refresh Signals</button>
     </div>
     <div class="source-list compact" id="signal-list"></div>
     <div class="signal-assets" id="signal-assets"></div>
     <div class="council">
-      <div class="council-head"><h4>Investor council <small>combined ethos drives the overlay</small></h4><div class="ethos-bars" id="council-ethos"></div></div>
+      <div class="council-head"><h4>Investor Council <small>combined ethos drives the overlay</small></h4><div class="ethos-bars" id="council-ethos"></div></div>
       <div class="gurus" id="guru-list"></div>
     </div>
   </section>
   <section class="panel brief-ctl" hidden>
     <div class="sources-head">
-      <h3>Narrative brief <small>written on-device by a local model (llama-server) — nothing leaves the machine</small></h3>
+      <h3>Narrative Brief <small>written on-device by a local model (llama-server) — nothing leaves the machine</small></h3>
       <label class="overlay-toggle" id="brief-toggle-wrap">auto-write</label>
-      <button type="button" id="brief-now">Write now</button>
+      <button type="button" id="brief-now">Write Now</button>
     </div>
     <div class="brief-status" id="brief-status"></div>
   </section>
   <section class="panel radar">
     <div class="radar-head">
-      <h3>Movers radar <small id="radar-meta">top market movers</small></h3>
+      <h3>Movers Radar <small id="radar-meta">top market movers</small></h3>
       <input type="text" id="radar-filter" placeholder="filter symbol…" autocomplete="off">
     </div>
     <div class="radar-table" id="radar-table"></div>
@@ -166,7 +166,7 @@
   <section class="console-grid" id="console-grid"></section>
   <section class="panel news">
     <div class="news-head">
-      <h3>News skim <small id="news-meta">not run yet</small></h3>
+      <h3>News Skim <small id="news-meta">not run yet</small></h3>
     </div>
     <div class="news-body">
       <div class="tone" id="tone"></div>
@@ -188,8 +188,8 @@
     <section class="panel"><div class="peq"><span class="peq-label">paper equity</span><span class="peq-val" id="p-equity">$100,000</span><span class="peq-ret" id="p-return">+0.00%</span></div></section>
     <section class="panel"><h3>Book</h3><div class="pstats" id="p-stats"></div></section>
   </div>
-  <section class="panel"><h3>Equity curve <small>$100k book, compounding</small></h3><canvas id="p-curve" class="pcurve"></canvas></section>
-  <section class="panel"><h3>Recent trades <small id="p-tr-meta"></small><button class="mini" id="p-tr-more" hidden>Show all</button></h3><div class="ptable" id="p-trades"></div></section>
+  <section class="panel"><h3>Equity Curve <small>$100k book, compounding</small></h3><canvas id="p-curve" class="pcurve"></canvas></section>
+  <section class="panel"><h3>Recent Trades <small id="p-tr-meta"></small><button class="mini" id="p-tr-more" hidden>Show All</button></h3><div class="ptable" id="p-trades"></div></section>
   <div class="row pcards">
     <section class="panel"><h3>Holdings <small id="p-pos-meta"></small></h3><div class="ptable" id="p-positions"></div></section>
     <section class="panel"><h3>Options <small id="p-opt-meta"></small></h3><div class="ptable" id="p-options"></div></section>
@@ -197,12 +197,12 @@
   <div class="why">Simulated. The model runs a $100k long/short book, rebalancing to its own suggestions with no leverage and a small cost per trade. It compounds continuously and persists across restarts. These are not real orders.</div>
 </main>
 <main id="backtest" class="view">
-  <section class="panel"><h3>Walk-forward backtest <small id="bt-meta"></small> <button class="mini" id="bt-run">Run now</button></h3><div class="bt-progress" id="bt-progress" hidden><i></i></div><div class="pstats" id="bt-stats"></div></section>
-  <section class="panel"><h3>Equity curve <small>cumulative net bps per day</small></h3><canvas id="bt-curve" class="pcurve"></canvas><div id="bt-legend" class="legend"></div></section>
+  <section class="panel"><h3>Walk-Forward Backtest <small id="bt-meta"></small> <button class="mini" id="bt-run">Run Now</button></h3><div class="bt-progress" id="bt-progress" hidden><i></i></div><div class="pstats" id="bt-stats"></div></section>
+  <section class="panel"><h3>Equity Curve <small>cumulative net bps per day</small></h3><canvas id="bt-curve" class="pcurve"></canvas><div id="bt-legend" class="legend"></div></section>
   <div class="row pcards">
     <section class="panel"><h3>Days <small id="bt-days-head">newest first, last 40</small></h3><div class="ptable" id="bt-days"></div></section>
     <section class="panel"><h3>Names <small>best and worst by net bps</small></h3><div class="ptable" id="bt-names"></div></section>
-    <section class="panel"><h3>Proposed gates <small id="sw-meta">the policy's gates swept over the run's stored forecasts: tuned on the first half of the days, confirmed on the second; never applied by itself</small></h3><div class="ptable" id="sw-table"></div></section>
+    <section class="panel"><h3>Proposed Gates <small id="sw-meta">the policy's gates swept over the run's stored forecasts: tuned on the first half of the days, confirmed on the second; never applied by itself</small></h3><div class="ptable" id="sw-table"></div></section>
   </div>
   <div class="why">Out of sample by construction: a fresh net of the live preset forecasts each day before it trains on that day, the live policy's gates and sizing decide, and the realised hour-ahead returns score it. It runs on the weekend GPU over the timestamped replay; the model that trades is untouched.</div>
 </main>
@@ -232,7 +232,7 @@
 </div>
 <div class="tooltip" id="tooltip"></div>
 <button id="inject-fab" title="Inject a note to Flint  (⌘/Ctrl+I)">✎ Tell Flint</button>
-<button id="skip-fab" title="Jump past the symbol cards" hidden>↓ Past the cards</button>
+<button id="skip-fab" title="Jump past the symbol cards" hidden>↓ Past the Cards</button>
 <div id="detail" class="detail" hidden><div class="detail-card">
   <header><div class="dtitle"><span class="dsym"></span><span class="dmeta"></span></div><div class="dpx"><span class="dprice num"></span><span class="dchg num"></span></div><span class="dbadge"></span><button class="dclose" title="close (Esc)">×</button></header>
   <div class="dchart"><canvas id="dcanvas"></canvas></div>
