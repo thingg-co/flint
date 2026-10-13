@@ -1517,6 +1517,13 @@ function renderSweep(sw) {
   const applied = !!(prop && prop.knobs && Object.keys(prop.knobs).length && Object.keys(prop.knobs).every(k => Number(nowOf(k)) === Number(prop.knobs[k])));
   const half = r => r ? `${pd(r.net_bps_per_day)}<br>${r.signals} trades · hit ${fmtPct(r.hit_rate)}` : "·";
   if (meta) meta.textContent = `${sw.days} days, split at day ${sw.split_day}; ${sw.evaluations} settings tried · ${sw.accepted && sw.thin ? "proposal confirmed on the second half, on too few trades to act on" : sw.accepted ? "proposal confirmed on the second half" : (prop ? "proposal failed the second half: not recommended" : "no setting beat the current gates")} · ${esc(sw.target || "")} target, cost ${sw.cost_bps} bps${sw.hedge_cost_bps != null ? `, hedge ${sw.hedge_cost_bps} bps` : ""}`;
+  if (applied) {                                                     // nothing left to propose: the gates are the proposal
+    const lift = prop.confirm && cur.confirm && prop.confirm.net_bps_per_day != null && cur.confirm.net_bps_per_day != null
+      ? ` (${pd(cur.confirm.net_bps_per_day)} to ${pd(prop.confirm.net_bps_per_day)} on the confirming half)` : "";
+    root.innerHTML = `<div class="snote">applied: the Control panel carries this run's proposal${lift}; the next run judges it and may propose again. `
+      + Object.entries(prop.knobs).map(([k, v]) => `${esc(k.replace(/_/g, " "))} ${esc(String(v))}`).join(" · ") + `</div>`;
+    return;
+  }
   const rows = [`<div class="prow phead"><span>gate</span>${cell("now")}${cell("proposed")}</div>`];
   Object.keys(cur.knobs || {}).forEach(k => {
     const v = nowOf(k), pv = prop && prop.knobs && k in prop.knobs ? prop.knobs[k] : null;
