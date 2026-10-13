@@ -331,6 +331,7 @@ def _backtest() -> None:
 
     from .autotune import configure_backend, pick_device
     from .backtest import combine_reports, run_backtest
+    from .sweep import gates_set_on
     from .config import Config
 
     cfg = Config()
@@ -388,6 +389,10 @@ def _backtest() -> None:
         since = {s: v.get("since") for s, v in (uni.get("interesting") or {}).items() if isinstance(v, dict)}
     except (OSError, ValueError):
         pass
+    try:
+        gates_since = gates_set_on(json.loads((state / "controls.json").read_text()))
+    except (OSError, ValueError):
+        gates_since = None
     reports = []
     for variant in variants:
         if len(variants) > 1:
@@ -397,7 +402,7 @@ def _backtest() -> None:
                                     cost_bps=opts["cost"], hedge_cost_bps=opts["hedge"], preset=preset, night_epochs=opts["night"], target=variant,
                                     index_symbols=str(cfg.index_symbols), beta_windows=int(cfg.beta_windows),
                                     beta_shrink=float(cfg.beta_shrink), store=str(state / "backtest_forecasts"), members=opts["members"],
-                                    since=since))
+                                    since=since, gates_since=gates_since))
         print()
         r = reports[-1]
         if r.get("error"):

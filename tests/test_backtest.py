@@ -96,6 +96,17 @@ def test_a_promoted_name_is_masked_before_the_day_it_joined(tmp_path):
     assert not z["mask"][before, 1].any() and z["mask"][~before, 1].all() and z["mask"][:, 0].all()
 
 
+def test_the_days_after_the_gates_were_set_are_totalled_apart():
+    cfg = toy_cfg()
+    rx, ry, rmask, rt = toy_replay()
+    res = run_backtest(cfg, rx, ry, rmask, rt, device="cpu", warm_days=3, steps_per_day=1, gates_since="2026-09-06")
+    sg = res["since_gates"]
+    after = [d for d in res["days"] if d["date"] > "2026-09-06"]
+    assert sg["date"] == "2026-09-06" and sg["days"] == len(after) == 2
+    assert abs(sg["net_bps"] - sum(d["net_bps"] for d in after)) < 1e-9
+    assert run_backtest(cfg, rx, ry, rmask, rt, device="cpu", warm_days=3, steps_per_day=1)["since_gates"] is None
+
+
 def test_untimed_windows_are_ignored_and_too_little_history_is_an_error():
     cfg = toy_cfg()
     rx, ry, rmask, rt = toy_replay(n_days=4)

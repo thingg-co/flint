@@ -33,6 +33,16 @@ GRID: dict[str, list] = {
     "meta_min": [0.0, 0.47, 0.5, 0.53, 0.56],
 }
 MIN_SIGNALS_PER_DAY = 0.5           # a setting that barely trades has no net worth comparing
+
+
+def gates_set_on(saved: dict | None) -> str | None:
+    """The latest day (ET, ISO) on which any of the sweep's gates was set from the panel or the
+    sweep's "apply", read from the controls file's `when` map; None when none of them was. The
+    backtest scores the days after it separately: a gate tuned on a run's days is in sample for
+    the next run over the same days (the ring holds about 48 sessions), the days after are not."""
+    when = (saved or {}).get("when") or {}
+    days = [str(v) for k, v in when.items() if k in GRID and v]
+    return max(days) if days else None
 THIN_SIGNALS_PER_DAY = 2.0          # a proposal confirmed on fewer trades than this is a hint, not a result
 
 

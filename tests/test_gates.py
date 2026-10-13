@@ -305,6 +305,14 @@ def test_controls_set_from_the_panel_survive_a_restart(tmp_path):
     assert fresh.score_threshold == 0.8 and fresh.skill_min_n == 16 and fresh.prob_margin == 0.04 and eng2._overrides == applied
     eng3 = SimpleNamespace(cfg=Config(), _controls_path=lambda: str(tmp_path / "missing.json"))
     assert Engine._load_controls(eng3) == {}                            # no file: nothing changes
+    import json
+    from flint.sweep import gates_set_on
+    saved = json.loads((tmp_path / "controls.json").read_text())
+    today = __import__("datetime").datetime.now(__import__("zoneinfo").ZoneInfo("America/New_York")).date().isoformat()
+    assert saved["when"] == {"score_threshold": today, "skill_min_n": today, "prob_margin": today}   # the day each was set
+    assert gates_set_on(saved) == today and eng2._controls_when == saved["when"]
+    assert gates_set_on({"when": {"deep_backfill_days": today}}) is None   # not a sweep gate
+    assert gates_set_on({}) is None
 
 
 

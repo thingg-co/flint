@@ -80,7 +80,8 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                  steps_per_day: int = 0, compile_: bool | None = None, hooks: dict | None = None,
                  preset: str = "", night_epochs: float = 0.0, target: str = "absolute", index_symbols: str = "SPY",
                  beta_windows: int = 6000, beta_shrink: float = 400.0, store: str | None = None,
-                 hedge_cost_bps: float | None = None, members: int = 1, since: dict | None = None) -> dict:
+                 hedge_cost_bps: float | None = None, members: int = 1, since: dict | None = None,
+                 gates_since: str | None = None) -> dict:
     """See the module docstring. Each day trains the live online budget (steps_per_label per
     bar) plus `night_epochs` passes over everything seen so far, the way the idle trainer does
     each closed session; `hours` > 0 caps the run by shrinking that budget to fit the remaining
@@ -94,7 +95,9 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
     so the sweep can replay one net against the ensemble over the same days. `since` maps a
     promoted name to the date it joined the universe: its rows before that day are masked out of
     training, the loadings and the scoring, because the name was picked for what it did on those
-    days (the universe loop promotes recent movers), so a run over them would score hindsight.
+    days (the universe loop promotes recent movers), so a run over them would score hindsight. `gates_since` is the day the live gates were
+    last set (the sweep's "apply" tunes them on a run's own days): the report's `since_gates`
+    totals the scored days after it, the only ones those gates did not see.
     Returns the report as
     a JSON-ready dict."""
     t0 = time.time()
@@ -412,6 +415,13 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                                for r in day_rows[-60:]]})
 
     totals = _totals(day_rows, tot, cum, max_dd, long_cum)
+    since_gates = None
+    if gates_since:
+        after = [r for r in day_rows if r["date"] > str(gates_since)]
+        nets = np.asarray([r["net_bps"] for r in after], dtype=np.float64)
+        since_gates = {"date": str(gates_since), "days": len(after), "net_bps": float(nets.sum()) if len(after) else 0.0,
+                       "net_bps_per_day": float(nets.mean()) if len(after) else 0.0,
+                       "signals": int(sum(r["signals"] for r in after))}
     totals["unhedged_bps"] = float(unhedged_cum)
     stored = None
     if store and kept["rows"]:
@@ -443,7 +453,7 @@ def run_backtest(cfg, rx, ry, rmask, rt, *, device: str = "cpu", symbols=None, p
                        "steps_per_day": [steps_lo, steps_hi], "device": device, "history_days": len(groups),
                        "hindsight_rows": hindsight, "hindsight_names": sum(1 for s_ in (since or {}) if s_ in symbols),
                        "windows": int(len(keyed))},
-            "days": day_rows, "totals": totals, "symbols": per_sym}
+            "days": day_rows, "totals": totals, "symbols": per_sym, "since_gates": since_gates}
 
 
 def variant_summary(report: dict) -> dict:

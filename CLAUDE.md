@@ -271,7 +271,11 @@ unless Flint is already up.
   next start (`_load_controls`, since 0.5.22): the panel is the operator's last word, so a gate applied
   on Tuesday is still there after Wednesday's restart. Delete the file to fall back to the environment.
   The Backtest tab's proposal card reads "now" from the live controls and shows "applied" once they
-  match the proposal; before, it showed the run's snapshot and the button again after a reload.
+  match the proposal; before, it showed the run's snapshot and the button again after a reload. The
+  file also records the day each control was last set (`when`); the backtest totals the scored days
+  after the latest day any sweep gate was set apart (`sweep.gates_set_on`, the report's `since_gates`,
+  on the tab's run line), because gates tuned on a run's days are in sample for the next run over
+  the same days.
 - Risk gates in the policy (all live controls; the model is untouched): a name needs `skill_min_n`
   matured direction calls at or above `min_hit_rate` before it may trade; the same side must persist
   `confirm_bars` bars; a stock position is held `stock_min_hold_bars` unless the signal reverses; the

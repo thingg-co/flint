@@ -22,6 +22,7 @@ import numpy as np
 
 from .autotune import PRESETS, free_memory_gb
 from .backtest import combine_reports, run_backtest, variant_summary
+from .sweep import gates_set_on
 from .meta import MetaLabeler, features as meta_features
 from .newshist import NewsHistory, backfill_span
 from .bars import Bar, BarBuilder
@@ -695,6 +696,7 @@ class Engine:
             setattr(self.cfg, k, val)
             applied[k] = val
         self._overrides = dict(applied)
+        self._controls_when = {k: str(v) for k, v in (saved.get("when") or {}).items() if k in applied}
         return applied
 
     def _remember_controls(self, changed: dict) -> None:
@@ -702,10 +704,15 @@ class Engine:
         if ov is None:
             ov = self._overrides = {}
         ov.update(changed)
+        when = getattr(self, "_controls_when", None)
+        if when is None:
+            when = self._controls_when = {}
+        today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+        when.update({k: today for k in changed})                          # the day each gate was last set: the backtest scores the days after
         tmp = self._controls_path() + ".tmp"
         try:
             with open(tmp, "w") as f:
-                json.dump({"v": 1, "saved_at": time.time(), "set": ov}, f, indent=1, default=str)
+                json.dump({"v": 1, "saved_at": time.time(), "set": ov, "when": when}, f, indent=1, default=str)
             os.replace(tmp, self._controls_path())
         except OSError as e:
             self.trace.emit("system", f"could not save the live controls: {e}", "warn")
@@ -1353,7 +1360,8 @@ class Engine:
                         beta_windows=int(cfg.beta_windows), beta_shrink=float(cfg.beta_shrink),
                         store=os.path.join(cfg.state_dir, "backtest_forecasts"),
                         members=int(getattr(cfg, "backtest_members", 1) or 1),
-                        since={s: v.get("since") for s, v in self._interesting.items() if isinstance(v, dict)}))
+                        since={s: v.get("since") for s, v in self._interesting.items() if isinstance(v, dict)},
+                        gates_since=gates_set_on({"when": getattr(self, "_controls_when", {})})))
                     done.append(variant_summary(reports[-1]))
                     loop.call_soon_threadsafe(self._publish, {"type": "backtest", "backtest": self.backtest_summary()})
                 return combine_reports(reports)
