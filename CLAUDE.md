@@ -131,8 +131,10 @@ unless Flint is already up.
   error after the first promotion, phase `error` until a restart with a matching universe).
 - While the market is closed, `_deep_backfill_loop` pages history back in ~10-day chunks
   (one every 150 s while there is history left, to `deep_backfill_days`, a live control; 0 disables), adds labeled windows to the replay
-  through an isolated bar/feature pipeline, and trains on them. It must never run while the
-  market is open. Ranged history comes from any source with `backfill_range`: FMP, and since
+  through an isolated bar/feature pipeline (its own bar builder and feature builder, the
+  normalizer fresh and warmed by the chunk's nine-day prefix, never seeded from the live state, which
+  would standardize an old chunk by the present's variance), and trains on them. It must never run
+  while the market is open. Ranged history comes from any source with `backfill_range`: FMP, and since
   0.5.10 Schwab, which serves 5-minute candles at least 250 days back by date range (probed
   2026-10-10), so no FMP key is needed. Each replay window is keyed by its bar timestamp, so the
   startup backfill after a restart, which walks the same ten days again, adds nothing (before
@@ -148,8 +150,10 @@ unless Flint is already up.
   open and each close starts a new session with a fresh budget and guard, since 0.5.21: before, an
   open with `train_in_session` off never registered, so every night after the first shared the
   first night's exhausted budget and trained one step per new window),
-  a budget bounded by replay size rather than by hours, so a long night cannot overfit it. Every
-  20th bar by timestamp (5%) is held out of training for good (`learner.validate`, derived from the
+  a budget bounded by replay size rather than by hours, so a long night cannot overfit it. One
+  session in 20 (every 28th calendar day by timestamp, whole, since 0.5.23; before, every 20th bar,
+  whose trained neighbours share eleven of its twelve label bars, so the held-out loss tracked the
+  in-sample loss) is held out of training for good (`learner.validate`, derived from the
   timestamp so a reload keeps the same slice); the idle trainer checks it every 40 steps and ends
   the session's budget when it stops improving for `overfit_patience` checks (the overfit guard),
   with the value on the "held-out pinball" tile. The in-sample loss cannot tell fitting from
