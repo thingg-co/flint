@@ -48,7 +48,11 @@ def test_ttm_is_the_annual_plus_the_year_to_date_less_the_same_stretch_a_year_be
                 _row("2026-08-01", (2026, 4, 1), (2026, 6, 30), 30.0), _row("2026-11-01", (2026, 7, 1), (2026, 9, 30), 40.0),
                 _row("2026-11-15", (2026, 7, 1), (2026, 9, 30), 40.0)]   # the same quarter filed twice counts once
     assert ttm(quarters, _d(2026, 12, 1)) == 100.0                  # no annual figure: the last four distinct quarters
-    assert np.isnan(ttm(quarters[:3], _d(2026, 12, 1)))
+    assert abs(ttm(quarters[:3], _d(2026, 12, 1)) - 60.0 * 4 / 3) < 1e-9   # three known: scaled to a year
+    half = [_row("2026-08-01", (2026, 1, 1), (2026, 6, 30), 50.0)]
+    dur_days = (half[0][2] - half[0][1]) / 86400.0                            # 180 days less the DST hour
+    assert abs(ttm(half, _d(2026, 12, 1)) - 50.0 * 365.25 / dur_days) < 1e-6   # a half year alone: scaled to a year
+    assert np.isnan(ttm(quarters, _d(2025, 12, 1)))
 
 
 def test_sector_relative_uses_the_sector_median_when_it_has_three_names_else_the_universe():

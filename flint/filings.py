@@ -100,19 +100,25 @@ def _accept_ts(accept: str, filed: str) -> float:
 def ttm(rows: list[list[float]], ts: float) -> float:
     """The trailing twelve months of a flow as the filings public at `ts` give it: the latest
     annual figure, plus the year-to-date reported since it, less the same stretch a year before
-    (so a Q3 10-Q gives FY + 9M - prior 9M). Without an annual figure, the last four distinct
-    quarters. Rows are [avail, start, end, value]; NaN when nothing is known."""
+    (so a Q3 10-Q gives FY + 9M - prior 9M). Without an annual figure (a filer whose facts EDGAR
+    holds only for the latest quarters): the latest year-to-date stretch of two or more quarters
+    scaled to a year, else the distinct quarters known, up to four, scaled to a year. Rows are
+    [avail, start, end, value]; NaN when nothing is known."""
     seen = [r for r in rows if r[0] <= ts]
     if not seen:
         return math.nan
     ann = [r for r in seen if 350 * DAY <= r[2] - r[1] <= 380 * DAY]
     if not ann:
+        ytd = [r for r in seen if 170 * DAY <= r[2] - r[1] < 350 * DAY]
+        if ytd:
+            y = max(ytd, key=lambda r: (r[2], r[0]))
+            return float(y[3]) * 365.25 * DAY / (y[2] - y[1])
         q = {}
         for r in seen:
             if 80 * DAY <= r[2] - r[1] <= 100 * DAY:
                 q[r[2]] = r
         last4 = sorted(q.values(), key=lambda r: r[2])[-4:]
-        return float(sum(r[3] for r in last4)) if len(last4) == 4 else math.nan
+        return float(sum(r[3] for r in last4)) * 4.0 / len(last4) if last4 else math.nan
     a = max(ann, key=lambda r: (r[2], r[0]))
     ytd = [r for r in seen if r[2] > a[2] and r[2] - r[1] < 350 * DAY]
     if not ytd:
