@@ -1448,7 +1448,8 @@ function fmtElapsed(s) { s = Math.max(0, Math.round(s)); const h = Math.floor(s 
 function renderBacktest() {
   const b = state.backtest, root = $("#bt-stats"); if (!root) return;
   const meta = $("#bt-meta"), pr = (b && b.progress) || {}, bar = $("#bt-progress");
-  const nDays = Array.isArray(pr.days) ? null : pr.days;   // the count; a server before 0.5.22 sent the scored rows under this key, no count
+  const nDays = Array.isArray(pr.days)                      // a server before 0.5.22 sent the scored rows under this key: the count is
+    ? (pr.history_days && pr.warm_days != null ? pr.history_days - pr.warm_days : null) : pr.days;   // the history less the warm days
   if (!b || !("progress" in b)) fetchBacktest();
   if (bar) {
     const warming = pr.running && !pr.day && !nDays;
