@@ -374,6 +374,8 @@ class Engine:
         self.news: dict = {"t": None, "method": None, "status": {}, "headlines": [], "per_asset": {}, "ideas": [], "new": 0}
         self.market_status: dict = {"isOpen": None, "session": None, "holiday": None, "t": None}  # from Finnhub, holiday-aware
         self._status_http: int | None = None     # last market-status HTTP code, so a rejected key is reported once
+        self._holidays_at = 0.0                   # when the exchange calendar was last fetched
+        self._load_holidays()
         self.backtest: dict = {}                  # last walk-forward report (state/backtest.json)
         self.backtest_progress: dict = {"running": False}
         self._backtesting = False
@@ -459,11 +461,7 @@ class Engine:
         self._streak: dict[str, tuple[int, int]] = {}    # symbol -> (raw side, consecutive bars) for the confirmation gate
         self._held_since: dict[str, int] = {}             # symbol -> bar index a nonzero paper target began
         self._last_target: dict[str, float] = {}
-        self.paper = PaperBook(cfg.paper_start, cfg.cost_bps, min_trade_frac=cfg.paper_min_trade_frac,
-                               min_notional=float(getattr(cfg, "min_position_dollars", 0.0) or 0.0),
-                               option_commission=cfg.option_commission, option_max_frac=cfg.option_max_frac,
-                               put_min_hold_s=cfg.put_min_hold_bars * cfg.bar_seconds,
-                               straddle_min_hold_s=cfg.straddle_hold_bars * cfg.bar_seconds)   # $100k paper book (shorts via puts)
+        self.paper = self._new_paper()                 # $100k paper book (shorts via puts)
         self.portfolio: dict = {}                               # Schwab account positions (read-only), for the Portfolio tab
         self._cc_last = 0.0                                     # last covered-call opportunity refresh
         self._cc_cache: list = []                               # cached covered-call opportunities (persist across 60s position refreshes)
@@ -1982,20 +1980,44 @@ class Engine:
         qc = [q50 + m.band_scale * (float(v) - q50) for v in q]
         return qc, self._temper(p_raw)
 
+    STATUS_FRESH_S = 900.0                            # a Finnhub status older than this is no longer a voice
+
+    def _fresh_status(self) -> dict | None:
+        """The live Finnhub market status when it is recent enough to count, else None."""
+        ms = getattr(self, "market_status", None) or {}
+        t = ms.get("t")
+        if t is None or "isOpen" not in ms:
+            return None
+        return ms if time.time() - float(t) <= Engine.STATUS_FRESH_S else None
+
     def _regular_session(self) -> bool:
-        """Regular US equity session by the wall clock (9:30-16:00 ET, weekdays). Gates trading;
-        a no-trade (volume 0) bar additionally covers holidays and early closes."""
-        return clock.regular_session()
+        """The regular session, by three voices that must agree: the wall clock (9:30-16:00 ET,
+        weekdays), the exchange calendar (holidays and early closes, `clock.set_calendar`) and
+        the live Finnhub status when it is fresh (its `isOpen` is the regular session). A stale
+        or missing status leaves the clock and the calendar to decide; a status that says closed
+        overrules them. Gates every option trade and every stock trade outside extended hours."""
+        st = Engine._fresh_status(self)
+        return clock.regular_session() and (st is None or bool(st.get("isOpen")))
 
     def _extended_session(self) -> bool:
-        """Schwab's extended sessions by the wall clock: 4:00-9:30 and 16:00-20:00 ET, weekdays.
-        Stock only -- options do not trade here, so puts and straddles keep the regular gate."""
-        return clock.extended_session()
+        """Schwab's extended sessions: 4:00-9:30 and 16:00-20:00 ET on a trading day, and the
+        fresh Finnhub status, when there is one, naming a pre- or post-market session. Stock
+        only -- options do not trade here, so puts and straddles keep the regular gate."""
+        st = Engine._fresh_status(self)
+        return clock.extended_session() and (st is None or st.get("session") in ("pre-market", "post-market"))
 
     def _stock_session(self) -> bool:
         """When a long-stock entry or exit is allowed: the regular session, plus the extended
         sessions when `extended_hours` is on."""
-        return clock.stock_session(self.cfg.extended_hours)
+        return Engine._regular_session(self) or (bool(self.cfg.extended_hours) and Engine._extended_session(self))
+
+    def _new_paper(self) -> PaperBook:
+        cfg = self.cfg
+        return PaperBook(cfg.paper_start, cfg.cost_bps, min_trade_frac=cfg.paper_min_trade_frac,
+                         min_notional=float(getattr(cfg, "min_position_dollars", 0.0) or 0.0),
+                         option_commission=cfg.option_commission, option_max_frac=cfg.option_max_frac,
+                         put_min_hold_s=cfg.put_min_hold_bars * cfg.bar_seconds,
+                         straddle_min_hold_s=cfg.straddle_hold_bars * cfg.bar_seconds)
 
     def _suggest(self, i: int, s: str, pred: Prediction) -> dict:
         cfg = self.cfg
@@ -2607,6 +2629,36 @@ class Engine:
                 self.trace.emit("system", f"portfolio: {type(e).__name__}", "warn")
             await asyncio.sleep(max(20.0, self.cfg.portfolio_seconds))
 
+    def _holidays_path(self) -> str:
+        return os.path.join(self.cfg.state_dir, "holidays.json")
+
+    def _load_holidays(self) -> None:
+        try:
+            with open(self._holidays_path()) as f:
+                d = json.load(f)
+            clock.set_calendar(d.get("days") or {})
+            self._holidays_at = float(d.get("fetched_at") or 0.0)
+        except (OSError, ValueError):
+            pass
+
+    async def _fetch_holidays(self, key: str) -> None:
+        """Finnhub's market-holiday list for the US exchanges into the session clock: the full
+        holidays and the early closes (`tradingHour`), kept in `state/holidays.json`."""
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get("https://finnhub.io/api/v1/stock/market-holiday", params={"exchange": "US", "token": key})
+        if r.status_code != 200:
+            return
+        days = {str(h.get("atDate"))[:10]: str(h.get("tradingHour") or "") for h in (r.json().get("data") or []) if h.get("atDate")}
+        if not days:
+            return
+        clock.set_calendar(days)
+        self._holidays_at = time.time()
+        tmp = self._holidays_path() + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"fetched_at": self._holidays_at, "days": days}, f)
+        os.replace(tmp, self._holidays_path())
+        self.trace.emit("system", f"exchange calendar: {len(days)} holidays and early closes loaded", "info")
+
     async def _market_status_loop(self) -> None:
         """Poll Finnhub for the holiday-aware US market status (open/pre/post/closed). The
         deep-backfill and idle-training loops wait on this status, so the poll checks for a
@@ -2622,6 +2674,11 @@ class Engine:
         key = self.cfg.finnhub_key
         if not key:
             return False
+        if time.time() - getattr(self, "_holidays_at", 0.0) > 86400.0 and hasattr(self, "_fetch_holidays"):
+            try:
+                await self._fetch_holidays(key)
+            except Exception:  # noqa: BLE001
+                self._holidays_at = time.time() - 86400.0 + 1800.0   # try again in half an hour
         try:
             async with httpx.AsyncClient(timeout=10) as c:
                 r = await c.get("https://finnhub.io/api/v1/stock/market-status",
@@ -2697,6 +2754,13 @@ class Engine:
         elif action == "refresh_universe":
             self._universe_refreshed = ""                 # the loop runs the next pass the pool allows
             return {"ok": True, "universe": "refresh queued"}
+        elif action == "paper_reset":
+            old = self.paper.snapshot(self._live_prices())
+            self.paper = self._new_paper()
+            self.trace.emit("system", f"paper book reset to {self.cfg.paper_start:,.0f} (was {old.get('equity', 0):,.2f} after "
+                                      f"{old.get('n_trades', 0)} trades)", "act")
+            self._save()
+            return {"ok": True, "paper": "reset"}
         elif action == "backtest":
             self._backtest_requested = True
             return {"ok": True, "backtest": "running" if self._backtesting else "queued"}

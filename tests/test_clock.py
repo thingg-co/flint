@@ -110,3 +110,34 @@ class TestStockSession:
         """Thursday 06:00 ET with extended_hours True -> True."""
         now = datetime(2026, 9, 3, 6, 0, tzinfo=ZoneInfo("America/New_York"))
         assert clock.stock_session(True, now) is True
+
+
+class TestCalendar:
+    """The exchange calendar beside the wall clock: holidays close the day, early closes shorten it."""
+
+    def setup_method(self):
+        clock.set_calendar({"2026-11-26": "", "2026-11-27": "09:30-13:00", "2026-12-25": None})
+
+    def teardown_method(self):
+        clock.set_calendar({})
+
+    def test_a_holiday_has_no_session_and_no_extended_session(self):
+        ny = ZoneInfo("America/New_York")
+        assert clock.session_hours(datetime(2026, 11, 26, 12, 0, tzinfo=ny)) is None
+        assert clock.regular_session(datetime(2026, 11, 26, 12, 0, tzinfo=ny)) is False
+        assert clock.extended_session(datetime(2026, 11, 26, 8, 0, tzinfo=ny)) is False
+        assert clock.regular_session(datetime(2026, 12, 25, 12, 0, tzinfo=ny)) is False
+
+    def test_an_early_close_ends_the_session_at_one_and_starts_the_post_market_there(self):
+        ny = ZoneInfo("America/New_York")
+        assert clock.session_hours(datetime(2026, 11, 27, 12, 0, tzinfo=ny)) == (570, 780)
+        assert clock.regular_session(datetime(2026, 11, 27, 12, 59, tzinfo=ny)) is True
+        assert clock.regular_session(datetime(2026, 11, 27, 13, 0, tzinfo=ny)) is False
+        assert clock.extended_session(datetime(2026, 11, 27, 13, 0, tzinfo=ny)) is True
+        assert clock.stock_session(False, datetime(2026, 11, 27, 13, 0, tzinfo=ny)) is False
+
+    def test_an_ordinary_day_is_unchanged_and_columbus_day_trades(self):
+        ny = ZoneInfo("America/New_York")
+        assert clock.session_hours(datetime(2026, 10, 12, 12, 0, tzinfo=ny)) == (570, 960)   # not an exchange holiday
+        assert clock.regular_session(datetime(2026, 10, 12, 12, 0, tzinfo=ny)) is True
+        assert clock.calendar()["2026-11-27"] == (570, 780) and clock.calendar()["2026-11-26"] is None

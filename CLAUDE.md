@@ -246,6 +246,16 @@ unless Flint is already up.
   because the worst case is a known finite number at entry. Naked short stock and naked written
   options are not. Today a bearish view is a long put and a volatility view is a long straddle; paper
   shorts are long puts -- never naked shorts; longs are stock. Paper only trades once the model is `trusted`. With `extended_hours` on (a live control), long stock may enter and exit in Schwab's 4:00-9:30 / 16:00-20:00 ET sessions; puts and straddles stay regular-hours because options do not trade then.
+  Whether a session is on is decided by three voices that must agree (0.5.22): the wall clock
+  (`flint/clock.py`, 9:30-16:00 ET weekdays), the exchange calendar (`clock.set_calendar`: Finnhub's
+  market-holiday list with its early closes, fetched daily by the status poll into `state/holidays.json`,
+  so a Good Friday never opens and the Friday after Thanksgiving ends at 13:00) and the live Finnhub
+  status when fresh (`Engine._fresh_status`, under 15 minutes old: `isOpen` is the regular session,
+  `session` names pre- and post-market); a stale or missing status leaves the clock and calendar to
+  decide, a fresh one saying closed overrules them. `Engine._regular_session` / `_extended_session` /
+  `_stock_session` are the gates; the paper book itself refuses option fills outside the regular
+  session (`options_ok`). "Reset paper book" on the Control panel (`paper_reset`) starts a fresh book
+  at `paper_start` and saves. Columbus Day is not an exchange holiday (2026-10-12 traded).
 - Risk gates in the policy (all live controls; the model is untouched): a name needs `skill_min_n`
   matured direction calls at or above `min_hit_rate` before it may trade; the same side must persist
   `confirm_bars` bars; a stock position is held `stock_min_hold_bars` unless the signal reverses; the

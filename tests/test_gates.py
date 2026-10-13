@@ -234,3 +234,47 @@ class TestTicketFloor:
         Engine._suggest(fake, 0, "AAPL", pred)
         r = Engine._suggest(fake, 0, "AAPL", pred)
         assert r["action"] == "SELL" and 0 < r["ticket_bps"] < 20                        # one contract on $1,000: 13 bps round trip
+
+
+
+def test_the_session_gates_need_the_clock_the_calendar_and_a_fresh_status_to_agree(monkeypatch):
+    import time as _time
+    from types import SimpleNamespace
+    import flint.clock as clock
+    from flint.engine import Engine
+    monkeypatch.setattr(clock, "regular_session", lambda now=None: True)
+    monkeypatch.setattr(clock, "extended_session", lambda now=None: False)
+    now = _time.time()
+    eng = SimpleNamespace(market_status={}, cfg=SimpleNamespace(extended_hours=False))
+    assert Engine._regular_session(eng) is True                          # no status at all: the clock and the calendar decide
+    eng.market_status = {"isOpen": False, "session": None, "t": now}
+    assert Engine._regular_session(eng) is False                         # a fresh status saying closed overrules the clock
+    assert Engine._stock_session(eng) is False
+    eng.market_status = {"isOpen": True, "session": "regular", "t": now}
+    assert Engine._regular_session(eng) is True
+    eng.market_status = {"isOpen": False, "session": None, "t": now - 2 * Engine.STATUS_FRESH_S}
+    assert Engine._regular_session(eng) is True                          # stale: no longer a voice
+    monkeypatch.setattr(clock, "regular_session", lambda now=None: False)
+    monkeypatch.setattr(clock, "extended_session", lambda now=None: True)
+    eng.cfg.extended_hours = True
+    eng.market_status = {"isOpen": False, "session": "post-market", "t": now}
+    assert Engine._regular_session(eng) is False and Engine._stock_session(eng) is True
+    eng.market_status = {"isOpen": False, "session": None, "t": now}      # the status says the day is over
+    assert Engine._extended_session(eng) is False and Engine._stock_session(eng) is False
+
+
+def test_paper_reset_action_starts_a_fresh_book():
+    from types import SimpleNamespace
+    from flint.engine import Engine
+    from flint.paper import PaperBook
+    said = []
+    old = PaperBook(100_000.0, 5.0)
+    old.cash = 99_800.0
+    old.n_trades = 4
+    eng = SimpleNamespace(paper=old, cfg=SimpleNamespace(paper_start=100_000.0), _live_prices=lambda: {},
+                          _new_paper=lambda: PaperBook(100_000.0, 5.0), _save=lambda: None,
+                          trace=SimpleNamespace(emit=lambda ch, text, lvl="info": said.append(text)),
+                          learning_enabled=True, metrics=SimpleNamespace(live_labels=0, trusted=False))
+    r = Engine.apply_control(eng, {"action": "paper_reset"})
+    assert r == {"ok": True, "paper": "reset"} and eng.paper is not old and eng.paper.cash == 100_000.0
+    assert said and "99,800.00" in said[0] and "4 trades" in said[0]

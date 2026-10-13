@@ -918,6 +918,7 @@ if (injectFab) {
 $$(".actions button").forEach(b => b.onclick = () => {
   const a = b.dataset.action;
   if (a === "reset" && !confirm("Re-initialize the model weights and optimizer? The replay buffer is kept.")) return;
+  if (a === "paper_reset" && !confirm("Reset the paper book to its starting cash? Positions and trade history are dropped.")) return;
   control({ action: a });
 });
 
