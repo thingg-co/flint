@@ -376,6 +376,10 @@ class Engine:
         self._status_http: int | None = None     # last market-status HTTP code, so a rejected key is reported once
         self._holidays_at = 0.0                   # when the exchange calendar was last fetched
         self._load_holidays()
+        self._overrides: dict = {}
+        restored = self._load_controls()
+        if restored:
+            log.info("live controls restored from %s: %s", self._controls_path(), ", ".join(f"{k}={v}" for k, v in restored.items()))
         self.backtest: dict = {}                  # last walk-forward report (state/backtest.json)
         self.backtest_progress: dict = {"running": False}
         self._backtesting = False
@@ -663,6 +667,46 @@ class Engine:
 
     def controls(self) -> dict:
         return {k: getattr(self.cfg, k) for k in TUNABLE} | {"learning": self.learning_enabled, "burry": self.burry_enabled, "brief_enabled": self.brief_enabled}
+
+    # -- the live controls outlive a restart: every value set from the panel (or the sweep's "apply
+    # these gates") is kept in state/controls.json and laid over the launcher's environment at the
+    # next start, the panel being the operator's last word. Before 0.5.22 a restart silently put the
+    # environment's values back, so gates applied on Tuesday were gone by Wednesday's open.
+    def _controls_path(self) -> str:
+        return os.path.join(self.cfg.state_dir, "controls.json")
+
+    def _load_controls(self) -> dict:
+        """Lay the saved overrides over the config; returns what was applied."""
+        try:
+            with open(self._controls_path()) as f:
+                saved = json.load(f)
+        except (OSError, ValueError):
+            return {}
+        applied = {}
+        for k, v in (saved.get("set") or {}).items():
+            if k not in TUNABLE:
+                continue
+            try:
+                val = TUNABLE[k](v)
+            except (TypeError, ValueError):
+                continue
+            setattr(self.cfg, k, val)
+            applied[k] = val
+        self._overrides = dict(applied)
+        return applied
+
+    def _remember_controls(self, changed: dict) -> None:
+        ov = getattr(self, "_overrides", None)
+        if ov is None:
+            ov = self._overrides = {}
+        ov.update(changed)
+        tmp = self._controls_path() + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump({"v": 1, "saved_at": time.time(), "set": ov}, f, indent=1, default=str)
+            os.replace(tmp, self._controls_path())
+        except OSError as e:
+            self.trace.emit("system", f"could not save the live controls: {e}", "warn")
 
     def _key_values(self) -> dict:
         cfg = self.cfg
@@ -2730,6 +2774,8 @@ class Engine:
         if changed:
             self.trace.emit("system", "settings changed: " + ", ".join(f"{k}={v}" for k, v in changed.items()), "act")
             self.metrics.trusted = self.metrics.live_labels >= self.cfg.min_labels
+            if hasattr(self, "_remember_controls"):
+                self._remember_controls(changed)             # kept for the next start
         action = payload.get("action")
         if action == "pause":
             self.learning_enabled = False

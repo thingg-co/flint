@@ -278,3 +278,30 @@ def test_paper_reset_action_starts_a_fresh_book():
     r = Engine.apply_control(eng, {"action": "paper_reset"})
     assert r == {"ok": True, "paper": "reset"} and eng.paper is not old and eng.paper.cash == 100_000.0
     assert said and "99,800.00" in said[0] and "4 trades" in said[0]
+
+
+
+def test_controls_set_from_the_panel_survive_a_restart(tmp_path):
+    from types import SimpleNamespace
+    from flint.config import Config
+    from flint.engine import Engine
+    said = []
+    cfg = Config(); cfg.state_dir = str(tmp_path)
+    eng = SimpleNamespace(cfg=cfg, trace=SimpleNamespace(emit=lambda ch, text, lvl="info": said.append(text)),
+                          metrics=SimpleNamespace(live_labels=0, trusted=False), learner=SimpleNamespace(opt=SimpleNamespace(param_groups=[])),
+                          _controls_path=lambda: Engine._controls_path(eng), _remember_controls=lambda changed: Engine._remember_controls(eng, changed),
+                          controls=lambda: {k: getattr(cfg, k) for k in ("score_threshold", "skill_min_n", "prob_margin")},
+                          sources=SimpleNamespace(status=lambda: {}), news_hub=SimpleNamespace(status=lambda: {}),
+                          signals=SimpleNamespace(status=lambda: {}), _publish=lambda msg: None)
+    r = Engine.apply_control(eng, {"set": {"score_threshold": 0.8, "skill_min_n": "16", "no_such_knob": 1}})
+    assert cfg.score_threshold == 0.8 and cfg.skill_min_n == 16
+    assert (tmp_path / "controls.json").exists()
+    Engine.apply_control(eng, {"set": {"prob_margin": 0.04}})          # a later change joins the file, the earlier ones stay
+    fresh = Config(); fresh.state_dir = str(tmp_path)
+    assert fresh.score_threshold != 0.8                                 # the environment's value, until the saved overrides are laid over it
+    eng2 = SimpleNamespace(cfg=fresh, _controls_path=lambda: Engine._controls_path(eng2))
+    applied = Engine._load_controls(eng2)
+    assert applied == {"score_threshold": 0.8, "skill_min_n": 16, "prob_margin": 0.04}
+    assert fresh.score_threshold == 0.8 and fresh.skill_min_n == 16 and fresh.prob_margin == 0.04 and eng2._overrides == applied
+    eng3 = SimpleNamespace(cfg=Config(), _controls_path=lambda: str(tmp_path / "missing.json"))
+    assert Engine._load_controls(eng3) == {}                            # no file: nothing changes

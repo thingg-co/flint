@@ -256,6 +256,12 @@ unless Flint is already up.
   `_stock_session` are the gates; the paper book itself refuses option fills outside the regular
   session (`options_ok`). "Reset paper book" on the Control panel (`paper_reset`) starts a fresh book
   at `paper_start` and saves. Columbus Day is not an exchange holiday (2026-10-12 traded).
+- A live control set from the Control panel or the sweep's "apply these gates" is kept in
+  `state/controls.json` (`Engine._remember_controls`) and laid over the launcher's environment at the
+  next start (`_load_controls`, since 0.5.22): the panel is the operator's last word, so a gate applied
+  on Tuesday is still there after Wednesday's restart. Delete the file to fall back to the environment.
+  The Backtest tab's proposal card reads "now" from the live controls and shows "applied" once they
+  match the proposal; before, it showed the run's snapshot and the button again after a reload.
 - Risk gates in the policy (all live controls; the model is untouched): a name needs `skill_min_n`
   matured direction calls at or above `min_hit_rate` before it may trade; the same side must persist
   `confirm_bars` bars; a stock position is held `stock_min_hold_bars` unless the signal reverses; the

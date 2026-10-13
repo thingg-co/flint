@@ -1512,18 +1512,23 @@ function renderSweep(sw) {
   const cell = (v, cls) => `<span class="num ${cls || ""}">${v}</span>`;
   if (!sw || sw.error) { root.innerHTML = ""; if (meta && sw && sw.error) meta.textContent = sw.error; return; }
   const cur = sw.current || {}, prop = sw.proposal, pd = v => v != null ? fmtBps(v) + "/day" : "·";
+  const live = state.controls || {};                                  // "now" is the Control panel today, not the run's snapshot
+  const nowOf = k => (k in live && live[k] != null) ? live[k] : (cur.knobs || {})[k];
+  const applied = !!(prop && prop.knobs && Object.keys(prop.knobs).length && Object.keys(prop.knobs).every(k => Number(nowOf(k)) === Number(prop.knobs[k])));
   const half = r => r ? `${pd(r.net_bps_per_day)}<br>${r.signals} trades · hit ${fmtPct(r.hit_rate)}` : "·";
   if (meta) meta.textContent = `${sw.days} days, split at day ${sw.split_day}; ${sw.evaluations} settings tried · ${sw.accepted && sw.thin ? "proposal confirmed on the second half, on too few trades to act on" : sw.accepted ? "proposal confirmed on the second half" : (prop ? "proposal failed the second half: not recommended" : "no setting beat the current gates")} · ${esc(sw.target || "")} target, cost ${sw.cost_bps} bps${sw.hedge_cost_bps != null ? `, hedge ${sw.hedge_cost_bps} bps` : ""}`;
   const rows = [`<div class="prow phead"><span>gate</span>${cell("now")}${cell("proposed")}</div>`];
   Object.keys(cur.knobs || {}).forEach(k => {
-    const v = cur.knobs[k], pv = prop && prop.knobs && k in prop.knobs ? prop.knobs[k] : null;
+    const v = nowOf(k), pv = prop && prop.knobs && k in prop.knobs ? prop.knobs[k] : null;
     rows.push(`<div class="prow"><span>${esc(k.replace(/_/g, " "))}</span>${cell(v)}${cell(pv != null ? pv : "—", pv != null ? (sw.accepted && !sw.thin ? "up" : "") : "")}</div>`);
   });
   rows.push(`<div class="prow half"><span>tuning half</span>${cell(half(cur.tune))}${cell(prop ? half(prop.tune) : "·")}</div>`);
   rows.push(`<div class="prow half"><span>confirming half</span>${cell(half(cur.confirm))}${cell(prop ? half(prop.confirm) : "·", prop && sw.accepted && !sw.thin ? "up" : prop && !sw.accepted ? "down" : "")}</div>`);
   root.innerHTML = rows.join("") + (sw.why ? `<div class="snote">${esc(sw.why)}</div>` : "") +
     (prop && prop.knobs && Object.keys(prop.knobs).length
-      ? `<div class="sw-actions"><button class="mini" id="sw-apply" data-knobs="${esc(JSON.stringify(prop.knobs))}">apply these gates</button><span class="snote" id="sw-applied">sets the proposed values on the Control panel; nothing else changes</span></div>`
+      ? (applied
+        ? `<div class="sw-actions"><button class="mini" id="sw-apply" disabled>applied</button><span class="snote" id="sw-applied">the Control panel carries these values; the next run judges them</span></div>`
+        : `<div class="sw-actions"><button class="mini" id="sw-apply" data-knobs="${esc(JSON.stringify(prop.knobs))}">apply these gates</button><span class="snote" id="sw-applied">sets the proposed values on the Control panel; nothing else changes</span></div>`)
       : "");
 }
 
@@ -2081,6 +2086,7 @@ $$(".tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab, true));
   const knobs = JSON.parse(b.dataset.knobs), r = await control({ set: knobs });
   const ok = r && r.controls && Object.keys(knobs).every(k => !(k in r.controls) || Number(r.controls[k]) === Number(knobs[k]));
   b.textContent = ok ? "applied" : "could not apply"; b.disabled = !ok ? false : true;
+  if (ok && r.controls) { state.controls = r.controls; syncControls(); if (state.backtest) renderSweep(state.backtest.sweep); }
   const a = $("#sw-applied"); if (a) a.textContent = ok ? "the Control panel now carries these values; the next weekend's run judges them" : "the server did not take every value; check the Control panel";
 }); }
 { const b = $("#bt-run"); if (b) b.onclick = async () => { b.disabled = true; const r = await control({ action: "backtest" }); b.textContent = r && r.backtest ? r.backtest : "Run now"; setTimeout(() => { b.disabled = false; b.textContent = "Run now"; }, 4000); }; }
