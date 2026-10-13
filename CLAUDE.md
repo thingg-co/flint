@@ -428,6 +428,11 @@ unless Flint is already up.
   `MemoryCurrent`: the CUDA allocations live outside both, so a live 4XL run reads about 3 GB by
   RSS and 30+ GB by system used, and a dead engine (phase `error`, steps not moving) looks the
   same by RSS.
+- The public site's screenshots (`docs/img/<view>-dark.png` / `-light.png`) come from
+  `scripts/screenshots.py` against a running Flint: every view in both themes at 2x, each pair shot
+  back to back through the header's theme toggle so it shows one moment; `docs/index.html` shows the
+  pair that matches its theme by CSS (`img.theme-dark` / `img.theme-light`, the toggle included), so
+  never reference a single image there. Rerun it on a trusted session for a page worth showing.
 - Frontend edits are static — reload the tab, no restart. Backend edits need a restart. The page and
   `/static` are served `Cache-Control: no-cache` and the page links its script and stylesheet by the
   files' mtimes (`index_html`), so a normal reload always gets the current files; before 0.5.15 a

@@ -87,6 +87,15 @@
   .shot{margin-top:44px;border:1px solid var(--border);border-radius:14px;overflow:hidden;
     box-shadow:var(--shadow);background:var(--surface)}
   .shot img{display:block;width:100%;height:auto}
+  /* Screenshots come in pairs; the one that matches the page's theme shows, the same way the theme itself is chosen:
+     dark by default, light when the system prefers it and the toggle has not said dark, or when the toggle said light. */
+  :root img.theme-light{display:none}          /* :root for specificity over .shot img / .showcase img */
+  @media (prefers-color-scheme: light){
+    :root:not([data-theme="dark"]) img.theme-dark{display:none}
+    :root:not([data-theme="dark"]) img.theme-light{display:block}
+  }
+  :root[data-theme="light"] img.theme-dark{display:none}
+  :root[data-theme="light"] img.theme-light{display:block}
   .shot .cap{font-size:12.5px;color:var(--muted);padding:9px 14px;border-top:1px solid var(--border);font-family:var(--mono)}
 
   section{padding:64px 0}
@@ -117,6 +126,7 @@
   @media(max-width:760px){.showcase{grid-template-columns:1fr}}
   .showcase figure{margin:0;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
   .showcase img{display:block;width:100%;height:300px;object-fit:cover;object-position:top}
+  .showcase img.corner{object-position:left top}       /* the wide treemap: its biggest names sit top left */
   @media(max-width:760px){.showcase img{height:auto}}
   .showcase figcaption{font-size:13px;color:var(--muted);padding:10px 14px;border-top:1px solid var(--border)}
 
@@ -168,8 +178,9 @@
     </div>
     <div class="hero-note">Python · PyTorch · FastAPI · a no-build dashboard · optional local LLM via llama.cpp or Ollama</div>
     <div class="shot">
-      <img src="img/dashboard.png" alt="The Flint dashboard: candlestick cards with forecasts, a whole-market panel, and live ticks">
-      <div class="cap">the live dashboard — candles, MACD, a forecast fan, and cards that reorder by urgency</div>
+      <img class="theme-dark" src="img/dashboard-dark.png" loading="lazy" alt="The Flint dashboard: the whole-market heatmap, the trust, regime and breadth pills, and candlestick cards with forecast fans">
+      <img class="theme-light" src="img/dashboard-light.png" loading="lazy" alt="The Flint dashboard: the whole-market heatmap, the trust, regime and breadth pills, and candlestick cards with forecast fans">
+      <div class="cap">the live dashboard — the market by sector, candles, MACD, a forecast fan, and cards that reorder by urgency</div>
     </div>
   </div>
 </div>
@@ -207,9 +218,12 @@
       <div class="step"><h3>Prove it on the weekend</h3><p>A walk-forward backtest replays the history with a fresh net and the live policy, so a change to the model or a gate shows its effect before a live session does.</p></div>
     </div>
     <div class="showcase">
-      <figure><img src="img/card.png" alt="A single stock card with candlesticks, MACD, forecast fan and a plain-English rationale"><figcaption>Each card shows the forecast, the band, and why the call is a buy, sell or hold.</figcaption></figure>
-      <figure><img src="img/detail.png" alt="The symbol detail view: a large chart, the calibrated forecast, track record, signals, fundamentals, news and positions for one stock"><figcaption>Click any ticker for everything Flint knows about it, with a URL you can share.</figcaption></figure>
-      <figure><img src="img/console.png" alt="The Console tab: a terminal-style stream of everything the model is doing"><figcaption>The Console tab tails every channel the model runs through, live.</figcaption></figure>
+      <figure><img class="theme-dark" src="img/card-dark.png" loading="lazy" alt="A single stock card with candlesticks, MACD, a forecast fan and a plain-English rationale"><img class="theme-light" src="img/card-light.png" loading="lazy" alt="A single stock card with candlesticks, MACD, a forecast fan and a plain-English rationale"><figcaption>Each card shows the forecast fan, the band, and why the call is a buy, sell or hold.</figcaption></figure>
+      <figure><img class="theme-dark" src="img/detail-dark.png" loading="lazy" alt="The symbol detail view: a large chart, the calibrated forecast, its track record, the price feed and the index loadings for one stock"><img class="theme-light" src="img/detail-light.png" loading="lazy" alt="The symbol detail view: a large chart, the calibrated forecast, its track record, the price feed and the index loadings for one stock"><figcaption>Click any ticker for everything Flint knows about it, with a URL you can share.</figcaption></figure>
+      <figure><img class="theme-dark" src="img/backtest-dark.png" loading="lazy" alt="The Backtest tab: the walk-forward report, the equity curve against always-long, the days, the names, and the gates the sweep proposes"><img class="theme-light" src="img/backtest-light.png" loading="lazy" alt="The Backtest tab: the walk-forward report, the equity curve against always-long, the days, the names, and the gates the sweep proposes"><figcaption>Every weekend a fresh net walks the history; the report, the curve and the proposed gates land here.</figcaption></figure>
+      <figure><img class="theme-dark corner" src="img/heatmap-dark.png" loading="lazy" alt="The whole-market heatmap: a treemap by sector, area by market cap, colour by change, with the trust, regime and breadth pills"><img class="theme-light corner" src="img/heatmap-light.png" loading="lazy" alt="The whole-market heatmap: a treemap by sector, area by market cap, colour by change, with the trust, regime and breadth pills"><figcaption>The market by sector: area by market cap, colour by the day's move.</figcaption></figure>
+      <figure><img class="theme-dark" src="img/control-dark.png" loading="lazy" alt="The Control Panel: every gate and budget as a live control, and the universe as a toggle per name"><img class="theme-light" src="img/control-light.png" loading="lazy" alt="The Control Panel: every gate and budget as a live control, and the universe as a toggle per name"><figcaption>Every gate and budget is a live control, and the universe is a switch per name.</figcaption></figure>
+      <figure><img class="theme-dark" src="img/console-dark.png" loading="lazy" alt="The Console tab: a terminal-style stream of the model, policy, learning and system channels"><img class="theme-light" src="img/console-light.png" loading="lazy" alt="The Console tab: a terminal-style stream of the model, policy, learning and system channels"><figcaption>The Console tab tails every channel the model runs through, live, each one a toggle.</figcaption></figure>
     </div>
   </div>
 </section>

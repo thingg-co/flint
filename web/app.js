@@ -829,6 +829,7 @@ function scheduleDraw() {
 
 function redrawCharts() {
   if (document.body.dataset.view === "dashboard") Object.values(cards).forEach(drawChart);
+  if (detailSym && detailCard) drawChart(detailCard);        // the open detail view too, or a theme switch leaves its canvas in the old palette
 }
 
 // Consoles + controls ----------------------------------------------------------------
