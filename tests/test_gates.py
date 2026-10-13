@@ -288,7 +288,7 @@ def test_controls_set_from_the_panel_survive_a_restart(tmp_path):
     said = []
     cfg = Config(); cfg.state_dir = str(tmp_path)
     eng = SimpleNamespace(cfg=cfg, trace=SimpleNamespace(emit=lambda ch, text, lvl="info": said.append(text)),
-                          metrics=SimpleNamespace(live_labels=0, trusted=False), learner=SimpleNamespace(opt=SimpleNamespace(param_groups=[])),
+                          metrics=SimpleNamespace(live_labels=0, trusted=False, as_dict=lambda: {}), learner=SimpleNamespace(opt=SimpleNamespace(param_groups=[])),
                           _controls_path=lambda: Engine._controls_path(eng), _remember_controls=lambda changed: Engine._remember_controls(eng, changed),
                           controls=lambda: {k: getattr(cfg, k) for k in ("score_threshold", "skill_min_n", "prob_margin")},
                           sources=SimpleNamespace(status=lambda: {}), news_hub=SimpleNamespace(status=lambda: {}),
