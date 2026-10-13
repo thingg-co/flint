@@ -106,6 +106,7 @@ function flashCard(sym) {
   setTimeout(() => card.el.classList.remove("flash"), 1400);
 }
 
+const sentence = s => { s = String(s ?? ""); return s ? s[0].toUpperCase() + s.slice(1) + (/[.!?]$/.test(s) ? "" : ".") : s; };   // prose notes read as sentences
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const safeUrl = u => /^https?:\/\//i.test(u || "") ? u : "#";
 const fmtPrice = v => v == null ? "·" : v >= 100 ? v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : v >= 1 ? v.toFixed(3) : v.toFixed(5);
@@ -702,7 +703,7 @@ function renderKillbar() {
   bar.classList.toggle("halted", halted && !pos.length);
   $("#kill-text").innerHTML = pos.length
     ? `<b>${pos.length}</b> open paper position${pos.length === 1 ? "" : "s"}, <b>${fmtUSD(risk)}</b> at risk${halted ? " · trading halted" : ""}`
-    : `trading halted · the paper book opens nothing until resumed`;
+    : `Trading halted · the paper book opens nothing until resumed.`;
   $("#kill-flatten").hidden = !pos.length;
   $("#kill-resume").hidden = !halted;
 }
@@ -723,7 +724,7 @@ function renderNotices() {
   const notes = (state.status && state.status.notices) || [];
   bar.hidden = !notes.length;
   if (bar.hidden) return;
-  bar.innerHTML = notes.map(n => `<span class="${n.level === "critical" ? "critical" : ""}">${esc(n.text).replace(/flint schwab-auth/g, "<code>flint schwab-auth</code>")}</span>`).join("");
+  bar.innerHTML = notes.map(n => `<span class="${n.level === "critical" ? "critical" : ""}">${esc(sentence(n.text)).replace(/flint schwab-auth/g, "<code>flint schwab-auth</code>")}</span>`).join("");
 }
 
 function renderStatus() {
@@ -1049,7 +1050,7 @@ function renderOnboard() {
     body.innerHTML = `<h2>Narrative brief <span class="onb-opt">local \u00b7 optional</span></h2>` +
       `<p>Flint can write a plain-English market brief with a local LLM through <b>Ollama</b> \u2014 it runs entirely on your machine, no key and no cloud. If Ollama is installed and running, the brief works automatically.</p>` +
       `<a class="onb-link" href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">Install Ollama \u2197</a>` +
-      `<p class="onb-sub">You can switch the brief on and off anytime in the Control panel.</p>` +
+      `<p class="onb-sub">You can switch the brief on and off anytime in the control panel.</p>` +
       `<div class="onb-actions"><button class="onb-ghost" id="onb-back">Back</button><button class="onb-primary" id="onb-go">Continue</button></div>`;
   } else {
     body.innerHTML = `<h2>You're all set</h2>` +
@@ -1568,7 +1569,7 @@ function renderSweep(sw) {
       rows.push(`<div class="prow"><span>${esc(k.replace(/_/g, " "))}</span>${cell(b)}${cell(a, Number(b) !== Number(a) ? "up" : "")}</div>`);
     });
     rows.push(...halfRows("confirming half", cur.confirm, prop.confirm, sw.accepted && !sw.thin ? "up" : ""));
-    root.innerHTML = rows.join("") + `<div class="sw-actions"><span class="pill live">applied</span><span class="snote">these gates are on the Control panel; the next run judges them and may propose again</span></div>`;
+    root.innerHTML = rows.join("") + `<div class="sw-actions"><span class="pill live">applied</span><span class="snote">These gates are on the control panel; the next run judges them and may propose again.</span></div>`;
     return;
   }
   const rows = [`<div class="prow phead"><span>gate</span>${cell("now")}${cell("proposed")}</div>`];
@@ -1578,11 +1579,11 @@ function renderSweep(sw) {
   });
   rows.push(`<div class="prow half"><span>tuning half</span>${cell(half(cur.tune))}${cell(prop ? half(prop.tune) : "·")}</div>`);
   rows.push(...halfRows("confirming half", cur.confirm, prop ? prop.confirm : null, prop && sw.accepted && !sw.thin ? "up" : prop && !sw.accepted ? "down" : ""));
-  root.innerHTML = rows.join("") + (sw.why ? `<div class="snote">${esc(sw.why)}</div>` : "") +
+  root.innerHTML = rows.join("") + (sw.why ? `<div class="snote">${esc(sentence(sw.why))}</div>` : "") +
     (prop && prop.knobs && Object.keys(prop.knobs).length
       ? (applied
-        ? `<div class="sw-actions"><button class="mini" id="sw-apply" disabled>applied</button><span class="snote" id="sw-applied">the Control panel carries these values; the next run judges them</span></div>`
-        : `<div class="sw-actions"><button class="mini" id="sw-apply" data-knobs="${esc(JSON.stringify(prop.knobs))}">apply these gates</button><span class="snote" id="sw-applied">sets the proposed values on the Control panel; nothing else changes</span></div>`)
+        ? `<div class="sw-actions"><button class="mini" id="sw-apply" disabled>applied</button><span class="snote" id="sw-applied">The control panel carries these values; the next run judges them.</span></div>`
+        : `<div class="sw-actions"><button class="mini" id="sw-apply" data-knobs="${esc(JSON.stringify(prop.knobs))}">apply these gates</button><span class="snote" id="sw-applied">Sets the proposed values on the control panel; nothing else changes.</span></div>`)
       : "");
 }
 
@@ -2141,7 +2142,7 @@ $$(".tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab, true));
   const ok = r && r.controls && Object.keys(knobs).every(k => !(k in r.controls) || Number(r.controls[k]) === Number(knobs[k]));
   b.textContent = ok ? "applied" : "could not apply"; b.disabled = !ok ? false : true;
   if (ok && r.controls) { state.controls = r.controls; syncControls(); if (state.backtest) renderSweep(state.backtest.sweep); }
-  const a = $("#sw-applied"); if (a) a.textContent = ok ? "the Control panel now carries these values; the next weekend's run judges them" : "the server did not take every value; check the Control panel";
+  const a = $("#sw-applied"); if (a) a.textContent = ok ? "The control panel now carries these values; the next weekend's run judges them." : "The server did not take every value; check the control panel.";
 }); }
 { const b = $("#bt-run"); if (b) b.onclick = async () => { b.disabled = true; const r = await control({ action: "backtest" }); b.textContent = r && r.backtest ? r.backtest : "Run now"; setTimeout(() => { b.disabled = false; b.textContent = "Run now"; }, 4000); }; }
 // routes: #<tab> or #<tab>/<SYMBOL> (symbol detail open). Back/forward and refresh replay them.
