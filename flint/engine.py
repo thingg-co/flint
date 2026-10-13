@@ -1535,16 +1535,17 @@ class Engine:
 
     def _ingest_offline(self, ticks: list[Tick], emit_from: float | None = None, replace: bool = False) -> int:
         """Turn a chunk of old history into labeled replay windows without touching the live
-        pipeline: a throwaway bar builder and feature builder (seeded with the live
-        normalization state, reading the dated news store) walk the chunk chronologically and
-        feed the learner directly. Bars before `emit_from` only warm the builder's rolling
-        state (a week of returns, the window itself) so the chunk's first windows carry the
-        same features live bars would; `replace` rewrites windows already in the buffer."""
+        pipeline: a throwaway bar builder and feature builder (reading the dated stores) walk
+        the chunk chronologically and feed the learner directly. Bars before `emit_from` only
+        warm the builder's rolling state (a week of returns, the window itself, the feature
+        normalizer) so the chunk's first windows carry the same features live bars would;
+        `replace` rewrites windows already in the buffer. The normalizer starts fresh on purpose:
+        seeded with the live state (before 0.5.23) an old chunk was standardized by the present's
+        mean and variance, which no live bar of its day could have known."""
         cfg = self.cfg
         builder = BarBuilder(self.symbols, cfg.bar_seconds)
-        feats = FeatureBuilder(self.symbols, cfg.window, index=self._market_symbol())
-        feats.norm.load(self.features.norm.state())
-        feats.news_history = self.news_history
+        feats = FeatureBuilder(self.symbols, cfg.window, index=self._market_symbol())   # a fresh normalizer: the warm prefix
+        feats.news_history = self.news_history                                           # seeds it from the chunk's own past
         feats.events = self.events
         feats.filings = self.filings
         emit_from = float(emit_from or 0.0)

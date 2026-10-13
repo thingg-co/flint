@@ -19,7 +19,8 @@ from .model import FlintNet, flint_loss
 from .target import estimate_beta, index_columns, prior_beta, relative
 
 log = logging.getLogger(__name__)
-HOLDOUT_EVERY = 20       # every 20th bar by timestamp is validation-only: 5% the trainer never sees
+HOLDOUT_EVERY = 28       # every 28th calendar day (one session in 20) is validation-only: 5% the trainer never sees
+HOLDOUT_SHIFT = 5 * 3600  # the day boundary at midnight EST, so a session never straddles it
 REPLAY_DIR = "replay"    # one .npy per array plus meta.json, memory-mapped on load; replay.npz is the pre-0.5.12 form
 
 
@@ -303,9 +304,13 @@ class OnlineLearner:
         return int(len(cols))
 
     def _held_out(self, ts: float | None) -> bool:
-        """Every HOLDOUT_EVERY-th bar by timestamp. Derived, not stored, so a reload or a
-        replay saved before this existed gets the same slice; untimed windows are never held out."""
-        return bool(ts) and (int(round(ts)) // max(1, int(self.cfg.bar_seconds))) % HOLDOUT_EVERY == 0
+        """Whole sessions: every HOLDOUT_EVERY-th calendar day by timestamp, one weekday in 20.
+        Derived, not stored, so a reload or a replay saved before this existed gets the same
+        slice; untimed windows are never held out. Before 0.5.23 it was every 20th bar, and a
+        held-out bar's neighbours, which the trainer did see, share eleven of its twelve label
+        bars, so the held-out loss tracked the in-sample loss and the overfit guard rarely
+        fired. A held-out session's labels overlap the trained ones only at its boundaries."""
+        return bool(ts) and ((int(round(ts)) - HOLDOUT_SHIFT) // 86400) % HOLDOUT_EVERY == 0
 
     @property
     def target_mode(self) -> str:
