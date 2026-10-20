@@ -49,6 +49,11 @@ ENV=(
     FLINT_BRIEF_OPENAI_BASE=http://127.0.0.1:8080/v1   # llama-server on :8080 -- never a cloud API
 )
 
+# Flint takes the whole box: a start unloads the model server first, so a daytime cl session
+# ends at 19:45 unless Flint is already up (the Oct 14 start refused: "needs about 99 GB free,
+# 22 GB available" with llama-server holding the memory). vllm.service is the other tenant.
+systemctl --user stop llama-server.service vllm.service 'llama-server@*' 2>/dev/null || true
+
 # "degraded" is a running manager with some unrelated failed unit (a crash notifier, say); only
 # a manager that is not running at all sends us to the nohup fallback, which no `systemctl stop`
 # can reach.
