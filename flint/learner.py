@@ -24,6 +24,21 @@ HOLDOUT_SHIFT = 5 * 3600  # the day boundary at midnight EST, so a session never
 REPLAY_DIR = "replay"    # one .npy per array plus meta.json, memory-mapped on load; replay.npz is the pre-0.5.12 form
 
 
+def label_resolved(window_ts: float, now_ts: float, horizon: int, bar_seconds: float) -> bool:
+    """A window's label is known once `horizon` bars have passed since its bar, by the wall
+    clock. The learner's add guard uses this: a resolved window always passes (twelve 5-min
+    bars take at least twelve bar-seconds of wall time), so it only fires on a genuine leak."""
+    return window_ts + horizon * bar_seconds <= now_ts
+
+
+def bar_resolved(window_bar: int, now_bar: int, horizon: int) -> bool:
+    """A window's label is known once `horizon` trading bars have passed since its bar. The
+    model's time unit is the trading bar, so the label sites (`_mature`, the offline chunk
+    walk, the backtest) gate on bars, not wall time: a window at Friday's close resolves at
+    the next session's eleventh bar, exactly as the backtest labels it (9a)."""
+    return window_bar + horizon <= now_bar
+
+
 def read_replay(directory: str | Path) -> dict | None:
     """The saved replay as arrays plus its metadata: x, y, mask, t (memory-mapped from the
     replay/ directory; read fully from a legacy replay.npz), ptr, n and the symbol order the
@@ -235,6 +250,17 @@ class OnlineLearner:
         key = int(round(ts)) if ts else None
         if key is not None and key in self._seen:
             return False
+        # Lookahead tripwire: a window may only enter the replay once its label has
+        # resolved (its bar plus the horizon). A caller handing over a window whose
+        # label is still in the future is leaking future bars into training; refuse it
+        # loudly instead of training on them. Untimed windows (legacy callers) skip.
+        if ts is not None:
+            horizon = int(getattr(self.cfg, "horizon", 12))
+            bar_s = float(getattr(self.cfg, "bar_seconds", 300.0))
+            if not label_resolved(ts, time.time(), horizon, bar_s):
+                log.warning("lookahead guard: refusing a replay window at ts=%s whose label resolves at %s "
+                            "(the future); a label path is leaking future bars", ts, ts + horizon * bar_s)
+                return False
         if self._released:
             self._alloc()
         old = self.rt[self.ptr]

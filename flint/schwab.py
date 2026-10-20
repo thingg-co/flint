@@ -39,11 +39,24 @@ class SchwabAuth:
         self.expires_at: float = 0.0
         self.minted_at: float | None = None   # when the refresh token was minted by a login; the file's birth time for one saved before 0.5.24
         self.status = ""
+        self._stamp: int | None = None   # mtime_ns of the token file as last read or written here
         self._load()
+
+    def sync(self) -> None:
+        """Re-read the token file when another process rewrote it: `flint schwab-auth` runs beside
+        a live engine, which otherwise kept the old login in memory (the notice counted down to the
+        old expiry) and wrote it back over the new one at its next refresh."""
+        try:
+            st = self.token_path.stat().st_mtime_ns
+        except OSError:
+            return
+        if st != self._stamp:
+            self._load()
 
     @property
     def login_expires_at(self) -> float | None:
         """When the refresh token dies and `flint schwab-auth` is needed again; None when unknown."""
+        self.sync()
         return (self.minted_at + REFRESH_TOKEN_LIFE_S) if (self.refresh_token and self.minted_at) else None
 
     @property
@@ -65,6 +78,7 @@ class SchwabAuth:
 
     def _load(self) -> None:
         try:
+            self._stamp = self.token_path.stat().st_mtime_ns
             d = json.loads(self.token_path.read_text())
             self.refresh_token = d.get("refresh_token")
             self.access_token = d.get("access_token")
@@ -82,6 +96,7 @@ class SchwabAuth:
         }))
         try:
             self.token_path.chmod(0o600)
+            self._stamp = self.token_path.stat().st_mtime_ns
         except OSError:
             pass
 
@@ -97,6 +112,7 @@ class SchwabAuth:
         self._save()
 
     async def _refresh(self) -> None:
+        self.sync()
         if not self.refresh_token:
             raise RuntimeError("no Schwab refresh token; run: flint schwab-auth")
         async with httpx.AsyncClient(timeout=30) as c:
@@ -120,6 +136,7 @@ class SchwabAuth:
         """Return a valid access token, refreshing if it has expired."""
         if not self.authenticated:
             raise RuntimeError("Schwab not authenticated")
+        self.sync()
         if not self.access_token or time.time() >= self.expires_at:
             await self._refresh()
         return self.access_token

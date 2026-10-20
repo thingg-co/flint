@@ -139,7 +139,15 @@ unless Flint is already up.
   2026-10-10), so no FMP key is needed. Each replay window is keyed by its bar timestamp, so the
   startup backfill after a restart, which walks the same ten days again, adds nothing (before
   0.5.10 every restart stacked another copy of recent days; a replay saved without timestamps
-  is kept but not deduplicated). The replay is written uncompressed, at most every
+  is kept but not deduplicated). Since 0.5.26 the startup walk standardizes its replay windows
+  with a throwaway builder whose normalizer is fresh and warmed by the walk itself, exactly as the
+  deep loop does — before, the walk went through the live builder, whose normalizer was loaded
+  from the checkpoint (stats up to shutdown), so every historical bar was standardized by the
+  present's variance (the 9d bias, at startup). The live builder still gets every row so the
+  first live bars have a full window. Every label site gates on trading bars through one
+  `bar_resolved` helper (`_mature`, `_ingest_offline`), the same bar count the backtest uses,
+  and `learner.add` refuses a window whose label could not have resolved yet (a lookahead
+  tripwire: it warns and returns False). The replay is written uncompressed, at most every
   `replay_save_minutes` and at shutdown, because the save holds the training lock and a full
   buffer is tens of GB. The Spark launcher budgets it in bytes (`replay_gb` 36: the window count
   follows the universe, 12,000 windows at 232 names and 7,000 at 400; `replay_size` applies only
@@ -271,7 +279,9 @@ unless Flint is already up.
   browser login mints another (Schwab has no offline grant), so `SchwabAuth.minted_at` is recorded at the
   login (a token file from before 0.5.24 is dated by its birth time) and the bar names the expiry from 48
   hours out, critical once it has passed. When it lapses the feed fails over to Alpaca per symbol, but
-  chains, the Portfolio tab and Schwab's ranged history stop. Both bars are `display: none` under the
+  chains, the Portfolio tab and Schwab's ranged history stop. `SchwabAuth.sync` re-reads the token file whenever its mtime moves, so a login run beside a live
+  engine takes effect without a restart (before 0.5.25 the engine kept the old login in memory, the bar
+  counted down to it, and its next refresh wrote the old token back over the new file). Both bars are `display: none` under the
   `hidden` attribute explicitly, because the flex display rule beat the attribute and an empty bar showed
   its red edge.
 - A live control set from the Control Panel or the sweep's "Apply These Gates" is kept in

@@ -30,7 +30,7 @@ from .events import AHEAD_S, EarningsCalendar
 from .filings import EdgarStore
 from .features import BARS_D, FEATURE_SET, FEATURES, N_FEATURES, FeatureBuilder
 from .feed import Tick
-from .learner import OnlineLearner, Prediction
+from .learner import OnlineLearner, Prediction, bar_resolved
 from .news import TICKER_STOPLIST, NewsHub, is_crypto
 from .paper import PaperBook
 from .schwab import SchwabAuth
@@ -1043,23 +1043,39 @@ class Engine:
         for sym, px in first.items():
             self.builder.last_close.setdefault(sym, px)
         rows = self.builder.roll(time.time())
+        # The startup days' replay windows must be standardized as-of their own day, not by
+        # the present: the live normalizer was loaded from the checkpoint (stats up to
+        # shutdown), so pushing history through it would standardize old bars by today's
+        # variance (the 0.5.23 9d fix, here at startup). Walk a throwaway builder with a
+        # fresh normalizer for the replay, as the deep loop does; the live builder still
+        # gets every row so the first live bars have a full window.
+        replay_feats = FeatureBuilder(self.symbols, self.cfg.window, index=self._market_symbol())
+        replay_feats.news_history = self.news_history
+        replay_feats.events = self.events
+        replay_feats.filings = self.filings
         self.trace.muted = True
         try:
             for row in rows:
-                self._history_row(row)
+                self._history_row(row, replay_feats)
         finally:
             self.trace.muted = False
         self.trace.emit("bars", f"built {len(rows)} bars of {self.cfg.bar_seconds:.0f}s from history; "
                                 f"{self.learner.size} labeled windows ready for training")
 
-    def _history_row(self, row: dict[str, Bar]) -> None:
+    def _history_row(self, row: dict[str, Bar], replay_feats: FeatureBuilder | None = None) -> None:
         self.bar_index += 1
         for s in self.symbols:
             self.bars.setdefault(s, deque(maxlen=self.cfg.chart_bars)).append(row[s])
         closes = np.array([row[s].close for s in self.symbols], dtype=np.float32)
         real_now = np.array([row[s].volume > 0.0 for s in self.symbols])
         self._mature(closes, real_now)
-        x = self.features.push(row)
+        # the live builder is always warmed (the first live bar needs its full window);
+        # the replay window's features come from the fresh-normalizer builder when one is given
+        if replay_feats is not None:
+            self.features.push(row)
+            x = replay_feats.push(row)
+        else:
+            x = self.features.push(row)
         if x is not None:
             self.pending.append(Pending(self.bar_index, row[self.symbols[0]].ts, x, closes, real_now, None, {}))
 
@@ -1597,7 +1613,7 @@ class Engine:
             idx += 1
             closes = np.array([row[s].close for s in self.symbols], dtype=np.float32)
             real_now = np.array([row[s].volume > 0.0 for s in self.symbols])
-            while pend and pend[0][0] + cfg.horizon <= idx:
+            while pend and bar_resolved(pend[0][0], idx, cfg.horizon):
                 _, x0, c0, r0, t0 = pend.popleft()
                 with np.errstate(divide="ignore", invalid="ignore"):
                     y = (np.log(closes / c0) * 1e4).astype(np.float32)
@@ -2028,8 +2044,15 @@ class Engine:
         })
 
     def _mature(self, closes: np.ndarray, real_now: np.ndarray | None = None) -> int:
+        """Resolve windows whose labels have matured. A window resolves once `horizon`
+        trading bars have passed since its bar — the model's own time unit, so the label
+        matches the backtest's (a Friday close resolves at the next session's eleventh bar,
+        the return across the gap)."""
         n = 0
-        while self.pending and self.pending[0].index + self.cfg.horizon <= self.bar_index:
+        while self.pending:
+            pp = self.pending[0]
+            if not bar_resolved(pp.index, self.bar_index, self.cfg.horizon):
+                break
             pp = self.pending.popleft()
             with np.errstate(divide="ignore", invalid="ignore"):
                 y = (np.log(closes / pp.closes) * 1e4).astype(np.float32)
