@@ -416,3 +416,29 @@ class TestSourceManagerFailover:
         # The merged ticks should be 3 (from back)
         assert len(merged) == 3
         assert all(t.symbol == "AAPL" for t in merged)
+
+
+def test_sources_on_wins_over_saved_keys(monkeypatch, tmp_path):
+    """FLINT_SOURCES_ON=schwab leaves only Schwab on: a saved Finnhub, FMP or EODHD key enables
+    its source only when the configured list allows it (before, a key switched Finnhub back on)."""
+    from flint.config import Config
+
+    monkeypatch.chdir(tmp_path)
+    cfg = Config()
+    cfg.symbols = ["AAPL", "MSFT"]
+    cfg.sources_on = "schwab"
+    cfg.finnhub_key = cfg.fmp_key = cfg.eodhd_key = "k"
+
+    async def tok():
+        return "t"
+
+    schwab = SimpleNamespace(authenticated=True, has_creds=True, app_key="a", app_secret="s",
+                             callback="https://127.0.0.1", token=tok)
+    etrade = SimpleNamespace(authenticated=False, has_creds=False, ck="", cs="", token=tok)
+    mgr = SourceManager(cfg, cfg.symbols, SimpleNamespace(key="", exhausted=False), lambda t: None, schwab=schwab, etrade=etrade)
+    on = {k for k, v in mgr.enabled.items() if v}
+    assert on <= {"schwab", "sim"} and "schwab" in on
+
+    cfg.sources_on = ""
+    mgr = SourceManager(cfg, cfg.symbols, SimpleNamespace(key="", exhausted=False), lambda t: None, schwab=schwab, etrade=etrade)
+    assert mgr.enabled["finnhub"] and mgr.enabled["fmp"]

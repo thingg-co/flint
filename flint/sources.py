@@ -1341,18 +1341,19 @@ class SourceManager:
                 on = any(asset_class(x) != "crypto" for x in symbols)
             if default_on:
                 on = src.id in default_on or src.id == "sim"
+            # a missing login or key keeps a source off; having one never overrides sources_on/off
             if src.id == "av_quote" and not av.key:
                 on = False
             if src.id == "schwab":
-                on = bool(schwab and schwab.authenticated)   # present but idle until you log in
+                on = on and bool(schwab and schwab.authenticated)   # present but idle until you log in
             if src.id == "finnhub":
-                on = bool(cfg.finnhub_key)
+                on = on and bool(cfg.finnhub_key)
             if src.id == "eodhd":
-                on = bool(cfg.eodhd_key)
+                on = on and bool(cfg.eodhd_key)
             if src.id == "fmp":
-                on = bool(cfg.fmp_key)
+                on = on and bool(cfg.fmp_key)
             if src.id == "ibkr":
-                on = bool(cfg.ibkr_enabled)   # opt-in: needs IB Gateway running
+                on = on and bool(cfg.ibkr_enabled)   # opt-in: needs IB Gateway running
             self.enabled[src.id] = on and bool(src.symbols)
         self.seen: dict[str, dict[str, float]] = {s: {} for s in symbols}   # sym -> source_id -> last ts
         self.active: dict[str, str | None] = {s: None for s in symbols}

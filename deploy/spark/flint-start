@@ -43,6 +43,8 @@ ENV=(
                                                        # (12,000 windows at 232 names, 7,000 at 400)
     FLINT_MAX_UNIVERSE=400                             # core + holdings + up to interesting_count promoted names
     FLINT_INTERESTING_COUNT=150
+    FLINT_SOURCES_ON=schwab                            # Schwab's NBBO only: Alpaca's IEX book overwrote its bid/ask
+                                                       # with spreads 10-50x wide (2026-10-21); no failover
     FLINT_DEEP_BACKFILL_DAYS=200                       # page Schwab history back this far while the market is closed
                                                        # (~140 trading days: fills the replay without wrapping it)
     FLINT_BRIEF_BACKEND=openai                         # the brief, when enabled, talks to a LOCAL
